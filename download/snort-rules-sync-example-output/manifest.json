@@ -1,0 +1,31 @@
+{
+  "generator": "snort-rules-sync 1.0.0",
+  "generated_at": "2026-11-07T11:47:54",
+  "sources_order": [
+    "snort-community"
+  ],
+  "per_source_total": {
+    "snort-community": 568
+  },
+  "total_input": 568,
+  "total_output": 566,
+  "dropped_identical": [
+    {
+      "sid": 2419,
+      "msg": "FILE-IDENTIFY RealNetworks Realplayer .ram playlist file download request",
+      "kept_by": "cleardmr/cleardmr",
+      "duplicate_of": "snort-community"
+    },
+    {
+      "sid": 2420,
+      "msg": "FILE-IDENTIFY RealNetworks Realplayer .rmp playlist file download request",
+      "kept_by": "cleardmr/cleardmr",
+      "duplicate_of": "snort-community"
+    }
+  ],
+  "dropped_superseded": [],
+  "dropped_collisions": [],
+  "renumbered": [],
+  "upgraded": [],
+  "final_rules_sha256": "59f75174fca0582aced78c0698309ed3249421b57adb4e763bd818c248e4c9cd"
+}
