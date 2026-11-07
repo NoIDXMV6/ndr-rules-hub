@@ -29,12 +29,17 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
   const [config, setConfig] = useState('')
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  // true — последняя попытка загрузки статуса не дошла до API (сервер недоступен,
+  // например web UI «завёрнут» в full-tunnel туннель). Карточки при этом НЕ должны
+  // показывать «недоступно» — это ложь про окружение; показываем баннер и «нет данных»
+  const [connError, setConnError] = useState(false)
 
   const didAutoLoad = useRef(false)
   const load = useCallback(async () => {
     try {
       const v = await api.vpn()
       setVpn(v)
+      setConnError(false)
       // при первом открытии вкладки автоматически подставляем активный
       // (или первый) сохранённый профиль в редактор — иначе после
       // перезагрузки страницы пустое поле выглядит как «конфиг не сохранился»
@@ -48,6 +53,7 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
         }
       }
     } catch (e) {
+      setConnError(true)
       setMsg({ ok: false, text: (e as Error).message })
     }
   }, [])
@@ -120,6 +126,16 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {connError && (
+            <div className="mb-3 rounded-lg border border-amber-300/60 bg-amber-50 p-3 text-xs text-amber-800 space-y-1">
+              <p>Нет связи с API — данные окружения не получены, карточки ниже показывают «нет данных» (это не про состояние инструментов).</p>
+              <p>
+                Если недоступен сам web-интерфейс при поднятом full-tunnel туннеле — опустите туннель с хоста:{' '}
+                <code className="text-foreground">docker compose exec rules-hub wg-quick down /app/data/wireguard/wg0.conf</code> или просто{' '}
+                <code className="text-foreground">docker compose restart rules-hub</code>.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Check label="wg (утилита)" ok={tools?.wg} />
             <Check label="wg-quick" ok={tools?.wgQuick} />
@@ -287,13 +303,20 @@ function parseLastStatus(json?: string | null): { action?: string; ok?: boolean;
 }
 
 function Check({ label, ok }: { label: string; ok?: boolean }) {
+  // три состояния: true — «доступно», false — «недоступно», undefined — данных
+  // нет (API не ответил): показывать в этом случае «недоступно» — дезинформация
+  const state = ok === undefined ? 'unknown' : ok ? 'ok' : 'fail'
+  const box = state === 'ok' ? 'border-emerald-300/60 bg-emerald-50' : state === 'fail' ? 'border-red-300/60 bg-red-50' : 'border-border bg-muted/40'
+  const dot = state === 'ok' ? 'bg-emerald-500' : state === 'fail' ? 'bg-red-500' : 'bg-zinc-400'
+  const text = state === 'ok' ? 'доступно' : state === 'fail' ? 'недоступно' : 'нет данных'
+  const textColor = state === 'ok' ? 'text-emerald-700' : state === 'fail' ? 'text-red-600' : 'text-muted-foreground'
   return (
-    <div className={`rounded-lg border p-3 ${ok ? 'border-emerald-300/60 bg-emerald-50' : 'border-red-300/60 bg-red-50'}`}>
+    <div className={`rounded-lg border p-3 ${box}`}>
       <div className="flex items-center gap-2">
-        <span className={`inline-block h-2.5 w-2.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-red-500'}`} />
+        <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} />
         <span className="text-sm font-medium text-foreground">{label}</span>
       </div>
-      <p className={`text-xs mt-1 ${ok ? 'text-emerald-700' : 'text-red-600'}`}>{ok ? 'доступно' : 'недоступно'}</p>
+      <p className={`text-xs mt-1 ${textColor}`}>{text}</p>
     </div>
   )
 }

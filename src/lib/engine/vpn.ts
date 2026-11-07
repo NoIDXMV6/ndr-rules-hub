@@ -51,6 +51,74 @@ function stripDnsLines(cfg: string): string {
 
 const isResolvconfError = (s: string) => /resolvconf|resolv\.conf/i.test(s)
 
+// ── Full-tunnel и доступность web UI ─────────────────────────────────────────
+// wg-quick для AllowedIPs 0.0.0.0/0 добавляет policy routing («не fwmark →
+// таблица 51820»), который заворачивает в туннель ВСЁ, включая ответные пакеты
+// входящих соединений к web-интерфейсу (port-mapping 3080→3000): ответы уходят
+// в wg0 и теряются — «web UI недоступен при поднятом туннеле». Лечение —
+// стандартный приём wg-easy: правило «трафик с собственного адреса контейнера
+// → основная таблица» с приоритетом ВЫШЕ правил wg-quick. Ответные пакеты (у
+// них src = адрес контейнера на eth0) идут наружу через eth0, а весь исходящий
+// трафик контейнера (src на момент маршрутизации ещё не выбран) — в туннель.
+const EXCL_PRIO = '100'
+
+const isFullTunnelConfig = (cfg: string): boolean =>
+  /^\s*AllowedIPs\s*=\s*.*\b0\.0\.0\.0\/0\b/m.test(cfg)
+
+interface ServiceAddrs {
+  v4?: string
+  v6?: string
+}
+
+/** Собственные глобальные адреса контейнера (интерфейс default-маршрута) */
+async function serviceAddresses(): Promise<ServiceAddrs> {
+  const out: ServiceAddrs = {}
+  const def = await runCmd('ip', ['-4', 'route', 'show', 'default'], 5_000)
+  const dev = def.stdout.match(/\bdev\s+(\S+)/)?.[1]
+  const iface = dev && dev !== 'wg0' ? dev : 'eth0'
+  const a4 = await runCmd('ip', ['-4', '-o', 'addr', 'show', 'dev', iface, 'scope', 'global'], 5_000)
+  out.v4 = a4.stdout.match(/\binet\s+(\S+)/)?.[1]?.split('/')[0]
+  const a6 = await runCmd('ip', ['-6', '-o', 'addr', 'show', 'dev', iface, 'scope', 'global'], 5_000)
+  out.v6 = a6.stdout.match(/\binet6\s+(\S+)/)?.[1]?.split('/')[0]
+  return out
+}
+
+/** Добавить исключение маршрутизации (идемпотентно) — вызывается после up */
+async function excludeServiceTraffic(addrs: ServiceAddrs, notes: string[]): Promise<void> {
+  const apply = async (family: '-4' | '-6', addr: string): Promise<void> => {
+    // идемпотентность: повторный up не должен плодить дубли правил
+    await runCmd('ip', [family, 'rule', 'del', 'from', addr, 'lookup', 'main', 'priority', EXCL_PRIO], 5_000)
+    const r = await runCmd('ip', [family, 'rule', 'add', 'from', addr, 'lookup', 'main', 'priority', EXCL_PRIO], 5_000)
+    if (r.ok) {
+      notes.push(
+        `full-tunnel: трафик с адреса ${addr} (в т.ч. ответы web UI) направлен по основной таблице ` +
+        `(ip ${family} rule from ${addr} lookup main prio ${EXCL_PRIO}) — web UI останется доступным, остальной трафик пойдёт через туннель`,
+      )
+    } else {
+      notes.push(
+        `не удалось добавить исключение маршрутизации для ${addr}: ${(r.stderr || '').trim()} — ` +
+        'web UI может стать недоступен, пока туннель поднят (см. README, «Full-tunnel и доступность web UI»)',
+      )
+    }
+  }
+  if (addrs.v4) await apply('-4', addrs.v4)
+  if (addrs.v6) await apply('-6', addrs.v6)
+}
+
+/** Убрать наши policy-правила (prio 100 → main с конкретным from) — при down */
+async function removeServiceExclusion(): Promise<void> {
+  for (const family of ['-4', '-6'] as const) {
+    const show = await runCmd('ip', [family, 'rule', 'show'], 5_000)
+    if (!show.ok) continue
+    for (const line of show.stdout.split('\n')) {
+      const m = line.match(new RegExp(`^${EXCL_PRIO}:\\s+from (\\S+) lookup main(?:\\s|$)`))
+      if (m && m[1] !== 'all') {
+        await runCmd('ip', [family, 'rule', 'del', 'from', m[1], 'lookup', 'main', 'priority', EXCL_PRIO], 5_000)
+      }
+    }
+  }
+}
+
 export interface WgTools {
   wgQuick: boolean
   wg: boolean
@@ -155,6 +223,10 @@ export async function wgUp(name: string, config: string): Promise<{ ok: boolean;
   const iface = parsed.iface ?? 'wg0'
   const confPath = `${WG_DIR}/${iface}.conf`
   const notes: string[] = []
+  // адреса контейнера захватываем ДО подъёма туннеля, пока таблица main чиста;
+  // для full-tunnel они понадобятся, чтобы исключить трафик web UI из туннеля
+  const fullTunnel = isFullTunnelConfig(config)
+  const svcAddrs = fullTunnel ? await serviceAddresses() : {}
   try {
     // ВАЖНО: раньше тут был execFile('tee', [path], { input: config }) — но у
     // execFile НЕТ опции input (она есть только у spawnSync/execSync), опция
@@ -181,6 +253,10 @@ export async function wgUp(name: string, config: string): Promise<{ ok: boolean;
 
     const trace = (res.stderr || res.stdout).trim()
     const ifaceUp = (await wgInterfaces()).includes(iface)
+    // туннель поднялся (полностью или «наполовину») — при full-tunnel сразу
+    // исключаем собственный трафик контейнера из туннеля, иначе ответ на
+    // этот самый запрос не дойдёт до браузера и web UI «умрёт»
+    if (ifaceUp && fullTunnel) await excludeServiceTraffic(svcAddrs, notes)
     if (ifaceUp && !res.ok) {
       notes.push('wg-quick завершился с ошибкой, но интерфейс создан — проверьте handshake ниже')
       return { ok: true, notes, output: trace || undefined }
@@ -210,6 +286,9 @@ export async function wgUp(name: string, config: string): Promise<{ ok: boolean;
 export async function wgDown(name: string): Promise<{ ok: boolean; error?: string; notes?: string[] }> {
   const iface = name.replace(/\.conf$/, '')
   const res = await runCmd('wg-quick', ['down', `${WG_DIR}/${iface}.conf`])
+  // wg-quick удаляет только СВОИ правила; наши исключения (prio 100 → main,
+  // см. excludeServiceTraffic) убираем сами — в любом исходе down
+  await removeServiceExclusion()
   if (res.ok) return { ok: true }
   // интерфейса могло уже не быть — повторный down не ошибка
   if (!(await wgInterfaces()).includes(iface)) {
