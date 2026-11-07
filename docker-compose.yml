@@ -1,0 +1,57 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# NDR Rules Hub — docker-compose
+# Сервис управления источниками правил Snort/Suricata + экспорт в Clear NDR
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  rules-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ndr-rules-hub:latest
+    container_name: ndr-rules-hub
+    restart: unless-stopped
+    ports:
+      - "3080:3000"
+    environment:
+      # Oinkcode аккаунта snort.org (можно также задать через UI → Настройки)
+      - OINKCODE=${OINKCODE:-}
+      - DATABASE_URL=file:/app/data/hub.db
+      - RULES_DATA_DIR=/app/data
+      - WG_CONFIG_DIR=/app/data/wireguard
+      - TZ=${TZ:-Europe/Moscow}
+    volumes:
+      # данные сервиса: БД, кэш архивов, итоговые файлы, WireGuard-конфиги
+      - ./data:/app/data
+      # при экспорте режиме local-path можно указать каталог самого Clear NDR:
+      # - /srv/clearndr/rules-import:/mnt/clearndr
+    # WireGuard: нужны права NET_ADMIN и TUN-устройство
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/dashboard').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # Опционально: локальный Clear NDR (community) рядом, для end-to-end проверки
+  # экспорта. Раскомментируйте при необходимости — см. https://docs.clearndr.io
+  # clearndr:
+  #   image: stamusnetworks/clear-ndr:latest
+  #   container_name: clearndr
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3380:80"
+  #   volumes:
+  #     - clearndr-data:/data
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - SYS_NICE
+
+# volumes:
+#   clearndr-data:

@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Источник правил: ruleset (tar.gz / .rules) или список индикаторов (конвертер)
+model Source {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  category   String   // ruleset | ip-list | domain-list | url-list
+  kind       String   // url | tarball | local | upload  (tarball = архив с .rules внутри)
+  url        String?
+  format     String   @default("auto") // snort2 | snort3 | suricata | auto
+  authType   String   @default("none") // none | oinkcode | authkey | basic
+  extraJson  String?  // настройки конвертера/авторизации (proto, ports, msgPrefix, sidRange, header)
+  enabled    Boolean  @default(true)
+  priority   Int      @default(100) // чем ниже, тем выше приоритет при конфликте SID
+  status     String   @default("never") // ok | error | never
+  lastFetchAt DateTime?
+  lastError  String?
+  ruleCount  Int      @default(0)
+  sizeBytes  Int      @default(0)
+  badge      String?  // recommended | duplicate | legacy | paid | converter
+  notes      String?  // анализ источника
+  builtin    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  rules      Rule[]
+}
+
+// Правило конкретного источника
+model Rule {
+  id          Int    @id @default(autoincrement())
+  sourceId    String
+  source      Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  sid         Int
+  rev         Int    @default(0)
+  action      String
+  proto       String
+  msg         String?
+  clsType     String?
+  raw         String
+  contentHash String
+  suricataOk  Boolean @default(true) // совместимость с Suricata
+  compatNotes String?
+  createdAt   DateTime @default(now())
+  @@unique([sourceId, sid])
+  @@index([sid])
+  @@index([sourceId])
+}
+
+// Результат сборки итогового набора
+model Build {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+  totalRules Int
+  statsJson  String   // статистика: по источникам, дубликатам, конфликтам, конвертации
+  policyJson String   // применённые политики дедупликации
+  fileName   String
+  filePath   String
+  sha256     String
+  sizeBytes  Int
+  source     String   @default("manual") // manual | cron
+}
+
+// Настройки (k-v)
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// Журнал событий
+model LogEntry {
+  id        Int      @id @default(autoincrement())
+  ts        DateTime @default(now())
+  level     String   // info | warn | error | success
+  scope     String   // fetch | build | export | vpn | scheduler | system
+  message   String
+  detailJson String?
+  @@index([ts])
+}
+
+// WireGuard профиль
+model VpnProfile {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  config    String   // wg-quick формат
+  active    Boolean  @default(false)
+  lastCheckAt DateTime?
+  lastStatusJson String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
