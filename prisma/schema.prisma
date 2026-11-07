@@ -1,5 +1,11 @@
 generator client {
   provider = "prisma-client-js"
+  // debian-openssl-3.0.x — runtime-образ node:22-bookworm-slim;
+  // builder (oven/bun:1.2, bullseye/openssl-1.1) покрыт "native".
+  // Без явного таргета клиент генерировался только под builder и падал
+  // в контейнере: "Prisma Client could not locate the Query Engine
+  // for runtime debian-openssl-3.0.x".
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {

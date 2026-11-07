@@ -23,7 +23,9 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN mkdir -p /app/db-template && \
     bunx prisma generate && \
     bunx prisma db push --skip-generate --accept-data-loss && \
-    sha256sum prisma/schema.prisma | cut -c1-12 > /app/db-template/.schema-version && \
+    # версия схемы БД считается только по моделям (генератор исключён):
+    # изменения binaryTargets и прочего в generator не должны стирать БД тома
+    awk '/^generator/{g=1} g&&/^}/{g=0;next} !g' prisma/schema.prisma | sha256sum | cut -c1-12 > /app/db-template/.schema-version && \
     bunx --bun next build
 
 # ── Этап 3: runtime — Next.js standalone + WireGuard-утилиты ─────────────────

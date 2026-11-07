@@ -87,6 +87,12 @@ curl -s http://localhost:3080/api/health    # самодиагностика: Б
 entrypoint сверяет штамп версии (`/app/data/.schema-version`) с образцом из образа и при
 несовпадении бэкапит старую БД в `./data/hub.db.bak-<дата>` и создаёт новую.
 
+Ошибка `Prisma Client could not locate the Query Engine for runtime …` — несовпадение
+платформы Prisma между этапами сборки (builder ≠ runtime). В репо это уже учтено:
+`binaryTargets = ["native", "debian-openssl-3.0.x"]` в `prisma/schema.prisma` покрывает
+runtime-образ `node:22-bookworm-slim`. Штамп версии схемы считается только по моделям,
+поэтому правки генератора БД не пересоздают.
+
 ## Запуск без Docker
 
 ```bash
