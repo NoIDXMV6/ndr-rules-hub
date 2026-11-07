@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -30,10 +30,23 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
 
+  const didAutoLoad = useRef(false)
   const load = useCallback(async () => {
     try {
       const v = await api.vpn()
       setVpn(v)
+      // при первом открытии вкладки автоматически подставляем активный
+      // (или первый) сохранённый профиль в редактор — иначе после
+      // перезагрузки страницы пустое поле выглядит как «конфиг не сохранился»
+      if (!didAutoLoad.current) {
+        didAutoLoad.current = true
+        const ps = v.profiles ?? []
+        if (ps.length > 0) {
+          const p = ps.find((x) => x.active) ?? ps[0]
+          setName(p.name)
+          setConfig(p.config)
+        }
+      }
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message })
     }
@@ -72,7 +85,7 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
     setBusy(true)
     try {
       await api.vpnSave(name, config)
-      setMsg({ ok: true, text: `Профиль «${name}» сохранён` })
+      setMsg({ ok: true, text: `Профиль «${name}» сохранён — он появился в списке «Сохранённые профили» ниже` })
       await load()
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message })
@@ -124,7 +137,11 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
           <CardTitle className="text-base flex items-center gap-2">
             <Wifi className="h-4 w-4 text-primary" /> Конфигурация туннеля (wg-quick)
           </CardTitle>
-          <CardDescription>Вставьте конфиг .conf от вашего WireGuard-сервера. Хранится локально в БД сервиса.</CardDescription>
+          <CardDescription>
+            Вставьте конфиг .conf от вашего WireGuard-сервера. Профили хранятся в БД и переживают
+            перезагрузку страницы и рестарт контейнера; при открытии вкладки в редактор
+            автоматически подставляется активный (или первый) сохранённый профиль.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap gap-3 items-end">
