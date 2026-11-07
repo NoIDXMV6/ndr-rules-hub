@@ -141,6 +141,37 @@ sys.stderr.write(f"Очистка Snort-only опций: replace={STRIP_CNT['rep
 assert len(rules) > 100000, f"подозрительно мало правил: {len(rules)}"
 sys.stderr.write(f"Разобрано: {len(rules)} правил из {len({r['source'] for r in rules})} источников\n")
 
+# ── Дедупликация по содержимому — гейт «conflicting SID in same source» ────
+# Clear NDR отвергает импорт в один источник двух правил, совпадающих после
+# удаления опций sid и reference:* (реальный случай: Talos публикует один
+# детект дважды под разными sid — иногда байт-в-байт, иногда меняя только
+# reference-ссылку/CVE). rev/msg/metadata в конфликте НЕ участвуют (проверено
+# на реальных импортах: p1of4 с парой, различающейся только rev, прошёл).
+# Ключ: тело без sid и reference, пробелы схлопнуты. Сохраняется ПЕРВОЕ вхождение.
+REF_RE = re.compile(r"\breference\s*:[^;]*(?:;|$)")
+
+def conflict_key(raw):
+    return re.sub(r"\s+", " ", REF_RE.sub("", SID_RE.sub("", raw))).strip()
+
+_seen_key, DEDUP_REMOVED = {}, []
+_kept = []
+for r in rules:
+    k = conflict_key(r["raw"])
+    if k in _seen_key:
+        DEDUP_REMOVED.append((r, _seen_key[k]))
+        continue
+    _seen_key[k] = r
+    _kept.append(r)
+rules = _kept
+if DEDUP_REMOVED:
+    sys.stderr.write(f"Дедупликация по содержимому: удалено {len(DEDUP_REMOVED)} правил-близнецов:\n")
+    for r, twin in DEDUP_REMOVED:
+        sys.stderr.write(f"  - [{r['source']}] sid {r['sid']} (близнец sid {twin['sid']}): {r['raw'][:90]}...\n")
+_cnt = defaultdict(int)
+for r in rules:
+    _cnt[conflict_key(r["raw"])] += 1
+assert all(v == 1 for v in _cnt.values()), "остались дубликаты содержимого после дедупликации"
+
 # ── Перенумерация SID в зарезервированный clearndr-блок ────────────────────
 # Чужие SID (Snort <1M, ET 1..2.2M, Suricata 2.2M..2.3M, PT 10..11M, Quadrant до
 # 81M, OISF 300M, abuse.ch ~900M) заняты штатными источниками Clear NDR — импорт
@@ -253,18 +284,22 @@ stats = []
 for rel, spec in created.items():
     purpose, items = spec[0], spec[1]
     extra = spec[2] if len(spec) > 2 else ""
-    sids, dup, bad = set(), 0, 0
+    sids, dup, bad, dupc = set(), 0, 0, 0
+    keys = set()
     for r in items:
         if not RULE_RE.match(r["raw"]) or not balanced(r["raw"]):
             bad += 1
         if r["sid"] is not None:
             if r["sid"] in sids: dup += 1
             sids.add(r["sid"])
+        k = conflict_key(r["raw"])
+        if k in keys: dupc += 1
+        keys.add(k)
     write_file(os.path.join(OUT, rel), purpose, items, extra)
-    ok = dup == 0 and bad == 0
+    ok = dup == 0 and bad == 0 and dupc == 0
     if not ok: fail = True
     stats.append((rel, len(items), dup, bad, ok))
-    print(f"{'OK ' if ok else 'FAIL'} {rel}: правил={len(items)}, дубликатов SID={dup}, битых={bad}")
+    print(f"{'OK ' if ok else 'FAIL'} {rel}: правил={len(items)}, дубликатов SID={dup}, дубликатов содержимого={dupc}, битых={bad}")
 
 if fail:
     sys.exit("ВАЛИДАЦИЯ НЕ ПРОЙДЕНА")
@@ -292,7 +327,11 @@ readme = f"""# Итоговые наборы правил для Clear NDR — �
 
 ## Контроль качества
 
-- Дедупликация по SID (приоритет более высокого rev) и по содержимому.
+- Дедупликация по SID (приоритет более высокого rev) и по содержимому: удалено
+  {len(DEDUP_REMOVED)} правил-близнецов, совпадающих после снятия опций sid/reference —
+  именно такие пары (Talos публикует один детект дважды: 2 пары байт-в-байт,
+  5 пар различались только reference-ссылкой) роняли импорт полного файла
+  с ошибкой Clear NDR «conflicting SID in same source». Потеря детекта — ноль.
 - Правила Snort 2/3 конвертированы в Suricata 7 конвертером s2x (sticky-буферы → dot-формы,
   inline-модификаторы content → отдельные ключевые слова, bufferlen → bsize и т.д.).
 - Удалены Snort-only ключевые слова `replace` ({STRIP_CNT['replace']} опций) и `rawbytes`

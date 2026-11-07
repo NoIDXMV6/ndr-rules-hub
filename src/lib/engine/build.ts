@@ -34,6 +34,7 @@ export interface BuildStats {
   duplicateByContent: number
   incompatibleDropped: number
   renumbered: number
+  conflictingRemoved?: number
   perSource: Record<string, { total: number; kept: number; droppedSid: number; droppedContent: number; droppedCompat: number }>
   sidsReplaced: Array<{ sid: number; newSid: number; source: string; keptRev: number; droppedRev: number; keptSource: string }>
 }
@@ -55,16 +56,60 @@ const DEFAULTS: DedupPolicy = {
 }
 
 export function hashRule(raw: string): string {
-  // канонизируем: убираем sid/rev/msg/metadata, схлопываем пробелы
+  // канонизируем: убираем sid/rev/msg/metadata/reference, схлопываем пробелы.
+  // reference:* обязателен к снятию: Clear NDR считает «конфликтными» правила,
+  // совпадающие после удаления sid и reference (Talos публикует один детект
+  // дважды под разными sid и с разными ссылками) — без этого близнецы
+  // переживают content-дедупликацию и роняют импорт «conflicting SID in same source».
   const canon = raw
     .replace(/\bsid\s*:\s*\d+\s*;/gi, '')
     .replace(/\brev\s*:\s*\d+\s*;/gi, '')
     .replace(/\bmsg\s*:\s*"[^"]*"\s*;/gi, '')
     .replace(/\bmetadata\s*:[^;]*(?:;|$)/gi, '')
+    .replace(/\breference\s*:[^;]*(?:;|$)/gi, '')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase()
   return createHash('sha1').update(canon).digest('hex')
+}
+
+// ── Гейт «conflicting SID in same source» (Clear NDR) ───────────────────────
+// Ключ конфликта установлен эмпирически на реальных импортах: конфликтуют
+// правила, совпадающие после удаления опций sid и reference:*; различия
+// rev/msg/metadata конфликт НЕ вызывают. Ключ СТРОЖЕ hashRule (msg/rev
+// сохраняются) — это независимая страховка перед записью файла экспорта.
+export function conflictKey(raw: string): string {
+  return raw
+    .replace(/\bsid\s*:\s*\d+\s*;/gi, '')
+    .replace(/\breference\s*:[^;]*(?:;|$)/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Найти пары правил, конфликтные для Clear NDR (совпадают без sid/reference) */
+export function findConflictingDuplicates(rules: BuiltRule[]): Array<[BuiltRule, BuiltRule]> {
+  const seen = new Map<string, BuiltRule>()
+  const out: Array<[BuiltRule, BuiltRule]> = []
+  for (const r of rules) {
+    const k = conflictKey(r.raw)
+    const first = seen.get(k)
+    if (first) out.push([first, r])
+    else seen.set(k, r)
+  }
+  return out
+}
+
+/** Финальная дедупликация конфликтных пар (сохраняется первое вхождение) */
+export function dedupeConflicting(rules: BuiltRule[]): { rules: BuiltRule[]; removed: number } {
+  const seen = new Set<string>()
+  const out: BuiltRule[] = []
+  for (const r of rules) {
+    const k = conflictKey(r.raw)
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(r)
+  }
+  return { rules: out, removed: rules.length - out.length }
 }
 
 /** Ядро: слияние правил источников с дедупликацией и разрешением конфликтов SID */

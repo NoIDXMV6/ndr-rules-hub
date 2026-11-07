@@ -4,7 +4,7 @@
 import { db } from '@/lib/db'
 import { SEED_SOURCES, DEFAULT_SETTINGS } from './seed'
 import { fetchSource, FetchSourceCfg, CACHE_DIR, EXPORTS_DIR, DATA_DIR } from './fetcher'
-import { mergeSources, renderFinalFile, hashRule, SourceRules, DedupPolicy } from './build'
+import { mergeSources, renderFinalFile, hashRule, conflictKey, findConflictingDuplicates, dedupeConflicting, SourceRules, DedupPolicy } from './build'
 import { saveExportFile, pushToClearndr, ClearndrExportCfg } from './exporter'
 import { SidMapper, remapToClearndrBlock } from './sidmap'
 import { promises as fs } from 'fs'
@@ -210,16 +210,29 @@ export async function buildFinal(origin = 'manual'): Promise<{
     privateSidStart: parseInt(settings.privateSidStart || '1000000000', 10),
   }
 
-  const { rules, stats } = mergeSources(srcRules, policy)
+  const { rules: merged, stats } = mergeSources(srcRules, policy)
 
   // Политика SID: всё, что вне свободного clearndr-блока 1e9..1.1e9, переносится
   // детерминированно (карта общая с python-конвейером, data/sidmap.json).
   // Гейт: при дубликатах или выходе за блок сборка падает — плохой файл не пишется.
   const mapper = new SidMapper()
   await mapper.load()
-  const remap = remapToClearndrBlock(rules, mapper)
+  const remap = remapToClearndrBlock(merged, mapper)
   await mapper.save()
   stats.renumbered = remap.renumbered
+
+  // Гейт Clear NDR: правила-близнецы (совпадают после снятия sid/reference:*)
+  // роняют импорт с «conflicting SID in same source». Убираем их ВСЕГДА,
+  // независимо от настроек, и не пишем файл, если конфликтные пары остались.
+  const dedup = dedupeConflicting(merged)
+  const rules = dedup.rules
+  stats.conflictingRemoved = dedup.removed
+  const conflicting = findConflictingDuplicates(rules)
+  if (conflicting.length > 0) {
+    const sample = conflicting.slice(0, 5).map(([a, b]) => `sid ${a.sid}/${b.sid}`).join(', ')
+    await log('error', 'build', `Сборка прервана: ${conflicting.length} конфликтных дубликатов (${sample}); файл не записан`)
+    return { ok: false, error: `конфликтные дубликаты содержимого: ${conflicting.length}` }
+  }
 
   const content = renderFinalFile(rules, {
     sources: sources.map((s) => s.name),
@@ -241,7 +254,7 @@ export async function buildFinal(origin = 'manual'): Promise<{
       source: origin,
     },
   })
-  await log('success', 'build', `Собран итоговый набор: ${rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid})`)
+  await log('success', 'build', `Собран итоговый набор: ${rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}`)
   return { ok: true, buildId: build.id, total: rules.length, fileName }
 }
 
