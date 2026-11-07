@@ -1,10 +1,11 @@
 # NDR Rules Hub
 
 Сервис управления источниками правил **Snort / Suricata** с полнофункциональным Web UI, автоматической
-загрузкой по расписанию, дедупликацией, устранением конфликтов SID и экспортом итогового набора
-в **Clear NDR** (https://docs.clearndr.io). Поставляется как **Docker-контейнер**.
+загрузкой по расписанию, конвертацией Snort 2/3 → Suricata, дедупликацией, устранением конфликтов SID,
+**валидацией итогового набора реальным движком Suricata** и экспортом в **Clear NDR** (https://docs.clearndr.io).
+Поставляется как **Docker-контейнер**.
 
-![stack](https://img.shields.io/badge/Next.js%2016-TypeScript-blue) ![db](https://img.shields.io/badge/SQLite-Prisma-orange) ![vpn](https://img.shields.io/badge/WireGuard-integrated-green)
+![stack](https://img.shields.io/badge/Next.js%2016-TypeScript-blue) ![db](https://img.shields.io/badge/SQLite-Prisma-orange) ![validate](https://img.shields.io/badge/Suricata%207.0.10-validated-brightgreen) ![vpn](https://img.shields.io/badge/WireGuard-integrated-green)
 
 ## Возможности
 
@@ -13,6 +14,8 @@
 | **Источники** | Каталог из 25 преднастроенных источников (13 исходных из Clear NDR + 12 новых). Добавление своих по URL/архиву/локальному файлу. Типы: ruleset, tar.gz-архив, IP/домен/URL-списки (конвертеры) |
 | **Загрузка** | HTTP(S) с поддержкой **oinkcode** (snort.org, без логина/пароля), auth-key, Basic. Обработка лимитов snort.org (403 → понятное сообщение). Локальные архивы и каталоги |
 | **Конвертеры** | Списки IP/CIDR → правила (чанки по N адресов на SID), домены → DNS-правила, URL → HTTP-правила. SID из приватного диапазона 1 000 000+ |
+| **Конвертер Snort→Suricata** | `scripts/s2x_convert.py`: sticky-буферы Snort 3 (http_uri…) → dot-формы (http.uri…), inline-модификаторы content → отдельные ключевые слова, bufferlen → bsize, вырезание soid/service, маппинг переменных, file→tcp, ssl→tls. Калиброван эмпирически на Suricata 7.0.10 |
+| **Валидатор** | Каждый итоговый набор прогоняется через **реальный Suricata** (`suricata -T`); цикл «валидация → разбор лога → исправление/исключение → повтор» до 0 ошибок. **Невалидированный набор не может попасть в Clear NDR** — экспорт блокируется |
 | **Дедупликация** | По SID (стратегии: максимальный rev / приоритет источника / перенумерация в приватный диапазон) и по содержимому (канонический SHA-1 без sid/rev/msg/metadata) |
 | **Совместимость** | Автообнаружение ключевых слов Snort 2 (preproc, react, rawbytes…) и Snort 3 (keystore, pkt_trace…), отсутствующих в Suricata, с фильтрацией на этапе сборки |
 | **Сборка** | Итоговый `suricata.rules`-файл с заголовком, статистикой по каждому источнику и SHA-256 |
@@ -20,6 +23,32 @@
 | **WireGuard VPN** | Полноценная настройка: редактор wg-quick конфига, проверка синтаксиса, up/down, статус (`wg show`), проверка окружения (wg, wg-quick, /dev/net/tun, NET_ADMIN). Загрузка правил через туннель |
 | **Расписание** | cron (node-cron): обновление источников → сборка → экспорт. Управление из UI |
 | **Журнал** | Все события загрузок/сборок/экспорта/VPN с уровнями и фильтрами |
+
+## Валидированный пакет правил для Clear NDR
+
+Готовый пакет — в каталоге [`dist/`](dist/) и во вложениях релиза:
+
+- **113 843 правил** из 13 источников (ET Open, Talos Snort 2.9 + Snort 3, Abuse.ch SSLBL,
+  Phishing Army, PT Attack Detection, Quadrant, OISF Traffic-ID, Blocklist.de, CINS Army,
+  Spamhaus DROP, Feodo Tracker);
+- каждый файл проверен `suricata -T` на Suricata 7.0.10 — **0 ошибок загрузки**;
+- варианты: `full` (весь набор), `starter` (53 674 правила, высокий сигнал), `smoke` (123),
+  разбивка по категориям (`by-category/`) и по источникам (`by-source/`);
+- контроль целостности: `sha256sum -c SHA256SUMS.txt`.
+
+Порядок тестирования и импорта — в [`dist/README-IMPORT.md`](dist/README-IMPORT.md).
+
+### Результаты совместимости (Suricata 7.0.10, корпус 120 тыс. правил)
+
+| Набор | Загружается как есть | После конвертера s2x |
+|---|---|---|
+| ET Open (suricata-7.0) | **100%** | — |
+| Talos Snort 2.9 (snapshot-29200) | 99.93% | **100%** (минус 0.2% исключений валидатором) |
+| Talos Snort 3 (snapshot-3200) | **1.5%** | **99.7%** |
+
+Типовые несовместимости Snort 3 → Suricata 7: sticky-буферы до content (9829 правил), `soid`
+(4584), протокол `file` (1387), `service` (782), inline-модификаторы content (~30 тыс. опций),
+`bufferlen` (1061), `byte_math`, SIP-буферы, лимит длины правила 8192 байта.
 
 ## Быстрый старт (Docker)
 
@@ -104,11 +133,34 @@ src/lib/engine/
   vpn.ts                    # wg-quick: конфиг, up/down, status, проверка окружения
   service.ts                # оркестрация: fetch → build → export, cron, сид каталога
   seed.ts                   # каталог 25 источников + настройки по умолчанию
+scripts/
+  s2x_convert.py            # конвертер Snort 2/3 → Suricata 7 (калибровка зондами)
+  talos_convert_batch.py    # пакетная конвертация Talos 29200/3200 + валидация
+  final_assembly.py         # сборка пакета: merge + цикл suricata -T до 0 ошибок
+  keyword_analysis.py       # анализ 153 ключевых слов корпуса
+  make_final_files.py       # файлы поставки (full/starter/smoke/by-*)
+dist/                       # ВАЛИДИРОВАННЫЙ пакет для Clear NDR (zip + README + SHA256)
 src/app/api/…               # REST API (Next.js route handlers)
 src/components/hub/…        # Web UI (7 вкладок)
 tests/                      # vitest: парсер, конвертеры, сборка, VPN, загрузчик
 Dockerfile                  # многоэтапная сборка (standalone + wireguard-tools)
 docker-compose.yml          # NET_ADMIN, /dev/net/tun, volume ./data
+```
+
+### Конвейер качества правил
+
+```
+источники → fetch → merge (дедуп SID/контента) → s2x_convert → suricata -T
+     ↑                                                      │
+     └──── исключение/исправление битых ← разбор лога ←──┘
+                                    → пакет (0 ошибок) → экспорт в Clear NDR
+```
+
+Запуск конвейера вручную (в песочнице без Docker):
+```bash
+python3 scripts/talos_convert_batch.py   # Talos 29200+3200 → Suricata
+python3 scripts/final_assembly.py        # весь корпус + цикл валидации
+python3 scripts/make_final_files.py      # файлы поставки в download/rules/
 ```
 
 ## Тесты
