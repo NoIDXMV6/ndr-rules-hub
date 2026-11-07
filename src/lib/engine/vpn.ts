@@ -4,7 +4,7 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { accessSync, constants as fsConstants } from 'fs'
-import { mkdir, writeFile, chmod } from 'fs/promises'
+import { mkdir, writeFile, chmod, readFile } from 'fs/promises'
 
 const execFileP = promisify(execFile)
 const WG_DIR = process.env.WG_CONFIG_DIR || '/etc/wireguard'
@@ -85,18 +85,28 @@ export async function checkWgTools(): Promise<WgTools> {
   }
   if (!t.wg) t.notes.push('Утилита wg не установлена (в контейнере: apt install wireguard-tools)')
   if (!t.sysctl) t.notes.push('Нет sysctl (пакет procps) — full-tunnel конфиги (AllowedIPs 0.0.0.0/0) не поднимутся: wg-quick упадёт с «sysctl: command not found»')
-  // /proc/sys/net/ipv4/conf/all/src_valid_mark должна быть доступна на запись:
-  // wg-quick пишет её для full-tunnel конфигов, а Docker монтирует /proc/sys ro —
-  // лечится строкой в sysctls docker-compose.yml. Linux access(W_OK) вернёт
-  // ошибку и на ro-маунте (EROFS), и при нехватке прав (EACCES) — обе ситуации ловим
+  // Для full-tunnel конфигов wg-quick выставляет src_valid_mark=1, но запись
+  // в /proc/sys в контейнере read-only (особенно ядра 6.8+). Поэтому в образе
+  // wg-quick пропатчен (upstream ac74ed6): запись только если значение ≠ 1.
+  // Значит проверяем САМО ЗНАЧЕНИЕ: 1 (выставлен docker при создании) — ОК;
+  // 0 + доступная запись — тоже ОК (wg-quick выставит сам); иначе — предупреждение
   try {
-    accessSync('/proc/sys/net/ipv4/conf/all/src_valid_mark', fsConstants.W_OK)
-    t.srcValidMark = true
+    const v = (await readFile('/proc/sys/net/ipv4/conf/all/src_valid_mark', 'utf8')).trim()
+    t.srcValidMark = v === '1'
   } catch {
     t.srcValidMark = false
   }
   if (!t.srcValidMark) {
-    t.notes.push('Нет прав на запись net.ipv4.conf.all.src_valid_mark — full-tunnel (AllowedIPs 0.0.0.0/0) не поднимется. Добавьте «net.ipv4.conf.all.src_valid_mark=1» в sysctls docker-compose.yml и пересоздайте контейнер (docker compose up -d --force-recreate)')
+    try {
+      accessSync('/proc/sys/net/ipv4/conf/all/src_valid_mark', fsConstants.W_OK)
+      // файл доступен на записи (вне docker или privileged) — wg-quick сам выставит
+      t.srcValidMark = true
+    } catch {
+      t.srcValidMark = false
+    }
+  }
+  if (!t.srcValidMark) {
+    t.notes.push('net.ipv4.conf.all.src_valid_mark = 0 и записать его нельзя — full-tunnel (AllowedIPs 0.0.0.0/0) не поднимется. Проверьте, что в docker-compose.yml есть «net.ipv4.conf.all.src_valid_mark=1» в sysctls и контейнер пересоздан (docker compose up -d --force-recreate); на хосте: sysctl -w net.ipv4.conf.all.src_valid_mark=1 — см. README')
   }
   if (!t.tunDevice) t.notes.push('Нет /dev/net/tun — WireGuard-туннели недоступны (на загрузку правил не влияет). Нужно: device /dev/net/tun + cap NET_ADMIN — см. README, раздел «Нет /dev/net/tun»')
   // проверка прав: ip link add требует NET_ADMIN; пробный интерфейс сразу удаляем

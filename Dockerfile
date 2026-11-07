@@ -35,9 +35,7 @@ WORKDIR /app
 # WireGuard (wg + wg-quick), iptables, iproute2, tar — для загрузки/распаковки правил
 # openresolv обязателен: wg-quick вызывает resolvconf для строк «DNS =» в конфиге,
 # без него wg-quick up падает с «resolvconf: command not found»
-# procps (sysctl) обязателен для full-tunnel конфигов (AllowedIPs 0.0.0.0/0):
-# wg-quick вызывает «sysctl -q net.ipv4.conf.all.src_valid_mark=1»,
-# без него wg-quick up падает с «sysctl: command not found»
+# procps (sysctl) обязателен для full-tunnel конфигов (AllowedIPs 0.0.0.0/0)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       wireguard-tools \
       iptables \
@@ -47,7 +45,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       tar \
       gzip \
       ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # Патчим wg-quick как в upstream wireguard-tools (коммит ac74ed6):
+    # bookworm-версия (1.0.20210914) пишет sysctl net.ipv4.conf.all.src_valid_mark=1
+    # БЕЗУСЛОВНО, а /proc/sys в контейнере read-only (особенно на ядрах 6.8+) —
+    # up падает с «permission denied on key» даже когда значение уже 1
+    # (выставлено через sysctls в docker-compose.yml). Условие «-ne 1»
+    # пропускает запись, если docker уже выставил значение.
+    && sed -i 's|\[\[ \$proto == -4 \]\] \&\& cmd sysctl -q net\.ipv4\.conf\.all\.src_valid_mark=1|[[ $proto == -4 ]] \&\& [[ $(sysctl -n net.ipv4.conf.all.src_valid_mark) -ne 1 ]] \&\& cmd sysctl -q net.ipv4.conf.all.src_valid_mark=1|' /usr/bin/wg-quick \
+    && grep -q 'src_valid_mark) -ne 1' /usr/bin/wg-quick \
+    || { echo 'FAIL: wg-quick src_valid_mark patch did not apply'; exit 1; }
 
 ENV NODE_ENV=production
 ENV PORT=3000

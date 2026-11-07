@@ -161,19 +161,25 @@ bunx vitest run        # тесты движка
 
 ### Если wg-quick падает с «sysctl: permission denied on key»
 
-Для full-tunnel конфигов (`AllowedIPs = 0.0.0.0/0`) wg-quick записывает
-`net.ipv4.conf.all.src_valid_mark=1`, но Docker по умолчанию монтирует `/proc/sys`
-в контейнере read-only. Репозиторный `docker-compose.yml` уже содержит нужную строку:
+Для full-tunnel конфигов (`AllowedIPs = 0.0.0.0/0`) wg-quick выставляет
+`net.ipv4.conf.all.src_valid_mark=1`, но `/proc/sys` внутри контейнера read-only
+(особенно на ядрах 6.8+), поэтому запись запрещена даже с NET_ADMIN. Нужно два шага:
 
-```yaml
-sysctls:
-  - net.ipv4.ip_forward=1
-  - net.ipv4.conf.all.src_valid_mark=1
-```
+1. **Значение должно быть выставлено docker'ом при создании контейнера** — репозиторный
+   `docker-compose.yml` уже содержит:
+   ```yaml
+   sysctls:
+     - net.ipv4.ip_forward=1
+     - net.ipv4.conf.all.src_valid_mark=1
+   ```
+   Пересоздайте контейнер: `git pull && docker compose up -d --build --force-recreate`.
+2. **wg-quick в образе пропатчен** как в upstream wireguard-tools (коммит `ac74ed6`):
+   запись выполняется только если значение ещё не 1. Стоковая bookworm-версия
+   (1.0.20210914) писала безусловно и падала на read-only `/proc/sys` даже при
+   уже выставленном значении — патч это устраняет.
 
-Пересоздайте контейнер, чтобы dockerd выставил ключ при создании:
-`git pull && docker compose up -d --force-recreate`.
-Проверка изнутри: `docker compose exec rules-hub sysctl net.ipv4.conf.all.src_valid_mark` — должно быть `= 1`.
+Проверка: `docker compose exec rules-hub sysctl -n net.ipv4.conf.all.src_valid_mark`
+— должно вывести `1`; в UI карточка «src_valid_mark (запись)» должна стать зелёной.
 
 Если `docker compose up` сам падает с ошибкой установки этого sysctl (бывает внутри
 непривилегированного LXC) — выставьте ключ на хосте/LXC (`sysctl -w
