@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { accessSync, constants as fsConstants } from 'fs'
 
 const execFileP = promisify(execFile)
 const WG_DIR = process.env.WG_CONFIG_DIR || '/etc/wireguard'
@@ -28,22 +29,38 @@ export async function checkWgTools(): Promise<WgTools> {
   }
   t.wg = await which('wg')
   t.wgQuick = await which('wg-quick')
+  // /dev/net/tun проверяем средствами Node (F_OK), без внешнего `test`:
+  // нет зависимости от PATH и подпроцессов
   try {
-    const st = await execFileP('test', ['-e', '/dev/net/tun'])
-    t.tunDevice = st.exitCode === 0
+    accessSync('/dev/net/tun', fsConstants.F_OK)
+    t.tunDevice = true
   } catch {
     t.tunDevice = false
   }
-  if (!t.wg) t.notes.push('Утилита wg не установлена (в контейнере: apk add wireguard-tools-wg-quick / apt install wireguard-tools)')
+  if (!t.wg) t.notes.push('Утилита wg не установлена (в контейнере: apt install wireguard-tools)')
   if (!t.tunDevice) t.notes.push('Нет /dev/net/tun — WireGuard-туннели недоступны (на загрузку правил не влияет). Нужно: device /dev/net/tun + cap NET_ADMIN — см. README, раздел «Нет /dev/net/tun»')
+  // проверка прав: ip link add требует NET_ADMIN; пробный интерфейс сразу удаляем
+  const delProbe = () => execFileP('ip', ['link', 'del', 'wg-hub-probe']).catch(() => undefined)
   try {
-    // проверка прав: ip link add требует NET_ADMIN
-    const r = await execFileP('ip', ['link', 'add', 'wg-test-nonexistent', 'type', 'wireguard'])
+    await execFileP('ip', ['link', 'add', 'wg-hub-probe', 'type', 'wireguard'], { timeout: 10_000 })
     t.netAdmin = true
-    void r
+    await delProbe()
   } catch (e) {
-    const msg = (e as { stderr?: string; code?: number }).stderr ?? String(e)
-    t.netAdmin = !msg.includes('Operation not permitted') && !msg.includes('not found')
+    const msg = ((e as { stderr?: string; code?: string }).stderr ?? String(e))
+    if (msg.includes('Operation not permitted') || msg.includes('EPERM')) {
+      t.netAdmin = false
+      t.notes.push('Нет прав NET_ADMIN — проверьте cap_add: [NET_ADMIN] в docker-compose.yml и пересоздайте контейнер (docker compose up -d --force-recreate)')
+    } else if (msg.includes('Operation not supported') || msg.includes('No such device')) {
+      // права ни при чём: на хосте Docker не загружен модуль ядра wireguard
+      t.netAdmin = true
+      t.notes.push('Модуль ядра wireguard не загружен на хосте Docker (sudo modprobe wireguard) — без него wg-quick up не поднимет туннель')
+    } else if (msg.includes('File exists')) {
+      // пробник остался от предыдущей проверки — права есть, прибираем
+      t.netAdmin = true
+      await delProbe()
+    } else {
+      t.netAdmin = true
+    }
   }
   return t
 }

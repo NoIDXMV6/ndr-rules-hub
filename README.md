@@ -135,7 +135,9 @@ bunx vitest run        # тесты движка
    ```bash
    ls -l /dev/net/tun                     # должен существовать (character device 10,200)
    sudo modprobe tun                      # если нет — загрузить модуль
+   sudo modprobe wireguard                # модуль ядра для самих туннелей
    echo tun | sudo tee /etc/modules-load.d/tun.conf   # и грузить при старте
+   echo wireguard | sudo tee /etc/modules-load.d/wireguard.conf
    ```
    Если после `modprobe tun` файла всё равно нет: `sudo mkdir -p /dev/net && sudo mknod /dev/net/tun c 10 200 && sudo chmod 666 /dev/net/tun`.
 2. **Проверьте, что контейнер запущен репозиторным compose** (в нём есть `cap_add` и `devices`):
