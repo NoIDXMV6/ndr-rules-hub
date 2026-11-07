@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { fetchSourceById } from '@/lib/engine/service'
+import { apiError } from '@/lib/api-error'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -23,17 +24,25 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
-  const src = await db.source.findUnique({ where: { id } })
-  if (!src) return NextResponse.json({ error: 'не найден' }, { status: 404 })
-  if (src.builtin) return NextResponse.json({ error: 'встроенный источник нельзя удалить — его можно отключить' }, { status: 400 })
-  await db.source.delete({ where: { id } })
-  return NextResponse.json({ ok: true })
+  try {
+    const { id } = await params
+    const src = await db.source.findUnique({ where: { id } })
+    if (!src) return NextResponse.json({ error: 'не найден' }, { status: 404 })
+    if (src.builtin) return NextResponse.json({ error: 'встроенный источник нельзя удалить — его можно отключить' }, { status: 400 })
+    await db.source.delete({ where: { id } })
+    return NextResponse.json({ ok: true })
+  } catch (e) {
+    return apiError(e)
+  }
 }
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   // POST /api/sources/:id — синоним fetch для удобства
-  const { id } = await params
-  const res = await fetchSourceById(id)
-  return NextResponse.json(res, { status: res.ok ? 200 : 400 })
+  try {
+    const { id } = await params
+    const res = await fetchSourceById(id)
+    return NextResponse.json(res, { status: res.ok ? 200 : 400 })
+  } catch (e) {
+    return apiError(e)
+  }
 }

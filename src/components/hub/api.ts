@@ -76,8 +76,19 @@ export interface Dashboard {
 }
 
 async function j<T>(res: Response): Promise<T> {
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`)
+  // читаем тело как текст: при 500 от Next.js оно может быть не-JSON,
+  // и важно показать пользователю реальную причину, а не безликий «HTTP 500»
+  const text = await res.text().catch(() => '')
+  let data: Record<string, unknown> = {}
+  try {
+    data = text ? (JSON.parse(text) as Record<string, unknown>) : {}
+  } catch {
+    // не-JSON ответ (страница ошибки прокси/сервера) — покажем фрагмент текста
+  }
+  if (!res.ok) {
+    const err = (data as { error?: string }).error
+    throw new Error(err ?? `HTTP ${res.status}${text ? `: ${text.slice(0, 180)}` : ''}`)
+  }
   return data as T
 }
 

@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { ensureSeed, fetchSourceById } from '@/lib/engine/service'
+import { ensureSeed } from '@/lib/engine/service'
+import { apiError } from '@/lib/api-error'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  await ensureSeed()
-  const sources = await db.source.findMany({ orderBy: [{ enabled: 'desc' }, { priority: 'asc' }] })
-  return NextResponse.json({ sources })
+  try {
+    await ensureSeed()
+    const sources = await db.source.findMany({ orderBy: [{ enabled: 'desc' }, { priority: 'asc' }] })
+    return NextResponse.json({ sources })
+  } catch (e) {
+    return apiError(e)
+  }
 }
 
 export async function POST(req: NextRequest) {
