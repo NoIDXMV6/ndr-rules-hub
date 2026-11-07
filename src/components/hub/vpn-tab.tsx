@@ -125,6 +125,7 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
             <Check label="wg-quick" ok={tools?.wgQuick} />
             <Check label="/dev/net/tun" ok={tools?.tunDevice} />
             <Check label="NET_ADMIN" ok={tools?.netAdmin} />
+            <Check label="sysctl (procps)" ok={tools?.sysctl} />
           </div>
           {tools && tools.notes.length > 0 && (
             <ul className="mt-3 space-y-1">

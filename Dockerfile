@@ -35,11 +35,15 @@ WORKDIR /app
 # WireGuard (wg + wg-quick), iptables, iproute2, tar — для загрузки/распаковки правил
 # openresolv обязателен: wg-quick вызывает resolvconf для строк «DNS =» в конфиге,
 # без него wg-quick up падает с «resolvconf: command not found»
+# procps (sysctl) обязателен для full-tunnel конфигов (AllowedIPs 0.0.0.0/0):
+# wg-quick вызывает «sysctl -q net.ipv4.conf.all.src_valid_mark=1»,
+# без него wg-quick up падает с «sysctl: command not found»
 RUN apt-get update && apt-get install -y --no-install-recommends \
       wireguard-tools \
       iptables \
       iproute2 \
       openresolv \
+      procps \
       tar \
       gzip \
       ca-certificates \

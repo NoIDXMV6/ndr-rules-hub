@@ -56,12 +56,13 @@ export interface WgTools {
   wg: boolean
   tunDevice: boolean
   netAdmin: boolean
+  sysctl: boolean
   notes: string[]
 }
 
 /** Проверка доступности инструментов WireGuard в системе/контейнере */
 export async function checkWgTools(): Promise<WgTools> {
-  const t: WgTools = { wgQuick: false, wg: false, tunDevice: false, netAdmin: false, notes: [] }
+  const t: WgTools = { wgQuick: false, wg: false, tunDevice: false, netAdmin: false, sysctl: false, notes: [] }
   const which = async (cmd: string) => {
     try {
       await execFileP('which', [cmd])
@@ -72,6 +73,7 @@ export async function checkWgTools(): Promise<WgTools> {
   }
   t.wg = await which('wg')
   t.wgQuick = await which('wg-quick')
+  t.sysctl = await which('sysctl')
   // /dev/net/tun проверяем средствами Node (F_OK), без внешнего `test`:
   // нет зависимости от PATH и подпроцессов
   try {
@@ -81,6 +83,7 @@ export async function checkWgTools(): Promise<WgTools> {
     t.tunDevice = false
   }
   if (!t.wg) t.notes.push('Утилита wg не установлена (в контейнере: apt install wireguard-tools)')
+  if (!t.sysctl) t.notes.push('Нет sysctl (пакет procps) — full-tunnel конфиги (AllowedIPs 0.0.0.0/0) не поднимутся: wg-quick упадёт с «sysctl: command not found»')
   if (!t.tunDevice) t.notes.push('Нет /dev/net/tun — WireGuard-туннели недоступны (на загрузку правил не влияет). Нужно: device /dev/net/tun + cap NET_ADMIN — см. README, раздел «Нет /dev/net/tun»')
   // проверка прав: ip link add требует NET_ADMIN; пробный интерфейс сразу удаляем
   const delProbe = () => execFileP('ip', ['link', 'del', 'wg-hub-probe']).catch(() => undefined)
@@ -159,7 +162,14 @@ export async function wgUp(name: string, config: string): Promise<{ ok: boolean;
       return { ok: true, notes, output: trace || undefined }
     }
     if (!res.ok) {
-      return { ok: false, error: trace || 'wg-quick up завершился с ошибкой (подробности в логах контейнера)' }
+      // «X: command not found» — в контейнере нет утилиты, на которую
+      // ссылается конфиг/штатные шаги wg-quick: называем её и пакет
+      const missing = (res.stderr + res.stdout).match(/(\S+): command not found/)?.[1]
+      if (missing) {
+        const pkg = missing === 'sysctl' ? 'procps' : missing === 'resolvconf' ? 'openresolv' : '—'
+        notes.push(`в контейнере нет утилиты «${missing}» (пакет ${pkg}) — установите её в образ и пересоберите: docker compose up -d --build`)
+      }
+      return { ok: false, error: trace || 'wg-quick up завершился с ошибкой (подробности в логах контейнера)', notes }
     }
     return { ok: true, notes: notes.length ? notes : undefined, output: trace || undefined }
   } catch (e) {

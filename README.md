@@ -116,7 +116,9 @@ bunx vitest run        # тесты движка
 ## WireGuard в контейнере
 
 `docker-compose.yml` уже содержит `cap_add: NET_ADMIN`, устройство `/dev/net/tun` и `ip_forward`.
-В образе установлены `wireguard-tools` (wg + wg-quick) и `iptables`. В UI (вкладка **WireGuard VPN**):
+В образе установлены `wireguard-tools` (wg + wg-quick), `iptables`, `iproute2`, `openresolv`
+(строки «DNS =» в конфиге) и `procps`/`sysctl` (нужен для `AllowedIPs = 0.0.0.0/0`).
+В UI (вкладка **WireGuard VPN**):
 
 1. вставьте конфиг `.conf` (формат wg-quick), при необходимости задайте имя интерфейса
    комментарием `# InterfaceName: wg-office`;
