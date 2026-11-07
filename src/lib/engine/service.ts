@@ -128,7 +128,7 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     proto: r.proto,
     msg: r.msg?.slice(0, 300) ?? null,
     clsType: r.classtype?.slice(0, 100) ?? null,
-    raw: r.raw.slice(0, 8000),
+    raw: r.raw, // без обрезки: правило Spamhaus DROP 7.7 КБ обрезалось лимитом 8000 и становилось невалидным
     contentHash: hashRule(r.raw),
     suricataOk: r.suricataOk,
     compatNotes: r.compatNotes?.slice(0, 500) ?? null,
