@@ -74,7 +74,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean }> {
 }
 
 /** Загрузка одного источника и сохранение правил в БД */
-export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; error?: string; count: number }> {
+export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; error?: string; count: number; note?: string }> {
   const src = await db.source.findUnique({ where: { id: sourceId } })
   if (!src) return { ok: false, error: 'источник не найден', count: 0 }
 
@@ -110,6 +110,10 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     })
     await log('error', 'fetch', `Ошибка загрузки «${src.name}»: ${res.error}`)
     return { ok: false, error: res.error, count: 0 }
+  }
+  // загрузка не удалась, но отработали от кэша — это предупреждение, а не успех молча
+  if (res.cacheNote) {
+    await log('warn', 'fetch', `«${src.name}»: ${res.cacheNote}`)
   }
 
   // дедуп внутри источника по sid (оставляем максимальный rev)
@@ -148,8 +152,8 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
       sizeBytes: res.sizeBytes,
     },
   })
-  await log('success', 'fetch', `Загружено «${src.name}»: ${rows.length} правил (${dt} с)`)
-  return { ok: true, count: rows.length }
+  await log('success', 'fetch', `Загружено «${src.name}»: ${rows.length} правил (${dt} с)${res.cacheNote ? ' — ВНИМАНИЕ: работали от кэша' : ''}`)
+  return { ok: true, count: rows.length, note: res.cacheNote }
 }
 
 /** Загрузить все включённые источники */

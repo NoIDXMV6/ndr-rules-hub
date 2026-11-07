@@ -56,7 +56,11 @@ export function SourcesTab({ data, onChange }: { data: Dashboard | null; onChang
     setMsg(`Загрузка «${s.name}»…`)
     try {
       const r = await api.fetchSource(s.id)
-      setMsg(r.ok ? `«${s.name}»: загружено ${r.count.toLocaleString('ru-RU')} правил` : `Ошибка: ${r.error}`)
+      setMsg(
+        r.ok
+          ? `«${s.name}»: загружено ${r.count.toLocaleString('ru-RU')} правил${r.note ? `\n⚠ ${r.note}` : ''}`
+          : `Ошибка: ${r.error}`,
+      )
       onChange()
     } catch (e) {
       setMsg(`Ошибка: ${(e as Error).message}`)

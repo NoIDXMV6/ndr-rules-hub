@@ -32,6 +32,8 @@ export interface FetchResult {
   rules: ParsedRule[]
   sizeBytes: number
   usedCache?: boolean
+  /** предупреждение при использовании кэша (показывается в логах и ответе API) */
+  cacheNote?: string
 }
 
 interface ExtraCfg {
@@ -49,6 +51,9 @@ interface ExtraCfg {
   classtype?: string
   // для tarball: glob подкаталога с .rules
   subPath?: string
+  // для tarball: не перекачивать архив чаще N минут (0/нет — перекачивать всегда;
+  // у snort.org лимит — не чаще раза в 15 минут)
+  cacheTtlMinutes?: number
 }
 
 function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): string {
@@ -85,6 +90,40 @@ function cfg_basic(extra: ExtraCfg): Record<string, string> {
   return {}
 }
 
+/** Вытащить человекочитаемую причину из тела ответа (snort.org отвечает ["Invalid oinkcode"], другие — текстом/HTML) */
+export function bodyReason(body: Buffer): string | null {
+  const t = body.toString('utf8').slice(0, 2000).trim()
+  if (!t) return null
+  const json = t.match(/\[\s*"([^"\\]{3,200})"\s*\]/)
+  if (json) return json[1]
+  const plain = t.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+  return plain ? plain.slice(0, 140) : null
+}
+
+/** Подпись oinkcode для ошибок: видно, задан ли он и какова длина, без раскрытия значения */
+export function oinkcodeFingerprint(extra: ExtraCfg): string {
+  const c = (extra.oinkcode ?? '').trim()
+  if (!c) return 'oinkcode НЕ задан — запрос ушёл без него (укажите код в «Настройки» или в extra источника)'
+  return `отправлен oinkcode ${c.slice(0, 4)}…${c.slice(-4)} (${c.length} симв.)`
+}
+
+/** Понятная ошибка для snort.org (422 = «Invalid oinkcode», 403/429 — лимиты) */
+export function snortFetchError(status: number, body: Buffer, extra: ExtraCfg, url: string): string {
+  const reason = bodyReason(body)
+  let msg = `snort.org: HTTP ${status} при загрузке ${url}`
+  if (reason) msg += ` — «${reason}»`
+  msg += `; ${oinkcodeFingerprint(extra)}`
+  if (status === 422) {
+    msg += '. HTTP 422 у snort.org — почти всегда «Invalid oinkcode»: проверьте код в «Настройки» '
+      + '(берётся на snort.org → Preferences → Oinkcode, 40 hex-символов, без пробелов) и повторите «Обновить»'
+  } else if (status === 403) {
+    msg += '. Отказ: неверный oinkcode либо превышен лимит загрузок (registered — не чаще раза в 15 минут) — повторите позже'
+  } else if (status === 429) {
+    msg += '. Слишком частые запросы — подождите 15-30 минут'
+  }
+  return msg
+}
+
 async function extractTarball(tarPath: string, destDir: string, subPath?: string): Promise<string[]> {
   await fs.mkdir(destDir, { recursive: true })
   await execFileP('tar', ['-xzf', tarPath, '-C', destDir], { timeout: 180_000 })
@@ -107,6 +146,25 @@ async function extractTarball(tarPath: string, destDir: string, subPath?: string
   }
   await walk(destDir)
   return found.sort()
+}
+
+/** Разобрать ранее скачанный архив (кэш): null — архива нет или он не читается */
+async function extractCached(tarPath: string, destDir: string, subPath?: string): Promise<{ rules: ParsedRule[]; sizeBytes: number } | null> {
+  const st = await fs.stat(tarPath).catch(() => null)
+  if (!st) return null
+  try {
+    const found = await extractTarball(tarPath, destDir, subPath)
+    let rules: ParsedRule[] = []
+    let size = 0
+    for (const f of found) {
+      const t = await fs.readFile(f, 'utf8')
+      size += t.length
+      rules.push(...parseRuleText(t))
+    }
+    return { rules, sizeBytes: size }
+  } catch {
+    return null
+  }
 }
 
 /** Загрузить и разобрать один источник */
@@ -160,24 +218,43 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
     // ── сетевые источники
     if (!cfg.url) return { ok: false, error: 'не задан URL', rules: [], sizeBytes: 0 }
     const url = applyAuth(cfg.url, cfg, extra)
+    const isSnort = /snort\.org/i.test(cfg.url)
 
     if (cfg.kind === 'tarball') {
-      const res = await httpGet(url, extra)
-      if (res.status === 403 && cfg.authType === 'oinkcode') {
-        return {
-          ok: false,
-          error: 'snort.org: отказ (403) — проверьте oinkcode или достигнут дневной лимит загрузок (повторите позже)',
-          rules: [],
-          sizeBytes: res.body.length,
+      const tarPath = path.join(CACHE_DIR, `src-${cfg.id}.tar.gz`)
+      const destDir = path.join(CACHE_DIR, `src-${cfg.id}`)
+
+      // свежий кэш (extra.cacheTtlMinutes, по умолчанию 0 = выкл): не дёргаем
+      // источник чаще лимита (у snort.org registered — раз в 15 минут)
+      const ttl = Number(extra.cacheTtlMinutes ?? 0)
+      const st = await fs.stat(tarPath).catch(() => null)
+      if (ttl > 0 && st && Date.now() - st.mtimeMs < ttl * 60_000) {
+        const cached = await extractCached(tarPath, destDir, extra.subPath)
+        if (cached) {
+          return {
+            ok: true, rules: cached.rules, sizeBytes: cached.sizeBytes, usedCache: true,
+            cacheNote: `использован свежий кэш архива от ${st.mtime.toISOString()} (cacheTtlMinutes=${ttl})`,
+          }
         }
       }
+
+      const res = await httpGet(url, extra)
       if (res.status !== 200) {
-        return { ok: false, error: `HTTP ${res.status} при загрузке ${cfg.url}`, rules: [], sizeBytes: res.body.length }
+        const errText = isSnort
+          ? snortFetchError(res.status, res.body, extra, cfg.url)
+          : `HTTP ${res.status} при загрузке ${cfg.url}${bodyReason(res.body) ? ` — «${bodyReason(res.body)}»` : ''}`
+        // запасной путь: ранее скачанный архив — работаем от него, источник помечаем предупреждением
+        const cached = await extractCached(tarPath, destDir, extra.subPath)
+        if (cached) {
+          return {
+            ok: true, rules: cached.rules, sizeBytes: cached.sizeBytes, usedCache: true,
+            cacheNote: `${errText} — использован кэш архива от ${st?.mtime.toISOString() ?? '—'}`,
+          }
+        }
+        return { ok: false, error: errText, rules: [], sizeBytes: res.body.length }
       }
-      const tarPath = path.join(CACHE_DIR, `src-${cfg.id}.tar.gz`)
       await fs.mkdir(CACHE_DIR, { recursive: true })
       await fs.writeFile(tarPath, res.body)
-      const destDir = path.join(CACHE_DIR, `src-${cfg.id}`)
       const found = await extractTarball(tarPath, destDir, extra.subPath)
       let rules: ParsedRule[] = []
       let size = 0
@@ -191,16 +268,11 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
 
     // ruleset / список — обычный текст
     const res = await httpGet(url, extra)
-    if (res.status === 403 && cfg.authType === 'oinkcode') {
-      return {
-        ok: false,
-        error: 'snort.org: отказ (403) — проверьте oinkcode или достигнут дневной лимит загрузок',
-        rules: [],
-        sizeBytes: res.body.length,
-      }
-    }
     if (res.status !== 200) {
-      return { ok: false, error: `HTTP ${res.status} при загрузке ${cfg.url}`, rules: [], sizeBytes: res.body.length }
+      const errText = isSnort
+        ? snortFetchError(res.status, res.body, extra, cfg.url)
+        : `HTTP ${res.status} при загрузке ${cfg.url}${bodyReason(res.body) ? ` — «${bodyReason(res.body)}»` : ''}`
+      return { ok: false, error: errText, rules: [], sizeBytes: res.body.length }
     }
     const text = res.body.toString('utf8')
     if (cfg.category === 'ip-list') {

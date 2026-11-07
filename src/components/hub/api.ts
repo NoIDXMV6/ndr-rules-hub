@@ -102,7 +102,7 @@ async function j<T>(res: Response): Promise<T> {
 export const api = {
   dashboard: () => fetch('/api/dashboard', { cache: 'no-store' }).then((r) => j<Dashboard>(r)),
   fetchAll: () => fetch('/api/fetch-all', { method: 'POST' }).then((r) => j<{ ok: number; failed: number; errors: string[] }>(r)),
-  fetchSource: (id: string) => fetch(`/api/sources/${id}/fetch`, { method: 'POST' }).then((r) => j<{ ok: boolean; count: number; error?: string }>(r)),
+  fetchSource: (id: string) => fetch(`/api/sources/${id}/fetch`, { method: 'POST' }).then((r) => j<{ ok: boolean; count: number; error?: string; note?: string }>(r)),
   patchSource: (id: string, data: Partial<SourceItem>) =>
     fetch(`/api/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ source: SourceItem }>(r)),
   deleteSource: (id: string) => fetch(`/api/sources/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
