@@ -35,7 +35,7 @@ export async function checkWgTools(): Promise<WgTools> {
     t.tunDevice = false
   }
   if (!t.wg) t.notes.push('Утилита wg не установлена (в контейнере: apk add wireguard-tools-wg-quick / apt install wireguard-tools)')
-  if (!t.tunDevice) t.notes.push('Нет /dev/net/tun — для контейнера нужен device: /dev/net/tun и cap NET_ADMIN')
+  if (!t.tunDevice) t.notes.push('Нет /dev/net/tun — WireGuard-туннели недоступны (на загрузку правил не влияет). Нужно: device /dev/net/tun + cap NET_ADMIN — см. README, раздел «Нет /dev/net/tun»')
   try {
     // проверка прав: ip link add требует NET_ADMIN
     const r = await execFileP('ip', ['link', 'add', 'wg-test-nonexistent', 'type', 'wireguard'])

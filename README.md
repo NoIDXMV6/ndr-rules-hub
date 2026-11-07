@@ -126,6 +126,35 @@ bunx vitest run        # тесты движка
 Если туннель должен обслуживать только загрузки с snort.org — ограничьте `AllowedIPs`
 подсетями snort.org вместо `0.0.0.0/0`.
 
+### Если UI показывает «Нет /dev/net/tun»
+
+Это предупреждение не мешает загрузке правил и сборке — только туннелированию. Если VPN
+не нужен, его можно игнорировать. Если нужен:
+
+1. **Проверьте хост** (машину, где стоит Docker):
+   ```bash
+   ls -l /dev/net/tun                     # должен существовать (character device 10,200)
+   sudo modprobe tun                      # если нет — загрузить модуль
+   echo tun | sudo tee /etc/modules-load.d/tun.conf   # и грузить при старте
+   ```
+   Если после `modprobe tun` файла всё равно нет: `sudo mkdir -p /dev/net && sudo mknod /dev/net/tun c 10 200 && sudo chmod 666 /dev/net/tun`.
+2. **Проверьте, что контейнер запущен репозиторным compose** (в нём есть `cap_add` и `devices`):
+   ```bash
+   cd ndr-rules-hub && git pull && docker compose up -d --force-recreate
+   docker inspect ndr-rules-hub --format '{{json .HostConfig.CapAdd}} {{json .HostConfig.Devices}}'
+   # ожидается: ["NET_ADMIN"] [{"PathOnHost":"/dev/net/tun",...}]
+   ```
+   Если там `[]` — контейнер поднят через `docker run` или старый compose без этих флагов:
+   пересоздайте через репозиторный `docker-compose.yml` (для `docker run` добавьте
+   `--cap-add NET_ADMIN --device /dev/net/tun`).
+3. **Проверьте внутри контейнера**: `docker compose exec rules-hub test -e /dev/net/tun && echo OK`.
+4. **Хост — LXC-контейнер (Proxmox и т.п.)**: tun нужно разрешить на гипервизоре,
+   в `/etc/pve/lxc/<id>.conf` добавьте и перезапустите LXC:
+   ```
+   lxc.cgroup2.devices.allow: c 10:200 rwm
+   lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
+   ```
+
 ## API сервиса
 
 | Метод/путь | Описание |
