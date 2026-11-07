@@ -65,3 +65,7 @@ server.log
 dev.log
 server.log
 *.db
+
+# ── песочница: клон Scirius и артефакты релизов ──────────────────────────
+/vendor/
+/dist/
