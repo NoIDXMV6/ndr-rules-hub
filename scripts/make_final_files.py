@@ -8,12 +8,23 @@
 import re, os, sys, hashlib, zipfile, datetime
 from collections import defaultdict, OrderedDict
 
+sys.path.insert(0, "/home/z/my-project/scripts")
+from resid import SidMapper, replace_sid, BLOCK_START, BLOCK_END
+
 SRC = "/home/z/my-project/data/exports/clearndr-import-validated.rules"
 OUT = "/home/z/my-project/download/rules"
 DATE = datetime.date.today().strftime("%Y%m%d")
 os.makedirs(OUT, exist_ok=True)
 os.makedirs(os.path.join(OUT, "by-category"), exist_ok=True)
 os.makedirs(os.path.join(OUT, "by-source"), exist_ok=True)
+
+# очистка файлов прошлых сборок (иначе устаревшие .rules остаются рядом с новыми)
+for _sub in ("", "by-category", "by-source"):
+    _d = os.path.join(OUT, _sub)
+    for _fn in os.listdir(_d):
+        _p = os.path.join(_d, _fn)
+        if os.path.isfile(_p) and (_fn.endswith((".rules", ".md", ".txt", ".csv")) or _fn.startswith("clearndr-")):
+            os.remove(_p)
 
 RULE_RE = re.compile(r"^(alert|drop|pass|reject|block|sdrop|log)\s+\S+")
 SRC_RE = re.compile(r"^# \[(.+)\]$")
@@ -46,6 +57,21 @@ for line in open(SRC, encoding="utf-8"):
 
 assert len(rules) > 100000, f"подозрительно мало правил: {len(rules)}"
 sys.stderr.write(f"Разобрано: {len(rules)} правил из {len({r['source'] for r in rules})} источников\n")
+
+# ── Перенумерация SID в зарезервированный clearndr-блок ────────────────────
+# Чужие SID (Snort <1M, ET 1..2.2M, Suricata 2.2M..2.3M, PT 10..11M, Quadrant до
+# 81M, OISF 300M, abuse.ch ~900M) заняты штатными источниками Clear NDR — импорт
+# с sid:3 падает. Все правила получают sid из свободного блока 1 000 000 000+.
+mapper = SidMapper()
+for r in rules:
+    r["orig_sid"] = r["sid"]
+    r["sid"] = mapper.get(r["source"], r["sid"])
+    r["raw"] = replace_sid(r["raw"], r["sid"])
+mapper.save()
+assert len({r["sid"] for r in rules}) == len(rules), "дубликат SID после remap"
+_lo, _hi = min(r["sid"] for r in rules), max(r["sid"] for r in rules)
+assert BLOCK_START <= _lo and _hi <= BLOCK_END, f"SID вне clearndr-блока: {_lo}..{_hi}"
+sys.stderr.write(f"Remap SID: {len(rules)} правил → {_lo}..{_hi} (блок {BLOCK_START:,}..{BLOCK_END:,})\n")
 
 FEED_SOURCES = {"Blocklist.de (атакующие IP)", "CINS Army List (плохие IP)",
                 "Spamhaus DROP (угнанные сети)", "Feodo Tracker Botnet C2 (IP list → правила)"}
@@ -160,6 +186,9 @@ for rel, spec in created.items():
 if fail:
     sys.exit("ВАЛИДАЦИЯ НЕ ПРОЙДЕНА")
 
+mapper.write_csv(os.path.join(OUT, "SID-MAP.csv"), rules)
+
+
 def sha256(p):
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -168,6 +197,7 @@ def sha256(p):
     return h.hexdigest()
 
 sums = [f"{sha256(os.path.join(OUT, rel))}  {rel}" for rel in created]
+sums.append(f"{sha256(os.path.join(OUT, 'SID-MAP.csv'))}  SID-MAP.csv")
 with open(os.path.join(OUT, "SHA256SUMS.txt"), "w", encoding="utf-8") as f:
     f.write("\n".join(sums) + "\n")
 
@@ -186,6 +216,21 @@ readme = f"""# Итоговые наборы правил для Clear NDR — �
 - Исключено валидатором: 234 правила ({100*234/len(rules):.2f}%) — несжимаемые несовместимости
   (byte_math, sip_*-буферы, dce_*, ber_*, конфликт направлений, битые заголовки Quadrant).
 - Лимит длины правила Suricata 8192 байта учтён: длинные IP-листы разбиты на несколько правил.
+
+## Политика SID (перенумерация в свободный диапазон)
+
+Все правила пакета имеют SID из зарезервированного локального блока clearndr
+**1 000 000 000 – 1 099 999 999** — выше всех известных публичных аллокаций:
+Snort резервирует 0–999 999 (docs.snort.org), Emerging Threats — 1M–2.2M,
+события движка Suricata — 2 200 000–2 299 999 (docs.suricata.io), публичные
+наборы используют 10–11M (Positive Technologies), 20M/81M (Quadrant),
+300M (OISF Traffic ID), ~900M (abuse.ch). Исходные «чужие» SID вызывали
+конфликт при импорте в прод (SID 3 уже занят штатным набором).
+
+- Отображение детерминированное: `new_sid = f(source, original_sid)`;
+  повторные сборки не меняют SID у неизменённых правил (обновления проходят без «плавания» идентификаторов).
+- Соответствие нового и исходного SID — в `SID-MAP.csv` (clearndr_sid; original_sid; source; msg).
+- rev, msg, metadata и содержимое правил не изменялись — заменено только значение sid.
 
 ## Состав пакета
 
@@ -211,13 +256,19 @@ readme += f"""
 ## Проверка целостности
 
 `sha256sum -c SHA256SUMS.txt`
+
+## SID-MAP.csv
+
+Карта соответствия SID для всех правил пакета (new ← original). Если нужно
+вернуть правилу исходный идентификатор или сопоставить алерт с правилом
+вышестоящего набора (Snort/ET) — поиск по `clearndr_sid`.
 """
 with open(os.path.join(OUT, "README-IMPORT.md"), "w", encoding="utf-8") as f:
     f.write(readme)
 
 zip_path = f"/home/z/my-project/download/clearndr-rules-{DATE}.zip"
 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-    for rel in list(created) + ["README-IMPORT.md", "SHA256SUMS.txt"]:
+    for rel in list(created) + ["README-IMPORT.md", "SHA256SUMS.txt", "SID-MAP.csv"]:
         z.write(os.path.join(OUT, rel), arcname=f"clearndr-rules-{DATE}/{rel}")
 print(f"\nАрхив: {zip_path} ({os.path.getsize(zip_path)//1024//1024} МБ)")
 print("Готово.")

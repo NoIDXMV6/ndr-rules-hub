@@ -49,7 +49,7 @@ for line in open(TALOS, encoding="utf-8"):
 cur = None
 quadrant_converted = {"ok": 0, "drop": 0}
 split_ip = {"count": 0}
-next_split_sid = [1100700]
+next_split_sid = [1_050_000_000]  # синтетические SID фрагментов — в clearndr-блоке (вне всех публичных аллокаций; 1100700 попадало в диапазон ET Open)
 
 def split_long_ip_rule(raw, source):
     """Правила >8000 символов с IP-списком → разбить на два (лимит Suricata 8192 байта)."""
