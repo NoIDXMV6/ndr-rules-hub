@@ -43,7 +43,14 @@ export interface VpnState {
   interfaces: WgIface[]
   tools: { wgQuick: boolean; wg: boolean; tunDevice: boolean; netAdmin: boolean; notes: string[] }
   configOk?: { ok: boolean; error?: string; iface?: string; peers?: number; endpoint?: string }
-  profiles?: Array<{ id: string; name: string; active: boolean; lastCheckAt: string | null; config: string }>
+  profiles?: Array<{
+    id: string
+    name: string
+    active: boolean
+    lastCheckAt: string | null
+    config: string
+    lastStatusJson?: string | null
+  }>
 }
 
 export interface BuildStats {

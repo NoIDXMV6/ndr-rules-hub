@@ -4,9 +4,52 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { accessSync, constants as fsConstants } from 'fs'
+import { mkdir, writeFile, chmod } from 'fs/promises'
 
 const execFileP = promisify(execFile)
 const WG_DIR = process.env.WG_CONFIG_DIR || '/etc/wireguard'
+
+/** Запуск команды с захвом stdout/stderr — без выброса исключений */
+async function runCmd(
+  cmd: string,
+  args: string[],
+  timeout = 30_000,
+): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  try {
+    const { stdout, stderr } = await execFileP(cmd, args, { timeout })
+    return { ok: true, stdout: stdout ?? '', stderr: stderr ?? '' }
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string; message?: string; code?: string }
+    const stderr = err.stderr ?? (err.code === 'ENOENT' ? `${cmd}: команда не найдена` : err.message ?? String(e))
+    return { ok: false, stdout: err.stdout ?? '', stderr }
+  }
+}
+
+/** Список поднятых WireGuard-интерфейсов (wg show interfaces) */
+async function wgInterfaces(): Promise<string[]> {
+  const r = await runCmd('wg', ['show', 'interfaces'], 10_000)
+  return r.ok ? r.stdout.trim().split(/\s+/).filter(Boolean) : []
+}
+
+/** Убрать «полуподнятый» интерфейс от прошлой неудачной попытки wg-quick */
+async function cleanStaleInterface(iface: string): Promise<void> {
+  if (!(await wgInterfaces()).includes(iface)) return
+  // сначала штатно (wg-quick сам убирает маршруты/правила из конфига),
+  // при неудаче — грубо, ip link del
+  await runCmd('wg-quick', ['down', `${WG_DIR}/${iface}.conf`], 20_000)
+  if ((await wgInterfaces()).includes(iface)) await runCmd('ip', ['link', 'del', iface], 10_000)
+}
+
+/** Убрать строки DNS= из конфига (fallback, если в системе нет resolvconf) */
+function stripDnsLines(cfg: string): string {
+  return cfg
+    .split('\n')
+    .filter((l) => !/^\s*DNS\s*=/i.test(l))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+}
+
+const isResolvconfError = (s: string) => /resolvconf|resolv\.conf/i.test(s)
 
 export interface WgTools {
   wgQuick: boolean
@@ -79,31 +122,65 @@ export function parseWgConfig(config: string): { ok: boolean; error?: string; if
 }
 
 /** Применить конфиг: сохраняет файл и поднимает туннель (wg-quick up) */
-export async function wgUp(name: string, config: string): Promise<{ ok: boolean; error?: string }> {
+export async function wgUp(name: string, config: string): Promise<{ ok: boolean; error?: string; output?: string; notes?: string[] }> {
   const parsed = parseWgConfig(config)
   if (!parsed.ok) return { ok: false, error: parsed.error }
   const iface = parsed.iface ?? 'wg0'
+  const confPath = `${WG_DIR}/${iface}.conf`
+  const notes: string[] = []
   try {
-    await execFileP('mkdir', ['-p', WG_DIR])
-    await execFileP('tee', [`${WG_DIR}/${iface}.conf`], { input: config })
-    await execFileP('chmod', ['600', `${WG_DIR}/${iface}.conf`])
-    const { stderr } = await execFileP('wg-quick', ['up', `${WG_DIR}/${iface}.conf`], { timeout: 30_000 })
-    return { ok: true, error: stderr || undefined }
+    // ВАЖНО: раньше тут был execFile('tee', [path], { input: config }) — но у
+    // execFile НЕТ опции input (она есть только у spawnSync/execSync), опция
+    // молча игнорировалась и в файл писался ПУСТОЙ конфиг, из-за чего wg-quick
+    // не мог поднять туннель. Пишем файл средствами Node.
+    await mkdir(WG_DIR, { recursive: true })
+    await writeFile(confPath, config, { mode: 0o600 })
+    await chmod(confPath, 0o600)
+    // прошлая неудачная попытка могла оставить интерфейс — иначе wg-quick
+    // ответит «wg0 already exists as a WireGuard interface»
+    await cleanStaleInterface(iface)
+
+    let res = await runCmd('wg-quick', ['up', confPath])
+    if (!res.ok && isResolvconfError(res.stderr + res.stdout)) {
+      // чаще всего в контейнере нет resolvconf, а в конфиге есть строка DNS=:
+      // поднимаем без неё — DNS контейнером управляет Docker, и с AllowedIPs
+      // 0.0.0.0/0 запросы к внешним DNS всё равно пойдут через туннель
+      notes.push('строка DNS= проигнорирована: resolvconf недоступен (в образ добавьте openresolv — см. README)')
+      await writeFile(confPath, stripDnsLines(config), { mode: 0o600 })
+      await chmod(confPath, 0o600)
+      await cleanStaleInterface(iface)
+      res = await runCmd('wg-quick', ['up', confPath])
+    }
+
+    const trace = (res.stderr || res.stdout).trim()
+    const ifaceUp = (await wgInterfaces()).includes(iface)
+    if (ifaceUp && !res.ok) {
+      notes.push('wg-quick завершился с ошибкой, но интерфейс создан — проверьте handshake ниже')
+      return { ok: true, notes, output: trace || undefined }
+    }
+    if (!res.ok) {
+      return { ok: false, error: trace || 'wg-quick up завершился с ошибкой (подробности в логах контейнера)' }
+    }
+    return { ok: true, notes: notes.length ? notes : undefined, output: trace || undefined }
   } catch (e) {
     const err = e as { message?: string; stderr?: string }
     return { ok: false, error: err.stderr || err.message || 'wg-quick up failed' }
   }
 }
 
-export async function wgDown(name: string): Promise<{ ok: boolean; error?: string }> {
+export async function wgDown(name: string): Promise<{ ok: boolean; error?: string; notes?: string[] }> {
   const iface = name.replace(/\.conf$/, '')
-  try {
-    await execFileP('wg-quick', ['down', `${WG_DIR}/${iface}.conf`], { timeout: 30_000 })
-    return { ok: true }
-  } catch (e) {
-    const err = e as { message?: string; stderr?: string }
-    return { ok: false, error: err.stderr || err.message || 'wg-quick down failed' }
+  const res = await runCmd('wg-quick', ['down', `${WG_DIR}/${iface}.conf`])
+  if (res.ok) return { ok: true }
+  // интерфейса могло уже не быть — повторный down не ошибка
+  if (!(await wgInterfaces()).includes(iface)) {
+    return { ok: true, notes: ['интерфейс уже был опущен'] }
   }
+  const del = await runCmd('ip', ['link', 'del', iface], 10_000)
+  if (del.ok) {
+    return { ok: true, notes: ['wg-quick down завершился ошибкой, интерфейс удалён напрямую (ip link del)'] }
+  }
+  return { ok: false, error: (res.stderr || res.stdout).trim() || 'wg-quick down failed' }
 }
 
 export interface WgStatus {

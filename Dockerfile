@@ -33,10 +33,13 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 
 # WireGuard (wg + wg-quick), iptables, iproute2, tar — для загрузки/распаковки правил
+# openresolv обязателен: wg-quick вызывает resolvconf для строк «DNS =» в конфиге,
+# без него wg-quick up падает с «resolvconf: command not found»
 RUN apt-get update && apt-get install -y --no-install-recommends \
       wireguard-tools \
       iptables \
       iproute2 \
+      openresolv \
       tar \
       gzip \
       ca-certificates \

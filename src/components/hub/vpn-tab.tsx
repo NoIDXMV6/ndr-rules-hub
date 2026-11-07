@@ -70,8 +70,17 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
         )
         return
       }
-      if (r.ok) setMsg({ ok: true, text: (r.detail as string) ?? 'выполнено' })
-      else setMsg({ ok: false, text: (r.error as string) ?? 'ошибка' })
+      if (r.ok) {
+        const notes = (r.notes as string[] | undefined) ?? []
+        setMsg({ ok: true, text: ((r.detail as string) ?? 'выполнено') + (notes.length ? `\n${notes.join('\n')}` : '') })
+        await load()
+        onChange()
+        // после подъёма ждём первый handshake и обновляем статус ещё раз
+        if (action === 'up') setTimeout(() => void load(), 3500)
+        return
+      }
+      const notes = (r.notes as string[] | undefined) ?? []
+      setMsg({ ok: false, text: ((r.error as string) ?? 'ошибка') + (notes.length ? `\n${notes.join('\n')}` : '') })
       await load()
       onChange()
     } catch (e) {
@@ -174,7 +183,11 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
               Проверить синтаксис конфига
             </Button>
           </div>
-          {msg && <p className={`text-sm ${msg.ok ? 'text-emerald-700' : 'text-red-600'}`}>{msg.text}</p>}
+          {msg && (msg.ok ? (
+            <p className="text-sm text-emerald-700 whitespace-pre-wrap">{msg.text}</p>
+          ) : (
+            <pre className="text-xs text-red-700 whitespace-pre-wrap rounded-lg border border-red-300/60 bg-red-50 p-3 max-h-64 overflow-auto font-mono">{msg.text}</pre>
+          ))}
         </CardContent>
       </Card>
 
@@ -184,7 +197,9 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
             <CardTitle className="text-base">Сохранённые профили</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {vpn.profiles.map((p) => (
+            {vpn.profiles.map((p) => {
+              const last = parseLastStatus(p.lastStatusJson)
+              return (
               <div key={p.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-3">
                 <span className="font-mono text-emerald-700">{p.name}</span>
                 <Badge variant="outline" className={p.active ? 'border-emerald-300 text-emerald-700' : 'border-input text-muted-foreground'}>
@@ -195,7 +210,7 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
                   <Button size="sm" variant="outline" className="h-8 border-emerald-300 text-emerald-700" onClick={() => act('up', { id: p.id })} disabled={busy}>
                     <Play className="h-3.5 w-3.5" />
                   </Button>
-                  <Button size="sm" variant="outline" className="h-8 border-red-300 text-red-600" onClick={() => act('down', { name: p.name })} disabled={busy}>
+                  <Button size="sm" variant="outline" className="h-8 border-red-300 text-red-600" onClick={() => act('down', { name: p.name, id: p.id })} disabled={busy}>
                     <ShieldOff className="h-3.5 w-3.5" />
                   </Button>
                   <Button size="sm" variant="outline" className="h-8 border-input text-foreground" onClick={() => { setName(p.name); setConfig(p.config) }}>
@@ -205,8 +220,15 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
+                {last?.ok === false && last.error && (
+                  <pre className="w-full text-xs text-red-700 whitespace-pre-wrap rounded border border-red-300/50 bg-red-50 p-2 font-mono max-h-32 overflow-auto">последняя попытка ({last.action}): {last.error}</pre>
+                )}
+                {last?.ok === true && last.notes && last.notes.length > 0 && (
+                  <p className="w-full text-xs text-amber-700">⚠ {last.notes.join(' · ')}</p>
+                )}
               </div>
-            ))}
+              )
+            })}
           </CardContent>
         </Card>
       )}
@@ -249,6 +271,17 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
       </Card>
     </div>
   )
+}
+
+/** Разобрать lastStatusJson профиля: результат последней операции up/down */
+function parseLastStatus(json?: string | null): { action?: string; ok?: boolean; error?: string | null; notes?: string[] } | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as { action?: string; ok?: boolean; error?: string | null; notes?: string[] }
+    return v
+  } catch {
+    return null
+  }
 }
 
 function Check({ label, ok }: { label: string; ok?: boolean }) {
