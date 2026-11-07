@@ -159,6 +159,28 @@ bunx vitest run        # тесты движка
    lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
    ```
 
+### Если wg-quick падает с «sysctl: permission denied on key»
+
+Для full-tunnel конфигов (`AllowedIPs = 0.0.0.0/0`) wg-quick записывает
+`net.ipv4.conf.all.src_valid_mark=1`, но Docker по умолчанию монтирует `/proc/sys`
+в контейнере read-only. Репозиторный `docker-compose.yml` уже содержит нужную строку:
+
+```yaml
+sysctls:
+  - net.ipv4.ip_forward=1
+  - net.ipv4.conf.all.src_valid_mark=1
+```
+
+Пересоздайте контейнер, чтобы dockerd выставил ключ при создании:
+`git pull && docker compose up -d --force-recreate`.
+Проверка изнутри: `docker compose exec rules-hub sysctl net.ipv4.conf.all.src_valid_mark` — должно быть `= 1`.
+
+Если `docker compose up` сам падает с ошибкой установки этого sysctl (бывает внутри
+непривилегированного LXC) — выставьте ключ на хосте/LXC (`sysctl -w
+net.ipv4.conf.all.src_valid_mark=1`) и добавьте в `/etc/sysctl.conf`; либо запустите
+LXC в привилегированном режиме. Альтернатива без sysctl: ограничьте `AllowedIPs`
+подсетями snort.org — тогда wg-quick этот ключ не трогает.
+
 ## API сервиса
 
 | Метод/путь | Описание |

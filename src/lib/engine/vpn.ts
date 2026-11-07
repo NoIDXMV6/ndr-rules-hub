@@ -57,12 +57,13 @@ export interface WgTools {
   tunDevice: boolean
   netAdmin: boolean
   sysctl: boolean
+  srcValidMark: boolean
   notes: string[]
 }
 
 /** Проверка доступности инструментов WireGuard в системе/контейнере */
 export async function checkWgTools(): Promise<WgTools> {
-  const t: WgTools = { wgQuick: false, wg: false, tunDevice: false, netAdmin: false, sysctl: false, notes: [] }
+  const t: WgTools = { wgQuick: false, wg: false, tunDevice: false, netAdmin: false, sysctl: false, srcValidMark: false, notes: [] }
   const which = async (cmd: string) => {
     try {
       await execFileP('which', [cmd])
@@ -84,6 +85,19 @@ export async function checkWgTools(): Promise<WgTools> {
   }
   if (!t.wg) t.notes.push('Утилита wg не установлена (в контейнере: apt install wireguard-tools)')
   if (!t.sysctl) t.notes.push('Нет sysctl (пакет procps) — full-tunnel конфиги (AllowedIPs 0.0.0.0/0) не поднимутся: wg-quick упадёт с «sysctl: command not found»')
+  // /proc/sys/net/ipv4/conf/all/src_valid_mark должна быть доступна на запись:
+  // wg-quick пишет её для full-tunnel конфигов, а Docker монтирует /proc/sys ro —
+  // лечится строкой в sysctls docker-compose.yml. Linux access(W_OK) вернёт
+  // ошибку и на ro-маунте (EROFS), и при нехватке прав (EACCES) — обе ситуации ловим
+  try {
+    accessSync('/proc/sys/net/ipv4/conf/all/src_valid_mark', fsConstants.W_OK)
+    t.srcValidMark = true
+  } catch {
+    t.srcValidMark = false
+  }
+  if (!t.srcValidMark) {
+    t.notes.push('Нет прав на запись net.ipv4.conf.all.src_valid_mark — full-tunnel (AllowedIPs 0.0.0.0/0) не поднимется. Добавьте «net.ipv4.conf.all.src_valid_mark=1» в sysctls docker-compose.yml и пересоздайте контейнер (docker compose up -d --force-recreate)')
+  }
   if (!t.tunDevice) t.notes.push('Нет /dev/net/tun — WireGuard-туннели недоступны (на загрузку правил не влияет). Нужно: device /dev/net/tun + cap NET_ADMIN — см. README, раздел «Нет /dev/net/tun»')
   // проверка прав: ip link add требует NET_ADMIN; пробный интерфейс сразу удаляем
   const delProbe = () => execFileP('ip', ['link', 'del', 'wg-hub-probe']).catch(() => undefined)
@@ -168,6 +182,11 @@ export async function wgUp(name: string, config: string): Promise<{ ok: boolean;
       if (missing) {
         const pkg = missing === 'sysctl' ? 'procps' : missing === 'resolvconf' ? 'openresolv' : '—'
         notes.push(`в контейнере нет утилиты «${missing}» (пакет ${pkg}) — установите её в образ и пересоберите: docker compose up -d --build`)
+      }
+      // «permission denied on key» — /proc/sys в контейнере read-only:
+      // нужен sysctl в docker-compose.yml, бинарник тут не поможет
+      if (/permission denied on key/i.test(res.stderr + res.stdout)) {
+        notes.push('Docker не даёт писать sysctl изнутри контейнера — добавьте «net.ipv4.conf.all.src_valid_mark=1» в sysctls docker-compose.yml и пересоздайте контейнер (docker compose up -d --force-recreate)')
       }
       return { ok: false, error: trace || 'wg-quick up завершился с ошибкой (подробности в логах контейнера)', notes }
     }
