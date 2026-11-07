@@ -31,6 +31,50 @@ SRC_RE = re.compile(r"^# \[(.+)\]$")
 SID_RE = re.compile(r"\bsid\s*:\s*(\d+)\s*;")
 CT_RE = re.compile(r"\bclasstype\s*:\s*([a-zA-Z0-9_-]+)\s*;")
 
+# ── Очистка от Snort-only ключевых слов ────────────────────────────────────
+# replace:"..." — IPS-замена контента (в IDS-режиме смысла не имеет), rawbytes —
+# no-op модификатор. Оба НЕ входят в синтаксис Suricata и ломали импорт в
+# Clear NDR (файл Talos Snort 2.9: 26 опций replace + 26 rawbytes).
+# Удаление не меняет семантику обнаружения. Разбор опций — с учётом кавычек.
+SNORT_ONLY_KW = ("replace", "rawbytes")
+_OPT_NAME_RE = re.compile(r"^\s*([a-zA-Z_0-9]+)\s*[:=;]?")
+# модификатор rawbytes внутри значений isdataat (snort-наследие):
+# isdataat:!0,relative,rawbytes → isdataat:!0,relative (в корпусе 1 случай,
+# "isdataat:" внутри content-строк не встречается — регулярка безопасна)
+ISDATAAT_RB_RE = re.compile(r"(isdataat\s*:[^;]*?),\s*rawbytes\b")
+
+def strip_snort_only(line):
+    """Удаляет опции replace/rawbytes из правила. Возвращает (line, удалено)."""
+    i = line.find("(")
+    if i < 0:
+        return line, 0
+    body_start = i + 1
+    opts, in_q, esc, start, k = [], False, False, body_start, body_start
+    while k < len(line):
+        ch = line[k]
+        if esc:
+            esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch == '"':
+            in_q = not in_q
+        elif ch == ";" and not in_q:
+            opts.append((start, k + 1)); start = k + 1
+        elif ch == ")" and not in_q:
+            break
+        k += 1
+    kept_opts, n = [], 0
+    for (s, e) in opts:
+        seg = line[s:e]
+        m = _OPT_NAME_RE.match(seg)
+        if m and m.group(1).lower() in SNORT_ONLY_KW:
+            n += 1
+            continue
+        kept_opts.append(seg)
+    if not n:
+        return line, 0
+    return line[:body_start] + "".join(kept_opts) + line[k:], n
+
 def balanced(line):
     in_q = False; p = 0; i = 0
     while i < len(line):
@@ -45,15 +89,54 @@ def balanced(line):
     return p == 0 and not in_q
 
 rules, cur_src = [], "unknown"
+STRIP_CNT = {"replace": 0, "rawbytes": 0}
+STRIP_RULES = 0
+
+def count_snort_only(body):
+    """Число snort-only опций (replace/rawbytes) в теле правила, вне кавычек."""
+    cnt = {kw: 0 for kw in SNORT_ONLY_KW}
+    in_q = esc = False
+    buf = ""
+    for ch in body:
+        if esc:
+            esc = False; buf += ch
+        elif ch == "\\":
+            esc = True; buf += ch
+        elif ch == '"':
+            in_q = not in_q; buf += ch
+        elif ch == ";" and not in_q:
+            m = _OPT_NAME_RE.match(buf)
+            if m and m.group(1).lower() in cnt:
+                cnt[m.group(1).lower()] += 1
+            buf = ""
+        else:
+            buf += ch
+    return cnt
+
 for line in open(SRC, encoding="utf-8"):
     line = line.rstrip("\n")
     m = SRC_RE.match(line)
     if m:
         cur_src = m.group(1); continue
     if RULE_RE.match(line):
+        cnt = count_snort_only(line[line.find("("):])
+        line2, n_id = ISDATAAT_RB_RE.subn(r"\1", line)
+        if n_id:
+            STRIP_CNT["rawbytes"] += n_id
+        if any(cnt.values()):
+            line2, _ = strip_snort_only(line2)
+            # после очистки snort-only опций остаться не должно (идемпотентность)
+            assert not any(count_snort_only(line2[line2.find("("):]).values()), \
+                "strip_snort_only не дочистил опцию: " + line2[:120]
+            for _kw, _n in cnt.items():
+                STRIP_CNT[_kw] += _n
+        if line2 != line:
+            line = line2
+            STRIP_RULES += 1
         sid = int(SID_RE.search(line).group(1)) if SID_RE.search(line) else None
         ct = CT_RE.search(line).group(1) if CT_RE.search(line) else None
         rules.append({"source": cur_src, "raw": line, "sid": sid, "classtype": ct})
+sys.stderr.write(f"Очистка Snort-only опций: replace={STRIP_CNT['replace']}, rawbytes={STRIP_CNT['rawbytes']} (правил затронуто: {STRIP_RULES})\n")
 
 assert len(rules) > 100000, f"подозрительно мало правил: {len(rules)}"
 sys.stderr.write(f"Разобрано: {len(rules)} правил из {len({r['source'] for r in rules})} источников\n")
@@ -212,6 +295,10 @@ readme = f"""# Итоговые наборы правил для Clear NDR — �
 - Дедупликация по SID (приоритет более высокого rev) и по содержимому.
 - Правила Snort 2/3 конвертированы в Suricata 7 конвертером s2x (sticky-буферы → dot-формы,
   inline-модификаторы content → отдельные ключевые слова, bufferlen → bsize и т.д.).
+- Удалены Snort-only ключевые слова `replace` ({STRIP_CNT['replace']} опций) и `rawbytes`
+  ({STRIP_CNT['rawbytes']} вхождений: отдельные опции и модификатор внутри isdataat) в {STRIP_RULES} правилах
+  Talos Snort 2.9 — их нет в синтаксисе Suricata, из-за них падал импорт в Clear NDR. Семантика
+  обнаружения не изменилась (replace — IPS-замена контента, в IDS-режиме не используется; rawbytes — no-op).
 - Цикл валидации: `suricata -T` → разбор лога → исправление/исключение битых правил → повтор до 0 ошибок.
 - Исключено валидатором: 234 правила ({100*234/len(rules):.2f}%) — несжимаемые несовместимости
   (byte_math, sip_*-буферы, dce_*, ber_*, конфликт направлений, битые заголовки Quadrant).
