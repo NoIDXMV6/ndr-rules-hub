@@ -6,6 +6,7 @@ import { SEED_SOURCES, DEFAULT_SETTINGS } from './seed'
 import { fetchSource, FetchSourceCfg, CACHE_DIR, EXPORTS_DIR, DATA_DIR } from './fetcher'
 import { mergeSources, renderFinalFile, hashRule, SourceRules, DedupPolicy } from './build'
 import { saveExportFile, pushToClearndr, ClearndrExportCfg } from './exporter'
+import { SidMapper, remapToClearndrBlock } from './sidmap'
 import { promises as fs } from 'fs'
 import path from 'path'
 import cron from 'node-cron'
@@ -206,10 +207,20 @@ export async function buildFinal(origin = 'manual'): Promise<{
     contentDedup: settings.dedupContent === 'true',
     dropIncompatible: settings.dropIncompatible === 'true',
     dropDisabledMsg: settings.dropDisabledMsg === 'true',
-    privateSidStart: parseInt(settings.privateSidStart || '1000000', 10),
+    privateSidStart: parseInt(settings.privateSidStart || '1000000000', 10),
   }
 
   const { rules, stats } = mergeSources(srcRules, policy)
+
+  // Политика SID: всё, что вне свободного clearndr-блока 1e9..1.1e9, переносится
+  // детерминированно (карта общая с python-конвейером, data/sidmap.json).
+  // Гейт: при дубликатах или выходе за блок сборка падает — плохой файл не пишется.
+  const mapper = new SidMapper()
+  await mapper.load()
+  const remap = remapToClearndrBlock(rules, mapper)
+  await mapper.save()
+  stats.renumbered = remap.renumbered
+
   const content = renderFinalFile(rules, {
     sources: sources.map((s) => s.name),
     stats,
@@ -230,7 +241,7 @@ export async function buildFinal(origin = 'manual'): Promise<{
       source: origin,
     },
   })
-  await log('success', 'build', `Собран итоговый набор: ${rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ)`)
+  await log('success', 'build', `Собран итоговый набор: ${rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid})`)
   return { ok: true, buildId: build.id, total: rules.length, fileName }
 }
 

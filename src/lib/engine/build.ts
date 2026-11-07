@@ -50,7 +50,8 @@ const DEFAULTS: DedupPolicy = {
   dropIncompatible: false,
   dropDisabledMsg: true,
   contentDedup: true,
-  privateSidStart: 1000000,
+  // свободный clearndr-блок (Snort резервирует <1M, ET — 1..2.2M, Suricata — 2.2..2.3M)
+  privateSidStart: 1_000_000_000,
 }
 
 export function hashRule(raw: string): string {
