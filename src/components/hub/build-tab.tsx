@@ -62,7 +62,7 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
 
   return (
     <div className="space-y-4">
-      <Card className="bg-zinc-900 border-zinc-800">
+      <Card className="bg-card border-border">
         <CardHeader>
           <div className="flex flex-wrap items-center gap-3">
             <div className="mr-auto">
@@ -71,26 +71,26 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
                 Объединение включённых источников → дедупликация → устранение конфликтов SID → финальный файл
               </CardDescription>
             </div>
-            <Button onClick={() => doBuild(false)} disabled={busy} className="bg-emerald-600 hover:bg-emerald-500 text-white">
+            <Button onClick={() => doBuild(false)} disabled={busy} className="bg-primary hover:bg-primary/90 text-primary-foreground">
               <Hammer className={`h-4 w-4 mr-1.5 ${busy ? 'animate-pulse' : ''}`} /> Собрать
             </Button>
-            <Button onClick={doExport} disabled={busy || !b} variant="outline" className="border-zinc-700 text-zinc-200">
+            <Button onClick={doExport} disabled={busy || !b} variant="outline" className="border-input text-foreground">
               <Send className="h-4 w-4 mr-1.5" /> Выгрузить в Clear NDR ({mode === 'file' ? 'файл' : mode === 'http' ? 'HTTP' : mode === 'local-path' ? 'каталог' : mode})
             </Button>
           </div>
         </CardHeader>
         <CardContent>
-          {msg && <p className="text-sm mb-3 text-emerald-400">{msg}</p>}
+          {msg && <p className="text-sm mb-3 text-emerald-700">{msg}</p>}
           {b ? (
             <div className="space-y-3">
               <div className="flex flex-wrap gap-2 text-sm">
-                <Badge variant="outline" className="border-zinc-700 text-zinc-300">{fmtTime(b.createdAt)}</Badge>
-                <Badge variant="outline" className="border-zinc-700 text-zinc-300">{b.totalRules.toLocaleString('ru-RU')} правил</Badge>
-                <Badge variant="outline" className="border-zinc-700 text-zinc-300">{fmtSize(b.sizeBytes)}</Badge>
-                <Badge variant="outline" className="border-zinc-700 text-zinc-300">{b.fileName}</Badge>
-                <Badge variant="outline" className={b.source === 'cron' ? 'border-sky-700 text-sky-400' : 'border-zinc-700 text-zinc-400'}>{b.source === 'cron' ? 'по расписанию' : 'вручную'}</Badge>
+                <Badge variant="outline" className="border-input text-foreground">{fmtTime(b.createdAt)}</Badge>
+                <Badge variant="outline" className="border-input text-foreground">{b.totalRules.toLocaleString('ru-RU')} правил</Badge>
+                <Badge variant="outline" className="border-input text-foreground">{fmtSize(b.sizeBytes)}</Badge>
+                <Badge variant="outline" className="border-input text-foreground">{b.fileName}</Badge>
+                <Badge variant="outline" className={b.source === 'cron' ? 'border-sky-700 text-sky-700' : 'border-input text-muted-foreground'}>{b.source === 'cron' ? 'по расписанию' : 'вручную'}</Badge>
                 <a href="/api/export" download className="ml-auto">
-                  <Button size="sm" className="bg-emerald-600 hover:bg-emerald-500 text-white">
+                  <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">
                     <Download className="h-4 w-4 mr-1.5" /> Скачать
                   </Button>
                 </a>
@@ -102,10 +102,10 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
                 <MiniStat label="Несовместимых убрано" value={b.stats.incompatibleDropped?.toLocaleString('ru-RU') ?? '—'} />
                 <MiniStat label="Итог (уникальных SID)" value={b.stats.uniqueSids?.toLocaleString('ru-RU') ?? '—'} />
               </div>
-              <div className="rounded-lg border border-zinc-800 overflow-x-auto max-h-80 overflow-y-auto">
+              <div className="rounded-lg border border-border overflow-x-auto max-h-80 overflow-y-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-zinc-950/60 sticky top-0">
-                    <tr className="text-zinc-400 text-left">
+                  <thead className="bg-muted sticky top-0">
+                    <tr className="text-muted-foreground text-left">
                       <th className="px-3 py-2 font-medium">Источник</th>
                       <th className="px-3 py-2 font-medium">Загружено</th>
                       <th className="px-3 py-2 font-medium">В сборке</th>
@@ -116,13 +116,13 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
                   </thead>
                   <tbody>
                     {Object.entries(b.stats.perSource ?? {}).map(([name, st]) => (
-                      <tr key={name} className="border-t border-zinc-800/70 text-zinc-300">
+                      <tr key={name} className="border-t border-border/60 text-foreground">
                         <td className="px-3 py-1.5 max-w-72 truncate">{name}</td>
                         <td className="px-3 py-1.5 tabular-nums">{st.total.toLocaleString('ru-RU')}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-emerald-400">{st.kept.toLocaleString('ru-RU')}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-amber-400">{st.droppedSid.toLocaleString('ru-RU')}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-amber-400">{st.droppedContent.toLocaleString('ru-RU')}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-red-400">{st.droppedCompat.toLocaleString('ru-RU')}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-emerald-700">{st.kept.toLocaleString('ru-RU')}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedSid.toLocaleString('ru-RU')}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedContent.toLocaleString('ru-RU')}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-red-600">{st.droppedCompat.toLocaleString('ru-RU')}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -130,31 +130,31 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
               </div>
             </div>
           ) : (
-            <p className="text-sm text-zinc-500">
+            <p className="text-sm text-muted-foreground">
               Сборка ещё не выполнялась. Включите источники и нажмите «Собрать».
             </p>
           )}
         </CardContent>
       </Card>
 
-      <Card className="bg-zinc-900 border-zinc-800">
+      <Card className="bg-card border-border">
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
-            <FileArchive className="h-4 w-4 text-emerald-400" /> Файлы в каталоге экспорта (data/exports)
+            <FileArchive className="h-4 w-4 text-primary" /> Файлы в каталоге экспорта (data/exports)
           </CardTitle>
           <CardDescription>Готовые к импорту файлы правил (в Docker — смонтируйте volume и укажите путь в Clear NDR)</CardDescription>
         </CardHeader>
         <CardContent>
           {files.length === 0 ? (
-            <p className="text-sm text-zinc-500">Пока нет файлов.</p>
+            <p className="text-sm text-muted-foreground">Пока нет файлов.</p>
           ) : (
             <ul className="space-y-1 text-sm">
               {files.map((f) => (
-                <li key={f.name} className="flex flex-wrap gap-x-4 text-zinc-300 border-b border-zinc-800/60 py-1">
-                  <code className="text-emerald-400">{f.name}</code>
-                  <span className="text-zinc-500">{fmtSize(f.size)}</span>
-                  <span className="text-zinc-500">{fmtTime(f.mtime)}</span>
-                  <a href={`/api/export`} download className="ml-auto text-emerald-400 hover:underline text-xs">последний файл</a>
+                <li key={f.name} className="flex flex-wrap gap-x-4 text-foreground border-b border-border/60 py-1">
+                  <code className="text-emerald-700">{f.name}</code>
+                  <span className="text-muted-foreground">{fmtSize(f.size)}</span>
+                  <span className="text-muted-foreground">{fmtTime(f.mtime)}</span>
+                  <a href={`/api/export`} download className="ml-auto text-emerald-700 hover:underline text-xs">последний файл</a>
                 </li>
               ))}
             </ul>
@@ -167,9 +167,9 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
 
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-      <p className="text-xs text-zinc-500">{label}</p>
-      <p className="text-lg font-semibold tabular-nums text-zinc-100">{value}</p>
+    <div className="rounded-lg border border-border bg-card/50 p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-lg font-semibold tabular-nums text-foreground">{value}</p>
     </div>
   )
 }

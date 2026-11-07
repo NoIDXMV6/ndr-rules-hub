@@ -26,33 +26,33 @@ export function LogsTab() {
   }, [load])
 
   return (
-    <Card className="bg-zinc-900 border-zinc-800">
+    <Card className="bg-card border-border">
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           Журнал событий
-          <Button size="sm" variant="outline" className="ml-auto border-zinc-700 text-zinc-300" onClick={load} disabled={loading}>
+          <Button size="sm" variant="outline" className="ml-auto border-input text-foreground" onClick={load} disabled={loading}>
             <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} /> Обновить
           </Button>
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="rounded-lg border border-zinc-800 divide-y divide-zinc-800/70 max-h-[65vh] overflow-y-auto">
-          {logs.length === 0 && <p className="text-sm text-zinc-500 p-4">Событий пока нет.</p>}
+        <div className="rounded-lg border border-border divide-y divide-border max-h-[65vh] overflow-y-auto">
+          {logs.length === 0 && <p className="text-sm text-muted-foreground p-4">Событий пока нет.</p>}
           {logs.map((l) => (
             <div key={l.id} className="flex items-start gap-2.5 px-3 py-2 text-sm">
-              <span className="text-zinc-500 tabular-nums text-xs mt-0.5 shrink-0 w-28">{new Date(l.ts).toLocaleString('ru-RU')}</span>
+              <span className="text-muted-foreground tabular-nums text-xs mt-0.5 shrink-0 w-28">{new Date(l.ts).toLocaleString('ru-RU')}</span>
               <Badge
                 variant="outline"
                 className={
-                  l.level === 'success' ? 'border-emerald-700 text-emerald-400 shrink-0' :
-                  l.level === 'error' ? 'border-red-700 text-red-400 shrink-0' :
-                  l.level === 'warn' ? 'border-amber-700 text-amber-400 shrink-0' :
-                  'border-zinc-700 text-zinc-400 shrink-0'
+                  l.level === 'success' ? 'border-emerald-300 text-emerald-700 shrink-0' :
+                  l.level === 'error' ? 'border-red-300 text-red-600 shrink-0' :
+                  l.level === 'warn' ? 'border-amber-300 text-amber-700 shrink-0' :
+                  'border-input text-muted-foreground shrink-0'
                 }
               >
                 {l.scope}
               </Badge>
-              <span className="text-zinc-300 break-all">{l.message}</span>
+              <span className="text-foreground break-all">{l.message}</span>
             </div>
           ))}
         </div>

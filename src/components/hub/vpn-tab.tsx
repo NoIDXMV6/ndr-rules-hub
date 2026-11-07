@@ -85,11 +85,11 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
 
   return (
     <div className="space-y-4">
-      <Card className="bg-zinc-900 border-zinc-800">
+      <Card className="bg-card border-border">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <Wrench className="h-4 w-4 text-emerald-400" /> Проверка окружения WireGuard
-            <Button size="sm" variant="outline" className="ml-auto border-zinc-700 text-zinc-300" onClick={() => void load()}>
+            <Wrench className="h-4 w-4 text-primary" /> Проверка окружения WireGuard
+            <Button size="sm" variant="outline" className="ml-auto border-input text-foreground" onClick={() => void load()}>
               Проверить снова
             </Button>
           </CardTitle>
@@ -107,41 +107,41 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
           {tools && tools.notes.length > 0 && (
             <ul className="mt-3 space-y-1">
               {tools.notes.map((n, i) => (
-                <li key={i} className="text-xs text-amber-400">⚠ {n}</li>
+                <li key={i} className="text-xs text-amber-700">⚠ {n}</li>
               ))}
             </ul>
           )}
-          <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400 space-y-1">
+          <div className="mt-3 rounded-lg border border-border bg-muted p-3 text-xs text-muted-foreground space-y-1">
             <p>docker-compose уже содержит необходимые параметры:</p>
-            <code className="block text-emerald-400">cap_add: [NET_ADMIN] · devices: [/dev/net/tun] · sysctls: net.ipv4.ip_forward=1</code>
+            <code className="block text-emerald-700">cap_add: [NET_ADMIN] · devices: [/dev/net/tun] · sysctls: net.ipv4.ip_forward=1</code>
             <p>На хосте достаточно установить wireguard-tools в контейнерном образе — он уже включён.</p>
           </div>
         </CardContent>
       </Card>
 
-      <Card className="bg-zinc-900 border-zinc-800">
+      <Card className="bg-card border-border">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <Wifi className="h-4 w-4 text-emerald-400" /> Конфигурация туннеля (wg-quick)
+            <Wifi className="h-4 w-4 text-primary" /> Конфигурация туннеля (wg-quick)
           </CardTitle>
           <CardDescription>Вставьте конфиг .conf от вашего WireGuard-сервера. Хранится локально в БД сервиса.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap gap-3 items-end">
             <div className="w-48">
-              <Label className="text-zinc-300">Имя интерфейса/профиля</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value.replace(/[^a-zA-Z0-9-]/g, ''))} className="bg-zinc-950 border-zinc-800" placeholder="wg0" />
+              <Label className="text-foreground">Имя интерфейса/профиля</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value.replace(/[^a-zA-Z0-9-]/g, ''))} className="bg-card border-input" placeholder="wg0" />
             </div>
-            <Button variant="outline" className="border-zinc-700 text-zinc-300" onClick={() => setConfig(SAMPLE_CONFIG)}>
+            <Button variant="outline" className="border-input text-foreground" onClick={() => setConfig(SAMPLE_CONFIG)}>
               Пример конфига
             </Button>
-            <Button className="bg-emerald-600 hover:bg-emerald-500 text-white" onClick={save} disabled={busy || !config || !name}>
+            <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" onClick={save} disabled={busy || !config || !name}>
               <Save className="h-4 w-4 mr-1.5" /> Сохранить
             </Button>
-            <Button variant="outline" className="border-emerald-700 text-emerald-400" onClick={() => act('up', { config, name })} disabled={busy || !config}>
+            <Button variant="outline" className="border-emerald-300 text-emerald-700" onClick={() => act('up', { config, name })} disabled={busy || !config}>
               <Play className="h-4 w-4 mr-1.5" /> Поднять туннель
             </Button>
-            <Button variant="outline" className="border-red-900 text-red-400" onClick={() => act('down', { name })} disabled={busy}>
+            <Button variant="outline" className="border-red-300 text-red-600" onClick={() => act('down', { name })} disabled={busy}>
               <Power className="h-4 w-4 mr-1.5" /> Опустить
             </Button>
           </div>
@@ -149,42 +149,42 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
             value={config}
             onChange={(e) => setConfig(e.target.value)}
             rows={10}
-            className="bg-zinc-950 border-zinc-800 font-mono text-xs"
+            className="bg-card border-input font-mono text-xs"
             placeholder={SAMPLE_CONFIG}
           />
           <div className="flex gap-2">
-            <Button variant="outline" className="border-zinc-700 text-zinc-300" onClick={() => act('test-config', { config })} disabled={!config}>
+            <Button variant="outline" className="border-input text-foreground" onClick={() => act('test-config', { config })} disabled={!config}>
               Проверить синтаксис конфига
             </Button>
           </div>
-          {msg && <p className={`text-sm ${msg.ok ? 'text-emerald-400' : 'text-red-400'}`}>{msg.text}</p>}
+          {msg && <p className={`text-sm ${msg.ok ? 'text-emerald-700' : 'text-red-600'}`}>{msg.text}</p>}
         </CardContent>
       </Card>
 
       {vpn?.profiles && vpn.profiles.length > 0 && (
-        <Card className="bg-zinc-900 border-zinc-800">
+        <Card className="bg-card border-border">
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Сохранённые профили</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {vpn.profiles.map((p) => (
-              <div key={p.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-800 p-3">
-                <span className="font-mono text-emerald-400">{p.name}</span>
-                <Badge variant="outline" className={p.active ? 'border-emerald-700 text-emerald-400' : 'border-zinc-700 text-zinc-500'}>
+              <div key={p.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-3">
+                <span className="font-mono text-emerald-700">{p.name}</span>
+                <Badge variant="outline" className={p.active ? 'border-emerald-300 text-emerald-700' : 'border-input text-muted-foreground'}>
                   {p.active ? 'активен' : 'неактивен'}
                 </Badge>
-                <span className="text-xs text-zinc-500">проверен: {fmtTime(p.lastCheckAt)}</span>
+                <span className="text-xs text-muted-foreground">проверен: {fmtTime(p.lastCheckAt)}</span>
                 <div className="ml-auto flex gap-1">
-                  <Button size="sm" variant="outline" className="h-8 border-emerald-700 text-emerald-400" onClick={() => act('up', { id: p.id })} disabled={busy}>
+                  <Button size="sm" variant="outline" className="h-8 border-emerald-300 text-emerald-700" onClick={() => act('up', { id: p.id })} disabled={busy}>
                     <Play className="h-3.5 w-3.5" />
                   </Button>
-                  <Button size="sm" variant="outline" className="h-8 border-red-900 text-red-400" onClick={() => act('down', { name: p.name })} disabled={busy}>
+                  <Button size="sm" variant="outline" className="h-8 border-red-300 text-red-600" onClick={() => act('down', { name: p.name })} disabled={busy}>
                     <ShieldOff className="h-3.5 w-3.5" />
                   </Button>
-                  <Button size="sm" variant="outline" className="h-8 border-zinc-700 text-zinc-300" onClick={() => { setName(p.name); setConfig(p.config) }}>
+                  <Button size="sm" variant="outline" className="h-8 border-input text-foreground" onClick={() => { setName(p.name); setConfig(p.config) }}>
                     открыть
                   </Button>
-                  <Button size="sm" variant="outline" className="h-8 border-red-900 text-red-400" onClick={async () => { await api.vpnDelete(p.id); await load() }}>
+                  <Button size="sm" variant="outline" className="h-8 border-red-300 text-red-600" onClick={async () => { await api.vpnDelete(p.id); await load() }}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -194,34 +194,34 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
         </Card>
       )}
 
-      <Card className="bg-zinc-900 border-zinc-800">
+      <Card className="bg-card border-border">
         <CardHeader className="pb-2">
           <CardTitle className="text-base">Активные интерфейсы (wg show)</CardTitle>
           <CardDescription>Статус туннелей, handshake, трафик</CardDescription>
         </CardHeader>
         <CardContent>
           {!vpn?.available && (
-            <p className="text-sm text-zinc-500">
+            <p className="text-sm text-muted-foreground">
               Статус недоступен: {vpn?.error ?? 'wg не установлен в системе'}.
               В контейнере из docker-compose утилиты установлены — проверка заработает после запуска контейнера.
             </p>
           )}
           {vpn?.available && vpn.interfaces.length === 0 && (
-            <p className="text-sm text-zinc-500">Активных туннелей нет. Поднимите профиль выше.</p>
+            <p className="text-sm text-muted-foreground">Активных туннелей нет. Поднимите профиль выше.</p>
           )}
           {vpn?.interfaces.map((i) => (
-            <div key={i.name} className="mb-3 rounded-lg border border-zinc-800 p-3">
+            <div key={i.name} className="mb-3 rounded-lg border border-border p-3">
               <div className="flex flex-wrap gap-3 text-sm mb-2">
-                <span className="font-mono text-emerald-400">{i.name}</span>
-                <span className="text-zinc-400">порт: {i.listeningPort ?? '—'}</span>
-                <span className="text-zinc-400">public key: <code className="text-xs">{i.publicKey?.slice(0, 20) ?? '—'}…</code></span>
+                <span className="font-mono text-emerald-700">{i.name}</span>
+                <span className="text-muted-foreground">порт: {i.listeningPort ?? '—'}</span>
+                <span className="text-muted-foreground">public key: <code className="text-xs">{i.publicKey?.slice(0, 20) ?? '—'}…</code></span>
               </div>
-              {i.peers.length === 0 && <p className="text-xs text-zinc-500">Пиров нет.</p>}
+              {i.peers.length === 0 && <p className="text-xs text-muted-foreground">Пиров нет.</p>}
               {i.peers.map((p, idx) => (
-                <div key={idx} className="text-xs text-zinc-400 border-t border-zinc-800/60 py-1.5 flex flex-wrap gap-x-4 gap-y-1">
-                  <span className={`inline-block h-2 w-2 rounded-full mt-1 ${p.online ? 'bg-emerald-500' : 'bg-zinc-600'}`} />
-                  <span>endpoint: <code className="text-zinc-300">{p.endpoint ?? '—'}</code></span>
-                  <span>allowed: <code className="text-zinc-300">{p.allowedIps ?? '—'}</code></span>
+                <div key={idx} className="text-xs text-muted-foreground border-t border-border/60 py-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                  <span className={`inline-block h-2 w-2 rounded-full mt-1 ${p.online ? 'bg-emerald-500' : 'bg-zinc-400'}`} />
+                  <span>endpoint: <code className="text-foreground">{p.endpoint ?? '—'}</code></span>
+                  <span>allowed: <code className="text-foreground">{p.allowedIps ?? '—'}</code></span>
                   <span>handshake: {p.latestHandshake ?? '—'}</span>
                   <span>трафик ↓{fmtBytes(p.transferRx)} ↑{fmtBytes(p.transferTx)}</span>
                 </div>
@@ -236,12 +236,12 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
 
 function Check({ label, ok }: { label: string; ok?: boolean }) {
   return (
-    <div className={`rounded-lg border p-3 ${ok ? 'border-emerald-800/60 bg-emerald-950/30' : 'border-red-900/60 bg-red-950/20'}`}>
+    <div className={`rounded-lg border p-3 ${ok ? 'border-emerald-300/60 bg-emerald-50' : 'border-red-300/60 bg-red-50'}`}>
       <div className="flex items-center gap-2">
         <span className={`inline-block h-2.5 w-2.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-red-500'}`} />
-        <span className="text-sm font-medium text-zinc-200">{label}</span>
+        <span className="text-sm font-medium text-foreground">{label}</span>
       </div>
-      <p className={`text-xs mt-1 ${ok ? 'text-emerald-400' : 'text-red-400'}`}>{ok ? 'доступно' : 'недоступно'}</p>
+      <p className={`text-xs mt-1 ${ok ? 'text-emerald-700' : 'text-red-600'}`}>{ok ? 'доступно' : 'недоступно'}</p>
     </div>
   )
 }

@@ -44,28 +44,28 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
   const pages = Math.max(1, Math.ceil(total / perPage))
 
   return (
-    <Card className="bg-zinc-900 border-zinc-800">
+    <Card className="bg-card border-border">
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex flex-wrap items-center gap-2">
           База правил
-          <Badge variant="outline" className="border-zinc-700 text-zinc-400">{total.toLocaleString('ru-RU')} записей</Badge>
+          <Badge variant="outline" className="border-input text-muted-foreground">{total.toLocaleString('ru-RU')} записей</Badge>
           <div className="ml-auto flex flex-wrap gap-2">
             <Input
               placeholder="SID…"
               value={sid}
               onChange={(e) => { setSid(e.target.value.replace(/\D/g, '')); setPage(1) }}
-              className="w-32 bg-zinc-950 border-zinc-800"
+              className="w-32 bg-card border-input"
             />
             <Input
               placeholder="Поиск в msg…"
               value={q}
               onChange={(e) => { setQ(e.target.value); setPage(1) }}
-              className="w-52 bg-zinc-950 border-zinc-800"
+              className="w-52 bg-card border-input"
             />
             <select
               value={sourceId}
               onChange={(e) => { setSourceId(e.target.value); setPage(1) }}
-              className="h-9 rounded-md bg-zinc-950 border border-zinc-800 px-2 text-sm text-zinc-200"
+              className="h-9 rounded-md bg-card border border-border px-2 text-sm text-foreground"
             >
               <option value="">все источники</option>
               {(data?.sources.list ?? []).map((s) => (
@@ -76,45 +76,45 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="rounded-lg border border-zinc-800 overflow-x-auto">
+        <div className="rounded-lg border border-border overflow-x-auto">
           <Table>
             <TableHeader>
-              <TableRow className="border-zinc-800 hover:bg-transparent">
-                <TableHead className="w-20 text-zinc-400">SID</TableHead>
-                <TableHead className="w-14 text-zinc-400">Rev</TableHead>
-                <TableHead className="w-16 text-zinc-400">Действие</TableHead>
-                <TableHead className="text-zinc-400">Сообщение</TableHead>
-                <TableHead className="text-zinc-400">Источник</TableHead>
-                <TableHead className="w-24 text-zinc-400">Suricata</TableHead>
+              <TableRow className="border-border hover:bg-transparent">
+                <TableHead className="w-20 text-muted-foreground">SID</TableHead>
+                <TableHead className="w-14 text-muted-foreground">Rev</TableHead>
+                <TableHead className="w-16 text-muted-foreground">Действие</TableHead>
+                <TableHead className="text-muted-foreground">Сообщение</TableHead>
+                <TableHead className="text-muted-foreground">Источник</TableHead>
+                <TableHead className="w-24 text-muted-foreground">Suricata</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {rules.map((r) => (
                 <Fragment key={r.id}>
-                  <TableRow className="border-zinc-800/70">
-                    <TableCell className="font-mono text-emerald-400 tabular-nums">{r.sid}</TableCell>
-                    <TableCell className="tabular-nums text-zinc-400">{r.rev}</TableCell>
-                    <TableCell><Badge variant="outline" className="border-zinc-700 text-zinc-300">{r.action}</Badge></TableCell>
-                    <TableCell className="text-zinc-200 max-w-md truncate">{r.msg ?? '—'}</TableCell>
-                    <TableCell className="text-xs text-zinc-400 max-w-52 truncate">{r.sourceName}</TableCell>
+                  <TableRow className="border-border/60">
+                    <TableCell className="font-mono text-emerald-700 tabular-nums">{r.sid}</TableCell>
+                    <TableCell className="tabular-nums text-muted-foreground">{r.rev}</TableCell>
+                    <TableCell><Badge variant="outline" className="border-input text-foreground">{r.action}</Badge></TableCell>
+                    <TableCell className="text-foreground max-w-md truncate">{r.msg ?? '—'}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground max-w-52 truncate">{r.sourceName}</TableCell>
                     <TableCell>
                       {r.suricataOk ? (
-                        <Badge className="bg-emerald-950 text-emerald-400 border border-emerald-800">совместимо</Badge>
+                        <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-300">совместимо</Badge>
                       ) : (
-                        <Badge className="bg-amber-950 text-amber-400 border border-amber-800" title={r.compatNotes ?? ''}>внимание</Badge>
+                        <Badge className="bg-amber-50 text-amber-700 border border-amber-800" title={r.compatNotes ?? ''}>внимание</Badge>
                       )}
                     </TableCell>
                     <TableCell>
-                      <Button size="sm" variant="ghost" className="h-7 text-zinc-400" onClick={() => setExpanded(expanded === r.id ? null : r.id)}>
+                      <Button size="sm" variant="ghost" className="h-7 text-muted-foreground" onClick={() => setExpanded(expanded === r.id ? null : r.id)}>
                         {expanded === r.id ? <ChevronDown className="h-4 w-4 rotate-180" /> : <Search className="h-3.5 w-3.5" />}
                       </Button>
                     </TableCell>
                   </TableRow>
                   {expanded === r.id && (
-                    <TableRow className="border-zinc-800/70">
+                    <TableRow className="border-border/60">
                       <TableCell colSpan={7}>
-                        <pre className="text-xs text-zinc-300 bg-zinc-950 rounded p-3 overflow-x-auto whitespace-pre-wrap">{r.raw}</pre>
+                        <pre className="text-xs text-foreground bg-card rounded p-3 overflow-x-auto whitespace-pre-wrap">{r.raw}</pre>
                       </TableCell>
                     </TableRow>
                   )}
@@ -122,7 +122,7 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
               ))}
               {rules.length === 0 && !loading && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-zinc-500 py-10">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-10">
                     Правил не найдено. Обновите источники на вкладке «Источники».
                   </TableCell>
                 </TableRow>
@@ -131,17 +131,17 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
           </Table>
         </div>
         <div className="flex items-center gap-2 justify-end pt-3">
-          <span className="text-xs text-zinc-500 mr-auto">
+          <span className="text-xs text-muted-foreground mr-auto">
             стр. {page} из {pages}
           </span>
-          <Button size="sm" variant="outline" className="border-zinc-700" disabled={page <= 1} onClick={() => setPage(1)}>««</Button>
-          <Button size="sm" variant="outline" className="border-zinc-700" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+          <Button size="sm" variant="outline" className="border-input" disabled={page <= 1} onClick={() => setPage(1)}>««</Button>
+          <Button size="sm" variant="outline" className="border-input" disabled={page <= 1} onClick={() => setPage(page - 1)}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <Button size="sm" variant="outline" className="border-zinc-700" disabled={page >= pages} onClick={() => setPage(page + 1)}>
+          <Button size="sm" variant="outline" className="border-input" disabled={page >= pages} onClick={() => setPage(page + 1)}>
             <ChevronRight className="h-4 w-4" />
           </Button>
-          <Button size="sm" variant="outline" className="border-zinc-700" disabled={page >= pages} onClick={() => setPage(pages)}>»»</Button>
+          <Button size="sm" variant="outline" className="border-input" disabled={page >= pages} onClick={() => setPage(pages)}>»»</Button>
         </div>
       </CardContent>
     </Card>
