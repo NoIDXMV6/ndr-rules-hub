@@ -36,7 +36,7 @@ export interface FetchResult {
   cacheNote?: string
 }
 
-interface ExtraCfg {
+export interface ExtraCfg {
   oinkcode?: string
   authKey?: string
   basicUser?: string
@@ -56,18 +56,33 @@ interface ExtraCfg {
   cacheTtlMinutes?: number
 }
 
-function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): string {
+export function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): string {
   if (cfg.authType === 'oinkcode' && extra.oinkcode) {
-    // https://www.snort.org/reg-rules/<file>.tar.gz → редиректит на /rules/<file>?oinkcode=
-    const sep = url.includes('?') ? '&' : '?'
-    if (url.includes('snort.org/reg-rules/')) return `${url}/${extra.oinkcode}`
-    return `${url}${sep}oinkcode=${extra.oinkcode}`
+    const code = extra.oinkcode.trim()
+    if (code) {
+      // Каноническая форма авторизации snort.org — oinkcode как сегмент пути:
+      //   https://www.snort.org/reg-rules/<файл>.tar.gz/<oinkcode>
+      // Ссылки из личного кабинета (https://snort.org/downloads/registered/<файл>.tar.gz)
+      // oinkcode в query НЕ принимают: отдают HTML-страницу с HTTP 200, которая раньше
+      // сохранялась как «архив» и ломала tar («not in gzip format»).
+      // Поэтому такие URL приводим к канонической reg-rules-форме.
+      const dl = url.match(/^https?:\/\/(?:www\.)?snort\.org\/downloads\/(?:registered|subscribed)\/([^/?#]+)/i)
+      if (dl) return `https://www.snort.org/reg-rules/${dl[1]}/${code}`
+      if (/^https?:\/\/(?:www\.)?snort\.org\/reg-rules\//i.test(url)) return `${url.split('?')[0]}/${code}`
+      const sep = url.includes('?') ? '&' : '?'
+      return `${url}${sep}oinkcode=${code}`
+    }
   }
   if (cfg.authType === 'authkey' && extra.authKey) {
     const sep = url.includes('?') ? '&' : '?'
     return `${url}${sep}auth-key=${extra.authKey}`
   }
   return url
+}
+
+/** У настоящего tar.gz первые два байта — 0x1f 0x8b (magic gzip) */
+export function isGzip(body: Buffer): boolean {
+  return body.length >= 2 && body[0] === 0x1f && body[1] === 0x8b
 }
 
 async function httpGet(url: string, extra: ExtraCfg): Promise<{ status: number; body: Buffer; finalUrl: string }> {
@@ -92,8 +107,16 @@ function cfg_basic(extra: ExtraCfg): Record<string, string> {
 
 /** Вытащить человекочитаемую причину из тела ответа (snort.org отвечает ["Invalid oinkcode"], другие — текстом/HTML) */
 export function bodyReason(body: Buffer): string | null {
-  const t = body.toString('utf8').slice(0, 2000).trim()
+  const head = body.subarray(0, 4000)
+  // бинарное тело (gzip/тар и т.п.) расшифровке не подлежит — не выдаём бинарный мусор за «причину»
+  let ctrl = 0
+  for (const b of head) if (b < 9 || (b > 13 && b < 32)) ctrl++
+  if (head.length > 0 && ctrl / head.length > 0.1) return null
+  const t = head.toString('utf8').trim()
   if (!t) return null
+  // HTML-страница — обычно достаточно заголовка
+  const title = t.match(/<title[^>]*>([\s\S]{3,200}?)<\/title>/i)
+  if (title) return title[1].replace(/\s+/g, ' ').trim()
   const json = t.match(/\[\s*"([^"\\]{3,200})"\s*\]/)
   if (json) return json[1]
   const plain = t.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
@@ -122,6 +145,30 @@ export function snortFetchError(status: number, body: Buffer, extra: ExtraCfg, u
     msg += '. Слишком частые запросы — подождите 15-30 минут'
   }
   return msg
+}
+
+/** Ошибка «HTTP 200, но это не gzip-архив»: snort.org отдал HTML-страницу (лимит/неверная ссылка) и т.п. */
+export function notArchiveError(status: number, body: Buffer, extra: ExtraCfg, url: string, isSnort: boolean): string {
+  const reason = bodyReason(body)
+  const hex = body.subarray(0, 8).toString('hex').match(/../g)?.join(' ') ?? ''
+  let msg = `${isSnort ? 'snort.org' : 'источник'}: HTTP ${status} при загрузке ${url}, но получено не gzip-содержимое`
+  msg += ` (первые байты: ${hex || 'пусто'}${reason ? `; страница: «${reason}»` : ''})`
+  if (isSnort) {
+    msg += '. Как правило это HTML-страница snort.org: лимит загрузок (registered — не чаще раза в 15 минут, '
+      + 'community — ограничение по IP) либо ссылка из личного кабинета /downloads/… вместо канонической '
+      + 'формы /reg-rules/<файл>/<oinkcode> (ссылки /downloads/… приводятся к ней автоматически)'
+    msg += `; ${oinkcodeFingerprint(extra)}`
+  }
+  return msg
+}
+
+/** Короткая причина отказа tar (без «Command failed: tar -xzf /путь/...») */
+function tarErrDetail(e: unknown): string {
+  const err = e as { stderr?: unknown; message?: string }
+  const raw = typeof err.stderr === 'string' ? err.stderr : Buffer.isBuffer(err.stderr) ? err.stderr.toString('utf8') : ''
+  const lines = raw.split('\n').map((s) => s.trim()).filter(Boolean)
+  if (lines.length) return lines.slice(0, 3).join('; ')
+  return (err.message ?? '').replace(/^Command failed:\s*/i, '').split('\n')[0].slice(0, 200)
 }
 
 async function extractTarball(tarPath: string, destDir: string, subPath?: string): Promise<string[]> {
@@ -253,9 +300,27 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
         }
         return { ok: false, error: errText, rules: [], sizeBytes: res.body.length }
       }
+      // HTTP 200, но тело — не gzip (HTML-страница лимита/ошибки, ссылка из личного кабинета и т.п.):
+      // раньше такое сохранялось как .tar.gz и ломало tar («not in gzip format»)
+      if (!isGzip(res.body)) {
+        const errText = notArchiveError(res.status, res.body, extra, cfg.url, isSnort)
+        const cached = await extractCached(tarPath, destDir, extra.subPath)
+        if (cached) {
+          return {
+            ok: true, rules: cached.rules, sizeBytes: cached.sizeBytes, usedCache: true,
+            cacheNote: `${errText} — использован кэш архива от ${st?.mtime.toISOString() ?? '—'}`,
+          }
+        }
+        return { ok: false, error: errText, rules: [], sizeBytes: res.body.length }
+      }
       await fs.mkdir(CACHE_DIR, { recursive: true })
       await fs.writeFile(tarPath, res.body)
-      const found = await extractTarball(tarPath, destDir, extra.subPath)
+      let found: string[]
+      try {
+        found = await extractTarball(tarPath, destDir, extra.subPath)
+      } catch (te) {
+        return { ok: false, error: `архив скачан (${res.body.length} байт), но tar не смог его распаковать: ${tarErrDetail(te)}`, rules: [], sizeBytes: res.body.length }
+      }
       let rules: ParsedRule[] = []
       let size = 0
       for (const f of found) {
