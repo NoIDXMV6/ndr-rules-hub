@@ -2,6 +2,13 @@
 
 // Клиентский слой для Rules Hub API
 
+import type { Lang } from '@/lib/i18n/detect'
+
+const SIZE_UNITS: Record<Lang, { B: string; KB: string; MB: string }> = {
+  ru: { B: 'Б', KB: 'КБ', MB: 'МБ' },
+  en: { B: 'B', KB: 'KB', MB: 'MB' },
+}
+
 export interface SourceItem {
   id: string
   name: string
@@ -138,15 +145,17 @@ export interface RuleRow {
   sourceName: string
 }
 
-export function fmtSize(n: number): string {
-  if (!n) return '0 Б'
-  if (n < 1024) return `${n} Б`
-  if (n < 1048576) return `${(n / 1024).toFixed(1)} КБ`
-  return `${(n / 1048576).toFixed(1)} МБ`
+// lang — язык интерфейса (единицы и формат даты); по умолчанию ru — для совместимости
+export function fmtSize(n: number, lang: Lang = 'ru'): string {
+  const u = SIZE_UNITS[lang]
+  if (!n) return `0 ${u.B}`
+  if (n < 1024) return `${n} ${u.B}`
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} ${u.KB}`
+  return `${(n / 1048576).toFixed(1)} ${u.MB}`
 }
 
-export function fmtTime(ts: string | null): string {
+export function fmtTime(ts: string | null, lang: Lang = 'ru'): string {
   if (!ts) return '—'
   const d = new Date(ts)
-  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }

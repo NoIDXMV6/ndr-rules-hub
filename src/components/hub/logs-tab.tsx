@@ -5,9 +5,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { api, fmtTime } from '@/components/hub/api'
+import { useI18n } from '@/lib/i18n'
 import { RefreshCw } from 'lucide-react'
 
 export function LogsTab() {
+  const { t, lang } = useI18n()
   const [logs, setLogs] = useState<Array<{ id: number; ts: string; level: string; scope: string; message: string }>>([])
   const [loading, setLoading] = useState(false)
 
@@ -29,18 +31,18 @@ export function LogsTab() {
     <Card className="bg-card border-border">
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
-          Журнал событий
+          {t.logs.title}
           <Button size="sm" variant="outline" className="ml-auto border-input text-foreground" onClick={load} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} /> Обновить
+            <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} /> {t.logs.refresh}
           </Button>
         </CardTitle>
       </CardHeader>
       <CardContent>
         <div className="rounded-lg border border-border divide-y divide-border max-h-[65vh] overflow-y-auto">
-          {logs.length === 0 && <p className="text-sm text-muted-foreground p-4">Событий пока нет.</p>}
+          {logs.length === 0 && <p className="text-sm text-muted-foreground p-4">{t.logs.empty}</p>}
           {logs.map((l) => (
             <div key={l.id} className="flex items-start gap-2.5 px-3 py-2 text-sm">
-              <span className="text-muted-foreground tabular-nums text-xs mt-0.5 shrink-0 w-28">{new Date(l.ts).toLocaleString('ru-RU')}</span>
+              <span className="text-muted-foreground tabular-nums text-xs mt-0.5 shrink-0 w-28">{new Date(l.ts).toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US')}</span>
               <Badge
                 variant="outline"
                 className={

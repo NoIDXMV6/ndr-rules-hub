@@ -9,9 +9,11 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { api, Dashboard, RuleRow } from '@/components/hub/api'
+import { useI18n } from '@/lib/i18n'
 import { ChevronDown, ChevronLeft, ChevronRight, Search } from 'lucide-react'
 
 export function RulesTab({ data }: { data: Dashboard | null }) {
+  const { t, tr, loc } = useI18n()
   const [rules, setRules] = useState<RuleRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -47,17 +49,17 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
     <Card className="bg-card border-border">
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex flex-wrap items-center gap-2">
-          База правил
-          <Badge variant="outline" className="border-input text-muted-foreground">{total.toLocaleString('ru-RU')} записей</Badge>
+          {t.rules.title}
+          <Badge variant="outline" className="border-input text-muted-foreground">{tr(t.rules.records, { n: total.toLocaleString(loc) })}</Badge>
           <div className="ml-auto flex flex-wrap gap-2">
             <Input
-              placeholder="SID…"
+              placeholder={t.rules.sidPlaceholder}
               value={sid}
               onChange={(e) => { setSid(e.target.value.replace(/\D/g, '')); setPage(1) }}
               className="w-32 bg-card border-input"
             />
             <Input
-              placeholder="Поиск в msg…"
+              placeholder={t.rules.msgPlaceholder}
               value={q}
               onChange={(e) => { setQ(e.target.value); setPage(1) }}
               className="w-52 bg-card border-input"
@@ -67,7 +69,7 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
               onChange={(e) => { setSourceId(e.target.value); setPage(1) }}
               className="h-9 rounded-md bg-card border border-border px-2 text-sm text-foreground"
             >
-              <option value="">все источники</option>
+              <option value="">{t.rules.allSources}</option>
               {(data?.sources.list ?? []).map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
@@ -80,12 +82,12 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
           <Table>
             <TableHeader>
               <TableRow className="border-border hover:bg-transparent">
-                <TableHead className="w-20 text-muted-foreground">SID</TableHead>
-                <TableHead className="w-14 text-muted-foreground">Rev</TableHead>
-                <TableHead className="w-16 text-muted-foreground">Действие</TableHead>
-                <TableHead className="text-muted-foreground">Сообщение</TableHead>
-                <TableHead className="text-muted-foreground">Источник</TableHead>
-                <TableHead className="w-24 text-muted-foreground">Suricata</TableHead>
+                <TableHead className="w-20 text-muted-foreground">{t.rules.colSid}</TableHead>
+                <TableHead className="w-14 text-muted-foreground">{t.rules.colRev}</TableHead>
+                <TableHead className="w-16 text-muted-foreground">{t.rules.colAction}</TableHead>
+                <TableHead className="text-muted-foreground">{t.rules.colMessage}</TableHead>
+                <TableHead className="text-muted-foreground">{t.rules.colSource}</TableHead>
+                <TableHead className="w-24 text-muted-foreground">{t.rules.colSuricata}</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
@@ -100,9 +102,9 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
                     <TableCell className="text-xs text-muted-foreground max-w-52 truncate">{r.sourceName}</TableCell>
                     <TableCell>
                       {r.suricataOk ? (
-                        <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-300">совместимо</Badge>
+                        <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-300">{t.rules.compatible}</Badge>
                       ) : (
-                        <Badge className="bg-amber-50 text-amber-700 border border-amber-800" title={r.compatNotes ?? ''}>внимание</Badge>
+                        <Badge className="bg-amber-50 text-amber-700 border border-amber-800" title={r.compatNotes ?? ''}>{t.rules.warning}</Badge>
                       )}
                     </TableCell>
                     <TableCell>
@@ -123,7 +125,7 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
               {rules.length === 0 && !loading && (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-10">
-                    Правил не найдено. Обновите источники на вкладке «Источники».
+                    {t.rules.notFound}
                   </TableCell>
                 </TableRow>
               )}
@@ -132,7 +134,7 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
         </div>
         <div className="flex items-center gap-2 justify-end pt-3">
           <span className="text-xs text-muted-foreground mr-auto">
-            стр. {page} из {pages}
+            {tr(t.rules.page, { p: page, n: pages })}
           </span>
           <Button size="sm" variant="outline" className="border-input" disabled={page <= 1} onClick={() => setPage(1)}>««</Button>
           <Button size="sm" variant="outline" className="border-input" disabled={page <= 1} onClick={() => setPage(page - 1)}>

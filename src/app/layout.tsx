@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
+import { I18nProvider } from "@/lib/i18n";
+import { readLangCookie, LANG_STORAGE_KEY } from "@/lib/i18n/detect";
+import { ru } from "@/lib/i18n/ru";
+import { en } from "@/lib/i18n/en";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,24 +18,42 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: "NDR Rules Hub — правила Snort/Suricata для Clear NDR",
-  description:
-    "Управление источниками правил, конвертация Snort 3 / Snort 2.9 → Suricata, сборка, валидация и экспорт наборов в Clear NDR.",
-  icons: { icon: "/logo.svg" },
-};
+// Язык для серверного рендера: cookie ndrh.lang (её выставляет клиентский
+// i18n-слой при определении/переключении языка). Без cookie — русский,
+// основной язык проекта.
+async function langFromCookies() {
+  const store = await cookies();
+  return readLangCookie(store.get(LANG_STORAGE_KEY)?.value) ?? "ru";
+}
 
-export default function RootLayout({
+export async function generateMetadata(): Promise<Metadata> {
+  const dict = (await langFromCookies()) === "en" ? en : ru;
+  return {
+    title: dict.meta.title,
+    description: dict.meta.description,
+    icons: {
+      icon: [
+        { url: "/favicon.ico", sizes: "48x48" },
+        { url: "/logo.svg", type: "image/svg+xml" },
+      ],
+    },
+  };
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const lang = await langFromCookies();
   return (
-    <html lang="en" suppressHydrationWarning>
+    // lang выставляется по cookie — совпадает с интерфейсом пользователя;
+    // клиентский I18nProvider обновляет атрибут при переключении на лету
+    <html lang={lang} suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        {children}
+        <I18nProvider>{children}</I18nProvider>
         <Toaster />
       </body>
     </html>
