@@ -312,6 +312,69 @@ flowchart TD
 - `wg-quick` в образе пропатчен как в upstream (`ac74ed6`): запись `src_valid_mark` только если
   значение ещё не 1 (read-only `/proc/sys`).
 
+### Последовательности up и down
+
+Подъём туннеля — `POST /api/vpn {"action": "up", "id" | "config"}`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Web UI — вкладка VPN
+    participant R as Route — POST /api/vpn
+    participant V as vpn.ts
+    participant X as Контейнер — wg-quick, ip
+    participant D as Prisma — VpnProfile
+
+    U->>R: action up — id профиля или config
+    R->>D: findUnique id — 404, если профиля нет
+    R->>R: parseWgConfig — секции [Interface] и [Peer], PrivateKey
+    R->>V: wgUp iface, config
+    opt full-tunnel — AllowedIPs содержит 0.0.0.0/0
+        V->>X: ip route/addr show — адреса контейнера до подъёма туннеля
+    end
+    V->>X: запись /etc/wireguard/iface.conf — chmod 0600
+    V->>X: wg-quick down iface — зачистка полуподнятого интерфейса
+    V->>X: wg-quick up iface.conf
+    alt resolvconf недоступен, а в конфиге есть DNS=
+        V->>V: stripDnsLines — убрать строки DNS
+        V->>X: wg-quick up iface.conf — повтор
+    end
+    opt интерфейс поднялся и это full-tunnel
+        V->>X: ip rule del + add — from адрес контейнера lookup main prio 100
+        Note over U,X: ответы web UI идут через eth0 — интерфейс не умирает при full-tunnel
+    end
+    V->>X: wg show interfaces — iface в списке?
+    V-->>R: ok, notes, output
+    R->>D: persistProfileStatus — active, lastStatusJson
+    R-->>U: 200 — ok true, detail, notes
+```
+
+Опускание туннеля — `POST /api/vpn {"action": "down"}`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Web UI — вкладка VPN
+    participant R as Route — POST /api/vpn
+    participant V as vpn.ts
+    participant X as Контейнер — wg-quick, ip
+    participant D as Prisma — VpnProfile
+
+    U->>R: action down — name или id
+    R->>V: wgDown name
+    V->>X: wg-quick down iface.conf
+    V->>X: ip -4 и -6 rule show
+    V->>X: ip rule del — from адрес lookup main prio 100 — наши исключения
+    alt wg-quick упал, а интерфейса уже нет
+        V-->>R: ok true — «интерфейс уже был опущен»
+    else wg-quick упал, но интерфейс жив
+        V->>X: ip link del iface
+        V-->>R: ok true с пометкой в notes
+    end
+    R->>D: persistProfileStatus — active false, lastStatusJson
+    R-->>U: 200 — ok true, notes
+```
+
 ## 9. Web UI
 
 Single-page приложение (Next.js App Router, клиентские компоненты) с 9 вкладками:
@@ -375,6 +438,39 @@ index.tsx    I18nProvider (useSyncExternalStore поверх localStorage) + use
 
 Ошибки API возвращаются как `{"error": "…"}` с реальной причиной (не безликий HTTP 500) и
 дублируются в контейнерные логи.
+
+### Жизненный цикл запроса
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Браузер — hub/api.ts
+    participant H as Route handler — app/api
+    participant E as Движок — lib/engine
+    participant D as Prisma ORM
+    participant S as SQLite WAL
+
+    B->>H: fetch — метод и JSON-тело
+    H->>H: разбор тела и параметров — route handler, без middleware
+    alt невалидный запрос — нет id, config или action
+        H-->>B: 400 — JSON с причиной
+    else корректный запрос
+        H->>E: доменная операция — fetchSourceById, buildFinal, wgUp, setSetting
+        E->>D: чтение и запись моделей
+        D->>S: SQL — режим WAL против Socket timeout
+        S-->>D: строки
+        D-->>E: типизированные записи
+        E->>D: LogEntry — log level, scope, message
+        E-->>H: результат или доменная ошибка
+    end
+    alt успех
+        H-->>B: 200 — NextResponse.json
+    else необработанное исключение
+        H->>H: apiError — причина одной строкой
+        H-->>B: 500 — {"error": реальная причина} + строка в docker logs
+    end
+    B->>B: обновление карточек или баннер с ошибкой
+```
 
 ## 12. Поставка и эксплуатация
 

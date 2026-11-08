@@ -315,6 +315,69 @@ are written to `Build.statsJson` and shown in the “Build & Export” tab.
 - `wg-quick` in the image is patched as in upstream (`ac74ed6`): `src_valid_mark` is written
   only if the value is not already 1 (read-only `/proc/sys`).
 
+### Up and down sequences
+
+Tunnel up — `POST /api/vpn {"action": "up", "id" | "config"}`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Web UI — VPN tab
+    participant R as Route — POST /api/vpn
+    participant V as vpn.ts
+    participant X as Container — wg-quick, ip
+    participant D as Prisma — VpnProfile
+
+    U->>R: action up — profile id or config
+    R->>D: findUnique id — 404 if missing
+    R->>R: parseWgConfig — [Interface] and [Peer] sections, PrivateKey
+    R->>V: wgUp iface, config
+    opt full-tunnel — AllowedIPs contains 0.0.0.0/0
+        V->>X: ip route/addr show — container addresses before the tunnel is up
+    end
+    V->>X: write /etc/wireguard/iface.conf — chmod 0600
+    V->>X: wg-quick down iface — clean up a half-raised interface
+    V->>X: wg-quick up iface.conf
+    alt resolvconf unavailable and the config has DNS=
+        V->>V: stripDnsLines — remove DNS lines
+        V->>X: wg-quick up iface.conf — retry
+    end
+    opt interface is up and this is full-tunnel
+        V->>X: ip rule del + add — from container address lookup main prio 100
+        Note over U,X: web UI responses go via eth0 — the interface does not kill the UI on full-tunnel
+    end
+    V->>X: wg show interfaces — is iface listed?
+    V-->>R: ok, notes, output
+    R->>D: persistProfileStatus — active, lastStatusJson
+    R-->>U: 200 — ok true, detail, notes
+```
+
+Tunnel down — `POST /api/vpn {"action": "down"}`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Web UI — VPN tab
+    participant R as Route — POST /api/vpn
+    participant V as vpn.ts
+    participant X as Container — wg-quick, ip
+    participant D as Prisma — VpnProfile
+
+    U->>R: action down — name or id
+    R->>V: wgDown name
+    V->>X: wg-quick down iface.conf
+    V->>X: ip -4 and -6 rule show
+    V->>X: ip rule del — from address lookup main prio 100 — our exclusions
+    alt wg-quick failed and the interface is already gone
+        V-->>R: ok true — "the interface was already down"
+    else wg-quick failed but the interface is alive
+        V->>X: ip link del iface
+        V-->>R: ok true with a note
+    end
+    R->>D: persistProfileStatus — active false, lastStatusJson
+    R-->>U: 200 — ok true, notes
+```
+
 ## 9. Web UI
 
 A single-page application (Next.js App Router, client components) with 9 tabs:
@@ -378,6 +441,39 @@ Mechanics:
 
 API errors are returned as `{"error": "…"}` with the real cause (not an opaque HTTP 500) and
 duplicated into container logs.
+
+### Request lifecycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser — hub/api.ts
+    participant H as Route handler — app/api
+    participant E as Engine — lib/engine
+    participant D as Prisma ORM
+    participant S as SQLite WAL
+
+    B->>H: fetch — method and JSON body
+    H->>H: body and parameter parsing — route handler, no middleware
+    alt invalid request — no id, config or action
+        H-->>B: 400 — JSON with the cause
+    else valid request
+        H->>E: domain operation — fetchSourceById, buildFinal, wgUp, setSetting
+        E->>D: model reads and writes
+        D->>S: SQL — WAL mode against Socket timeout
+        S-->>D: rows
+        D-->>E: typed records
+        E->>D: LogEntry — log level, scope, message
+        E-->>H: result or domain error
+    end
+    alt success
+        H-->>B: 200 — NextResponse.json
+    else unhandled exception
+        H->>H: apiError — the cause on one line
+        H-->>B: 500 — {"error": real cause} + a line in docker logs
+    end
+    B->>B: card refresh or error banner
+```
 
 ## 12. Delivery and operations
 
