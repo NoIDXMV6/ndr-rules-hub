@@ -30,7 +30,7 @@
 | **Дедупликация** | По SID (стратегии: максимальный rev / приоритет источника / перенумерация в приватный диапазон) и по содержимому (канонический SHA-1 без sid/rev/msg/metadata) |
 | **Совместимость** | Автообнаружение ключевых слов Snort 2 (preproc, react, rawbytes…) и Snort 3 (keystore, pkt_trace…), отсутствующих в Suricata, с фильтрацией на этапе сборки |
 | **Сборка** | Итоговый `suricata.rules`-файл с заголовком, статистикой по каждому источнику и SHA-256 |
-| **Экспорт в Clear NDR** | 1) файл для ручного импорта; 2) HTTP POST в эндпоинт Clear NDR; 3) копирование в общий каталог (volume) |
+| **Экспорт в Clear NDR** | 1) файл для ручного импорта; 2) **нативная интеграция через REST API Clear NDR (Scirius)** — upload + `update_push_all` по токену; 3) pull-схема: Clear NDR сам забирает файл с Hub (`/api/export`) и обновляется по своему расписанию; 4) HTTP POST на произвольный эндпоинт; 5) копирование в общий каталог (volume). Пошаговая инструкция — [docs/clearndr-integration.md](docs/clearndr-integration.md) |
 | **WireGuard VPN** | Полноценная настройка: редактор wg-quick конфига, проверка синтаксиса, up/down, статус (`wg show`), проверка окружения (wg, wg-quick, /dev/net/tun, NET_ADMIN). Загрузка правил через туннель |
 | **Расписание** | cron (node-cron): обновление источников → сборка → экспорт. Управление из UI |
 | **Журнал** | Все события загрузок/сборок/экспорта/VPN с уровнями и фильтрами |
@@ -77,7 +77,8 @@ docker compose up -d --build
 
 Первый запуск: вкладка **«Источники»** → включите нужные источники → «Обновить все» →
 вкладка **«Сборка и экспорт»** → «Собрать» → «Скачать итоговый файл» (импорт в Clear NDR
-средствами самого Clear NDR) либо настройте автоматический экспорт в **«Настройках»**.
+средствами самого Clear NDR) либо настройте автоматический экспорт в **«Настройках»**
+(режим «Clear NDR REST» — см. [docs/clearndr-integration.md](docs/clearndr-integration.md): токен, команды, автообновление, mock-тест).
 
 > **Oinkcode достаточен**: официальный способ автоматизации загрузки registered-правил snort.org —
 > `/reg-rules/<файл>/<oinkcode>` (редирект на `/rules/<файл>?oinkcode=…`). Вводить логин/пароль не требуется.
@@ -342,7 +343,13 @@ scripts/
   final_assembly.py         # сборка пакета: merge + цикл suricata -T до 0 ошибок
   keyword_analysis.py       # анализ 153 ключевых слов корпуса
   make_final_files.py       # файлы поставки (full/starter/smoke/by-*)
+  clearndr-check.sh         # проверка REST API Clear NDR (токен, источники, наборы)
+  clearndr-setup-pull.sh    # настройка pull-схемы: источник-URL на Hub + ruleset + расписание
+  clearndr-push.sh          # push-доставка .rules в Clear NDR (cron-совместим)
+  clearndr-mock-server.py   # mock Clear NDR (Scirius REST) для тестирования интеграции
   make-favicon.mjs + make-favicon-ico.py  # favicon.ico из public/logo.svg (sharp + ICO)
+docs/
+  clearndr-integration.md / .en.md  # точная инструкция по доставке и автообновлению правил в Clear NDR
 dist/                       # ВАЛИДИРОВАННЫЙ пакет для Clear NDR (zip + README + SHA256)
 src/app/api/…               # REST API (Next.js route handlers)
 src/components/hub/…        # Web UI (9 вкладок, двуязычные)

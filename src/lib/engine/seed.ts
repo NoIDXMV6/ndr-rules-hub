@@ -300,9 +300,12 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   dropDisabledMsg: 'true',
   privateSidStart: '1000000',
   buildFileName: 'clearndr-import.rules',
-  clearndrExportMode: 'file', // file | http | local-path | disabled
-  clearndrExportUrl: '',
-  clearndrExportToken: '',
+  clearndrExportMode: 'file', // file | clearndr | http | local-path | disabled
+  clearndrExportUrl: '', // clearndr: базовый URL (например https://clearndr.local); http: полный адрес POST-эндпоинта
+  clearndrExportToken: '', // API-токен Scirius (Clear NDR → меню пользователя → Edit Token)
+  clearndrExportAuth: 'token', // token | bearer | none — формат заголовка Authorization
+  clearndrExportSource: 'NDR Rules Hub', // имя локального источника в Clear NDR (режим clearndr)
+  clearndrExportApply: 'true', // вызывать update_push_all после загрузки (режим clearndr)
   clearndrExportLocalPath: '',
   cronEnabled: 'false',
   cronSchedule: '0 4 * * *', // ежедневно в 04:00

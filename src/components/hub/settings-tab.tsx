@@ -122,6 +122,7 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
               <SelectTrigger className="bg-card border-input"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-card border-border">
                 <SelectItem value="file">{t.settings.modeFile}</SelectItem>
+                <SelectItem value="clearndr">{t.settings.modeClearndr}</SelectItem>
                 <SelectItem value="http">{t.settings.modeHttp}</SelectItem>
                 <SelectItem value="local-path">{t.settings.modeLocalPath}</SelectItem>
                 <SelectItem value="disabled">{t.settings.modeDisabled}</SelectItem>
@@ -130,11 +131,29 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
           </div>
           <div>
             <Label className="text-foreground">{t.settings.exportUrl}</Label>
-            <Input value={s.clearndrExportUrl ?? ''} onChange={(e) => set('clearndrExportUrl', e.target.value)} className="bg-card border-input" placeholder="http://clearndr:8080/api/rules/import" />
+            <Input value={s.clearndrExportUrl ?? ''} onChange={(e) => set('clearndrExportUrl', e.target.value)} className="bg-card border-input" placeholder="https://clearndr.local" />
+          </div>
+          <div>
+            <Label className="text-foreground">{t.settings.exportAuth}</Label>
+            <Select value={s.clearndrExportAuth ?? 'token'} onValueChange={(v) => set('clearndrExportAuth', v)}>
+              <SelectTrigger className="bg-card border-input"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                <SelectItem value="token">{t.settings.exportAuthToken}</SelectItem>
+                <SelectItem value="bearer">{t.settings.exportAuthBearer}</SelectItem>
+                <SelectItem value="none">{t.settings.exportAuthNone}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <Label className="text-foreground">{t.settings.exportToken}</Label>
             <Input type="password" value={s.clearndrExportToken ?? ''} onChange={(e) => set('clearndrExportToken', e.target.value)} className="bg-card border-input" />
+          </div>
+          <div>
+            <Label className="text-foreground">{t.settings.exportSource}</Label>
+            <Input value={s.clearndrExportSource ?? ''} onChange={(e) => set('clearndrExportSource', e.target.value)} className="bg-card border-input" placeholder="NDR Rules Hub" />
+          </div>
+          <div className="flex items-end pb-1">
+            <SwitchRow label={t.settings.exportApply} checked={(s.clearndrExportApply ?? 'true') === 'true'} onChange={(v) => set('clearndrExportApply', String(v))} />
           </div>
           <div>
             <Label className="text-foreground">{t.settings.exportLocalPath}</Label>

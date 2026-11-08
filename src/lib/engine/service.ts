@@ -271,6 +271,9 @@ export async function exportLatestBuild(): Promise<{ ok: boolean; error?: string
     mode: settings.clearndrExportMode as ClearndrExportCfg['mode'],
     url: settings.clearndrExportUrl || undefined,
     token: settings.clearndrExportToken || undefined,
+    authType: (settings.clearndrExportAuth as ClearndrExportCfg['authType']) || 'token',
+    sourceName: settings.clearndrExportSource || undefined,
+    apply: settings.clearndrExportApply !== 'false',
     localPath: settings.clearndrExportLocalPath || undefined,
   }
   const res = await pushToClearndr(build.filePath, cfg)

@@ -13,7 +13,7 @@ export async function POST(req: Request) {
     let exportRes = null
     if (body?.export) {
       const s = await getSettings()
-      if (s.clearndrExportMode !== 'file') exportRes = await exportLatestBuild()
+      if (s.clearndrExportMode !== 'file' && s.clearndrExportMode !== 'disabled') exportRes = await exportLatestBuild()
       else exportRes = { ok: true, detail: 'файл готов к скачиванию/импорту' }
     }
     return NextResponse.json({ ...build, export: exportRes })

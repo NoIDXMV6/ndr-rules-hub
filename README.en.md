@@ -30,7 +30,7 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 | **Deduplication** | By SID (strategies: highest rev / source priority / renumber into the private range) and by content (canonical SHA-1 without sid/rev/msg/metadata) |
 | **Compatibility** | Automatic detection of Snort 2 (preproc, react, rawbytes…) and Snort 3 (keystore, pkt_trace…) keywords missing in Suricata, filtered out at build time |
 | **Build** | A final `suricata.rules` file with a header, per-source statistics and SHA-256 |
-| **Clear NDR export** | 1) file for manual import; 2) HTTP POST to the Clear NDR endpoint; 3) copying to a shared directory (volume) |
+| **Clear NDR export** | 1) file for manual import; 2) **native integration via the Clear NDR (Scirius) REST API** — upload + `update_push_all` with a token; 3) pull scheme: Clear NDR fetches the file from the Hub (`/api/export`) and updates itself on its own schedule; 4) HTTP POST to any endpoint; 5) copying to a shared directory (volume). Step-by-step guide — [docs/clearndr-integration.en.md](docs/clearndr-integration.en.md) |
 | **WireGuard VPN** | Full setup: wg-quick config editor, syntax check, up/down, status (`wg show`), environment check (wg, wg-quick, /dev/net/tun, NET_ADMIN). Rule downloads through the tunnel |
 | **Schedule** | cron (node-cron): source update → build → export. Controlled from the UI |
 | **Logs** | All fetch/build/export/VPN events with levels and filters |
@@ -77,7 +77,8 @@ docker compose up -d --build
 
 First run: the **“Sources”** tab → enable the sources you need → “Refresh all” →
 the **“Build & Export”** tab → “Build” → “Download final file” (import into Clear NDR
-using Clear NDR itself), or configure automatic export in **“Settings”**.
+using Clear NDR itself), or configure automatic export in **“Settings”**
+(the “Clear NDR REST” mode — see [docs/clearndr-integration.en.md](docs/clearndr-integration.en.md): token, commands, auto-update, mock test).
 
 > **Oinkcode is enough**: the official way to automate snort.org registered-rule downloads is
 > `/reg-rules/<file>/<oinkcode>` (a redirect to `/rules/<file>?oinkcode=…`). No login/password needed.
@@ -342,7 +343,13 @@ scripts/
   final_assembly.py         # package assembly: merge + suricata -T loop until 0 errors
   keyword_analysis.py       # analysis of 153 corpus keywords
   make_final_files.py       # delivery files (full/starter/smoke/by-*)
+  clearndr-check.sh         # Clear NDR REST API check (token, sources, rulesets)
+  clearndr-setup-pull.sh    # pull scheme setup: Hub-URL source + ruleset + schedule
+  clearndr-push.sh          # push delivery of a .rules file to Clear NDR (cron-friendly)
+  clearndr-mock-server.py   # Clear NDR mock (Scirius REST) for integration testing
   make-favicon.mjs + make-favicon-ico.py  # favicon.ico from public/logo.svg (sharp + ICO)
+docs/
+  clearndr-integration.md / .en.md  # exact guide to delivering and auto-updating rules to Clear NDR
 dist/                       # VALIDATED package for Clear NDR (zip + README + SHA256)
 src/app/api/…               # REST API (Next.js route handlers)
 src/components/hub/…        # Web UI (9 tabs, bilingual)
