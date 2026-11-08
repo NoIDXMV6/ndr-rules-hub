@@ -1,9 +1,18 @@
+<p align="center">
+  <img src="public/logo.svg" width="96" alt="Логотип NDR Rules Hub">
+</p>
+
 # NDR Rules Hub
 
 Сервис управления источниками правил **Snort / Suricata** с полнофункциональным Web UI, автоматической
 загрузкой по расписанию, конвертацией Snort 2/3 → Suricata, дедупликацией, устранением конфликтов SID,
 **валидацией итогового набора реальным движком Suricata** и экспортом в **Clear NDR** (https://docs.clearndr.io).
 Поставляется как **Docker-контейнер**.
+
+> Автор и разработчик — **Павел Кожеватов** ([kozhevatov.ru](https://kozhevatov.ru)) ·
+> репозиторий: [github.com/NoIDXMV6/ndr-rules-hub](https://github.com/NoIDXMV6/ndr-rules-hub) ·
+> благодарности Clear NDR (Stamus Networks) и [mikrocata2selks](https://github.com/angolo40/mikrocata2selks) —
+> см. вкладку «О системе» в интерфейсе.
 
 ![stack](https://img.shields.io/badge/Next.js%2016-TypeScript-blue) ![db](https://img.shields.io/badge/SQLite-Prisma-orange) ![validate](https://img.shields.io/badge/Suricata%207.0.10-validated-brightgreen) ![vpn](https://img.shields.io/badge/WireGuard-integrated-green)
 

@@ -11,9 +11,11 @@ import { BuildTab } from '@/components/hub/build-tab'
 import { VpnTab } from '@/components/hub/vpn-tab'
 import { SettingsTab } from '@/components/hub/settings-tab'
 import { LogsTab } from '@/components/hub/logs-tab'
+import { HelpTab } from '@/components/hub/help-tab'
+import { AboutTab } from '@/components/hub/about-tab'
 import { api, Dashboard, fmtSize, fmtTime } from '@/components/hub/api'
 import {
-  Activity, Database, Download, Globe, Layers, RefreshCw, ShieldCheck, Wifi,
+  Activity, Database, Download, Globe, Layers, RefreshCw, Wifi,
 } from 'lucide-react'
 
 export default function Home() {
@@ -62,9 +64,7 @@ export default function Home() {
       <header className="border-b border-border bg-card/95 backdrop-blur sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2.5">
-            <div className="h-9 w-9 rounded-lg bg-primary/10 border border-primary/30 flex items-center justify-center">
-              <ShieldCheck className="h-5 w-5 text-primary" />
-            </div>
+            <img src="/logo.svg" alt="Логотип NDR Rules Hub" className="h-9 w-9 rounded-lg border border-primary/30" />
             <div>
               <h1 className="text-lg font-bold leading-tight">NDR Rules Hub</h1>
               <p className="text-xs text-muted-foreground leading-tight">
@@ -117,6 +117,8 @@ export default function Home() {
             <TabsTrigger value="vpn" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">WireGuard VPN</TabsTrigger>
             <TabsTrigger value="settings" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Настройки</TabsTrigger>
             <TabsTrigger value="logs" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Журнал</TabsTrigger>
+            <TabsTrigger value="help" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Помощь</TabsTrigger>
+            <TabsTrigger value="about" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">О системе</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-4">
@@ -140,12 +142,19 @@ export default function Home() {
           <TabsContent value="logs" className="mt-4">
             <LogsTab />
           </TabsContent>
+          <TabsContent value="help" className="mt-4">
+            <HelpTab />
+          </TabsContent>
+          <TabsContent value="about" className="mt-4">
+            <AboutTab />
+          </TabsContent>
         </Tabs>
       </main>
 
       <footer className="mt-auto border-t border-border bg-card">
         <div className="max-w-7xl mx-auto px-4 py-3 text-xs text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
           <span>NDR Rules Hub — объединение, дедупликация и экспорт наборов правил Snort/Suricata</span>
+          <span>Разработчик: <a href="https://kozhevatov.ru" target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-foreground">Павел Кожеватов</a> · <a href="https://github.com/NoIDXMV6/ndr-rules-hub" target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-foreground">репозиторий</a></span>
           <span className="ml-auto">Экспорт: файл для импорта в Clear NDR · HTTP push · локальный каталог</span>
         </div>
       </footer>

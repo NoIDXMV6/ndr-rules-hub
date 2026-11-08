@@ -17,6 +17,7 @@ export const metadata: Metadata = {
   title: "NDR Rules Hub — правила Snort/Suricata для Clear NDR",
   description:
     "Управление источниками правил, конвертация Snort 3 / Snort 2.9 → Suricata, сборка, валидация и экспорт наборов в Clear NDR.",
+  icons: { icon: "/logo.svg" },
 };
 
 export default function RootLayout({
