@@ -35,7 +35,7 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 | **Schedule** | cron (node-cron): source update → build → export. Controlled from the UI |
 | **Logs** | All fetch/build/export/VPN events with levels and filters |
 | **Bilingual UI** | Russian and English via localization files (`src/lib/i18n/`). Language detected from browser strings (`navigator.languages`), RU/EN switch in the header, choice persisted in `localStorage`. Favicon (`public/favicon.ico`, 16–256 px) and logo included |
-| **Help & “About”** | Tabs with goals/principles, developer info, acknowledgements and the technology list — collapsible accordions, also in both languages |
+| **Help & “About”** | Tabs with goals/principles, developer info, acknowledgements and the technology list — collapsible accordions, also in both languages. The “Help” tab includes a detailed Clear NDR integration guide (token, PUSH/PULL schemes, auto-update) illustrated with process diagrams |
 
 ## Validated ruleset package for Clear NDR
 
