@@ -355,12 +355,19 @@ docker-compose.yml          # NET_ADMIN, /dev/net/tun, volume ./data
 
 ### Конвейер качества правил
 
+```mermaid
+flowchart LR
+    A["источники"] --> B["fetch"]
+    B --> C["merge<br/>дедуп SID / контента"]
+    C --> D["s2x_convert.py<br/>Snort 2/3 → Suricata 7"]
+    D --> E{"suricata -T"}
+    E -- "0 ошибок" --> F["пакет dist/<br/>+ SHA256SUMS"]
+    E -- "ошибки загрузки" --> G["разбор лога:<br/>исключение / исправление битых"]
+    G --> C
+    F --> H["экспорт в Clear NDR"]
 ```
-источники → fetch → merge (дедуп SID/контента) → s2x_convert → suricata -T
-     ↑                                                      │
-     └──── исключение/исправление битых ← разбор лога ←──┘
-                                    → пакет (0 ошибок) → экспорт в Clear NDR
-```
+
+Полное описание гейтов качества — в [architecture.md, раздел 5](architecture.md#5-конвейер-качества-правил).
 
 Запуск конвейера вручную (в песочнице без Docker):
 ```bash

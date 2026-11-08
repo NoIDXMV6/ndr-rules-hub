@@ -6,8 +6,8 @@
 
 **English version → [architecture.en.md](architecture.en.md)** · README: [README.md](README.md) · [README.en.md](README.en.md)
 
-Документ описывает устройство системы: компоненты, модель данных, конвейер обработки правил,
-механику загрузки, дедупликации и экспорта, VPN-слой, интерфейс и локализацию.
+Документ описывает устройство системы: компоненты, модель данных, конвейеры обработки
+и качества правил, механику загрузки, дедупликации и экспорта, VPN-слой, интерфейс и локализацию.
 
 ---
 
@@ -34,34 +34,60 @@ Snort/Suricata — от источников до итогового файла,
 
 ## 2. Компонентная схема
 
-```
-┌────────────────────────────── Docker-контейнер (standalone) ─────────────────────────────┐
-│                                                                                          │
-│  Browser ──HTTP 3080──► Next.js 16 (single server, output: standalone)                   │
-│                          │                                                               │
-│                          ├─ src/app/page.tsx + src/components/hub/*  — Web UI (RSC+client)│
-│                          ├─ src/app/api/*        — REST route handlers                  │
-│                          │                                                               │
-│                          ├─ src/lib/i18n/*        — словари RU/EN, детект языка          │
-│                          │                                                               │
-│                          └─ src/lib/engine/*      — доменный движок                      │
-│                              ├─ fetcher.ts      загрузка источников (http/tarball/local) │
-│                              ├─ parser.ts       парсер правил Snort2/3/Suricata          │
-│                              ├─ convert.ts      списки IP/домены/URL → правила           │
-│                              ├─ sidmap.ts       приватные диапазоны SID                  │
-│                              ├─ build.ts        merge + дедупликация + перенумерация     │
-│                              ├─ exporter.ts     файл / HTTP push / каталог               │
-│                              ├─ vpn.ts          wg-quick: up/down/status/проверки        │
-│                              ├─ service.ts      оркестрация, cron (node-cron), сид       │
-│                              └─ seed.ts         каталог 25 преднастроенных источников    │
-│                          │                                                               │
-│                          └─ Prisma ORM ──► SQLite (WAL) — data/hub.db                    │
-│                                                                                          │
-│  wireguard-tools, iptables, iproute2, procps (sysctl) — системный слой                   │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
-        │ volume ./data (/app/data)
-        ▼
-   БД, кэш архивов, итоговые файлы (data/exports), WireGuard-конфиги
+```mermaid
+flowchart TB
+    Browser["Браузер<br/>Web UI · 9 вкладок · RU/EN"]
+
+    subgraph DOCKER["Docker-контейнер (standalone)"]
+        subgraph NEXTJS["Next.js 16 — единый сервер: UI + REST API · порт 3080 → 3000"]
+            UI["Web UI<br/>app/page.tsx · components/hub"]
+            API["REST API<br/>app/api — route handlers"]
+            I18N["i18n<br/>lib/i18n — словари RU/EN,<br/>детект языка, переключатель в шапке"]
+            subgraph ENGINE["Доменный движок — lib/engine"]
+                direction LR
+                FETCHER["fetcher.ts<br/>загрузка источников<br/>http · tarball · local"]
+                PARSER["parser.ts<br/>разбор правил<br/>Snort 2/3 · Suricata"]
+                CONVERT["convert.ts · sidmap.ts<br/>списки → правила,<br/>приватные диапазоны SID"]
+                BUILDER["build.ts<br/>merge · дедуп · remap SID"]
+                EXPORTER["exporter.ts<br/>файл · HTTP push · каталог"]
+                VPN["vpn.ts<br/>wg-quick up/down/status"]
+                SERVICE["service.ts<br/>оркестрация · cron · сид"]
+                SEED["seed.ts<br/>25 преднастроенных источников"]
+            end
+        end
+        PRISMA[("Prisma ORM")]
+        SYSLAYER["Системный слой<br/>wireguard-tools · iptables ·<br/>iproute2 · procps (sysctl)"]
+    end
+
+    subgraph EXT["Внешние системы"]
+        SOURCES["Источники правил<br/>snort.org · ET Open ·<br/>PT Attack Detection · abuse.ch …"]
+        CLEARNDR["Clear NDR<br/>NDR-платформа на Suricata"]
+    end
+
+    DB[("SQLite (WAL)<br/>data/hub.db")]
+    VOLUME[("Volume ./data → /app/data<br/>БД · кэш архивов · data/exports ·<br/>sidmap.json · wg-конфиги")]
+
+    Browser -- "HTTP :3080" --> UI
+    UI -- "fetch JSON" --> API
+    UI -.- I18N
+    API --> SERVICE
+    FETCHER -- "applyAuth + magic-байты gzip" --> SOURCES
+    EXPORTER -- "итоговый .rules" --> CLEARNDR
+    VPN --> SYSLAYER
+    SERVICE --> PRISMA
+    PRISMA --> DB
+    DB -.- VOLUME
+
+    classDef ui fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef engine fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ext fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    classDef store fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef sys fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    class UI,API,I18N ui
+    class FETCHER,PARSER,CONVERT,BUILDER,EXPORTER,VPN,SERVICE,SEED engine
+    class SOURCES,CLEARNDR ext
+    class DB,VOLUME,PRISMA store
+    class SYSLAYER sys
 ```
 
 Сервер один: Next.js обслуживает и UI, и API. «Бэкенда» отдельно не существует — если страница
@@ -88,14 +114,61 @@ Snort/Suricata — от источников до итогового файла,
 
 ## 4. Конвейер обработки правил
 
-```
-Источники ─► fetch ─► parse ─► convert ─► merge/dedup ─► build ─► validate ─► export
-   │         │        │         │           │            │          │           │
-   │      fetcher  parser   convert.ts   build.ts     build.ts  scripts/   exporter.ts
-   │                         ▲                      ▲        (suricata -T)
-   │                         └─ списки индикаторов └─ конфликты SID
-   ▼
- data/cache (tar.gz), data/archives (локальные)
+```mermaid
+flowchart LR
+    subgraph SRC["Источники — 25 преднастроенных + свои"]
+        direction TB
+        SRC1["ruleset / tarball<br/>snort.org · ET Open ·<br/>PT AD · abuse.ch"]
+        SRC2["локальные файлы<br/>и каталоги"]
+        SRC3["списки индикаторов<br/>ip · domain · url"]
+    end
+
+    subgraph FETCH["Загрузка — fetcher.ts"]
+        direction TB
+        AUTH["applyAuth():<br/>oinkcode → reg-rules/файл/code,<br/>authkey · basic"]
+        CHECK{"HTTP 200<br/>и gzip 1f 8b?"}
+        CACHE[("кэш архивов<br/>data/cache<br/>cacheTtlMinutes")]
+    end
+
+    PARSE["Парсинг — parser.ts<br/>заголовок + опции, многострочные,<br/>pcre со скобками"]
+    CONV["Конвертация — convert.ts · sidmap.ts<br/>IP-чанки · домены · URL,<br/>приватный диапазон SID, предохранители"]
+
+    RULES[("Prisma · Rule — по источнику<br/>sid · rev · raw · contentHash<br/>suricataOk · compatNotes")]
+
+    subgraph BUILD["Сборка — build.ts · service.ts"]
+        direction TB
+        MERGE["mergeSources(): конфликт SID →<br/>highest-rev / source-priority /<br/>renumber-private · dropIncompatible"]
+        CONTENT["content-дедуп: SHA-1<br/>без sid/rev/msg/metadata/reference"]
+        REMAP["remapToClearndrBlock():<br/>SID → свободный блок 1e9+,<br/>общая карта sidmap.json"]
+        GATE{"гейт Clear NDR:<br/>конфликтные близнецы?"}
+    end
+
+    FINAL["renderFinalFile():<br/>clearndr-import.rules,<br/>sha256 + запись Build"]
+    VALID["Валидация: статический фильтр<br/>совместимости (suricataOk);<br/>офлайн-пакет — цикл suricata -T"]
+    EXPORT["Экспорт — exporter.ts<br/>файл · HTTP POST + Bearer ·<br/>каталог volume"]
+    CRON["cron — node-cron<br/>обновление → сборка → экспорт"]
+    LOG["LogEntry: error —<br/>сборка прервана"]
+
+    SRC1 --> AUTH
+    SRC2 --> AUTH
+    SRC3 --> AUTH
+    AUTH --> CHECK
+    CHECK -- "да: текст правил" --> PARSE
+    CHECK -- "да: список ip/domain/url" --> CONV
+    CHECK -- "нет: HTML, лимит, ошибка" --> CACHE
+    CACHE -- "fallback: ранее скачанный архив" --> PARSE
+    PARSE --> RULES
+    CONV --> RULES
+    RULES --> MERGE
+    MERGE --> CONTENT
+    CONTENT --> REMAP
+    REMAP --> GATE
+    GATE -- "нет: 0 близнецов" --> FINAL
+    GATE -- "да" --> LOG
+    FINAL --> VALID
+    VALID --> EXPORT
+    CRON -.-> FETCH
+    CRON -.-> BUILD
 ```
 
 Шаги:
@@ -114,7 +187,83 @@ Snort/Suricata — от источников до итогового файла,
 6. **Экспорт (`exporter.ts`)** — три режима: файл для ручного импорта, HTTP POST в Clear NDR
    (с Bearer-токеном), копирование в каталог (общий volume).
 
-## 5. Загрузка: авторизация и лимиты snort.org
+## 5. Конвейер качества правил
+
+Принцип системы: **невалидированный набор не может попасть в Clear NDR**. Качество
+обеспечивается пятью гейтами — каждый блокирует дефектный материал на своём этапе.
+
+```mermaid
+flowchart TD
+    subgraph G1["Гейт 1 — Загрузка · fetcher.ts"]
+        direction TB
+        A1{"HTTP 200?"}
+        A2{"тело = gzip 1f 8b?"}
+        A3[("кэш архива<br/>+ cacheNote в журнал")]
+        A1 -- "нет" --> A3
+        A2 -- "нет: HTML-страница лимита<br/>или личного кабинета" --> A3
+        A1 -- "да" --> A2
+    end
+
+    subgraph G2["Гейт 2 — Парсинг и совместимость · parser.ts"]
+        direction TB
+        B1{"строка = правило<br/>(заголовок + опции)?"}
+        B2{"checkSuricataCompat():<br/>preproc · react · resp · rawbytes ·<br/>asn1 · dce_* · activate/dynamic ·<br/>sticky-буферы Snort 3?"}
+        BN["suricataOk = false<br/>compatNotes"]
+        B1 -- "да" --> B2
+        B2 -- "несовместимо" --> BN
+    end
+
+    subgraph G3["Гейт 3 — Хранение · service.ts"]
+        direction TB
+        C1["дедуп по SID внутри источника —<br/>остаётся максимальный rev"]
+        C2["contentHash: канонический SHA-1<br/>без sid/rev/msg/metadata/reference"]
+        C1 --> C2
+    end
+
+    subgraph G4["Гейт 4 — Сборка · build.ts"]
+        direction TB
+        D1["политики: dropDisabledMsg ·<br/>dropIncompatible · content-дедуп"]
+        D2["конфликт SID → стратегия:<br/>highest-rev / source-priority /<br/>renumber-private"]
+        D3["remap в свободный clearndr-блок<br/>1 000 000 000+ — карта sidmap.json,<br/>формула md5 общая с python-конвейером"]
+        D4{"конфликтные близнецы —<br/>совпадают после снятия<br/>sid и reference:*?"}
+        D1 --> D2
+        D2 --> D3
+        D3 --> D4
+    end
+
+    G5{"Гейт 5 — Валидация движком<br/>suricata -T · офлайн-пакет dist/<br/>цикл: разбор лога →<br/>исключение/исправление → повтор"}
+    FAIL["СБОРКА ПРЕРВАНА — файл не пишется,<br/>LogEntry: error"]
+    OK["итоговый файл: 0 дубликатов,<br/>0 конфликтов SID, 0 ошибок Suricata<br/>+ sha256 и статистика в Build"]
+    EXPORT["экспорт в Clear NDR разрешён"]
+
+    G1 --> G2
+    G2 --> G3
+    G3 --> G4
+    D4 -- "да" --> FAIL
+    D4 -- "нет" --> G5
+    G5 -- "0 ошибок" --> OK
+    OK --> EXPORT
+```
+
+Что делает каждый гейт:
+
+1. **Загрузка** — плохой ответ не сохраняется как архив: magic-байты gzip проверяются до записи
+   на диск (HTML-страница лимита больше не ломает tar «not in gzip format»); при неудаче работа
+   продолжается от ранее скачанного кэша с явной пометкой в журнале.
+2. **Парсинг и совместимость** — правило разбирается только если строка совпала с шаблоном
+   заголовка; несовместимые с Suricata конструкции помечаются `suricataOk = false` с перечнем
+   причин в `compatNotes` (не молча отбрасываются).
+3. **Хранение** — внутри источника остаётся только максимальный `rev` каждого SID; содержимое
+   канонизируется (SHA-1 без sid/rev/msg/metadata/reference) для последующего content-дедупа.
+4. **Сборка** — политики из настроек, разрешение конфликтов SID по стратегии, перенос SID в
+   свободный clearndr-блок; **гейт конфликтных близнецов**: пары, совпадающие после снятия
+   `sid` и `reference:*`, роняют импорт Clear NDR («conflicting SID in same source»), поэтому
+   при их обнаружении сборка падает целиком — плохой файл не записывается.
+5. **Валидация движком** — офлайн-пакет `dist/` проходит цикл `suricata -T` → разбор лога →
+   исключение/исправление битых правил → повтор **до нуля ошибок**; онлайн-сборка применяет
+   статический фильтр совместимости. Экспорт возможен только из набора, прошедшего гейты.
+
+## 6. Загрузка: авторизация и лимиты snort.org
 
 `fetcher.ts` поддерживает `authType`: `none`, `oinkcode`, `authkey` (query-параметр), `basic`
 (логин/пароль в `extraJson`).
@@ -134,7 +283,7 @@ Snort/Suricata — от источников до итогового файла,
   перекачивание; `422` = Invalid oinkcode, `403`/`429` = лимит; oinkcode в сообщениях об ошибках
   фигурирует только в виде отпечатка (`abcd…ef01`), полный код не логируется.
 
-## 6. Дедупликация и стратегии SID
+## 7. Дедупликация и стратегии SID
 
 | Политика | Что делает |
 |---|---|
@@ -148,7 +297,7 @@ Snort/Suricata — от источников до итогового файла,
 Статистика каждого шага (по источникам: загружено/в сборке/сброшено по SID/по содержимому/
 несовместимых) пишется в `Build.statsJson` и отображается во вкладке «Сборка и экспорт».
 
-## 7. WireGuard VPN слой
+## 8. WireGuard VPN слой
 
 `vpn.ts` управляет туннелем внутри контейнера:
 
@@ -163,7 +312,7 @@ Snort/Suricata — от источников до итогового файла,
 - `wg-quick` в образе пропатчен как в upstream (`ac74ed6`): запись `src_valid_mark` только если
   значение ещё не 1 (read-only `/proc/sys`).
 
-## 8. Web UI
+## 9. Web UI
 
 Single-page приложение (Next.js App Router, клиентские компоненты) с 9 вкладками:
 
@@ -182,7 +331,7 @@ Single-page приложение (Next.js App Router, клиентские ко�
 Компоненты — shadcn/ui (Radix-примитивы) + Tailwind CSS; иконки — Lucide; логотипы технологий —
 inline-SVG из simple-icons (`tech-logos.tsx`, CC0).
 
-## 9. Локализация (RU/EN)
+## 10. Локализация (RU/EN)
 
 Слой — `src/lib/i18n/`:
 
@@ -209,7 +358,7 @@ index.tsx    I18nProvider (useSyncExternalStore поверх localStorage) + use
 6. Паритет языков контролируется тестами: равенство наборов ключей, пустых значений нет,
    плейсхолдеры совпадают, в EN нет кириллицы.
 
-## 10. REST API
+## 11. REST API
 
 | Метод/путь | Назначение |
 |---|---|
@@ -227,7 +376,7 @@ index.tsx    I18nProvider (useSyncExternalStore поверх localStorage) + use
 Ошибки API возвращаются как `{"error": "…"}` с реальной причиной (не безликий HTTP 500) и
 дублируются в контейнерные логи.
 
-## 11. Поставка и эксплуатация
+## 12. Поставка и эксплуатация
 
 - **Dockerfile** — многоэтапная сборка: builder (`oven/bun`) → standalone runtime
   (`node:22-bookworm-slim`) + `wireguard-tools`, `iptables`, `iproute2`, `openresolv`, `procps`.

@@ -7,8 +7,8 @@
 **Русская версия → [architecture.md](architecture.md)** · README: [README.md](README.md) · [README.en.md](README.en.md)
 
 This document describes how the system is built: components, the data model, the rule
-processing pipeline, fetching mechanics, deduplication and export, the VPN layer, the UI and
-localization.
+processing and quality pipelines, fetching mechanics, deduplication and export, the VPN layer,
+the UI and localization.
 
 ---
 
@@ -35,34 +35,60 @@ run through the real Suricata engine (`suricata -T`), and export is blocked unti
 
 ## 2. Component diagram
 
-```
-┌────────────────────────────── Docker container (standalone) ─────────────────────────────┐
-│                                                                                          │
-│  Browser ──HTTP 3080──► Next.js 16 (single server, output: standalone)                   │
-│                          │                                                               │
-│                          ├─ src/app/page.tsx + src/components/hub/*  — Web UI (RSC+client)│
-│                          ├─ src/app/api/*        — REST route handlers                  │
-│                          │                                                               │
-│                          ├─ src/lib/i18n/*        — RU/EN dictionaries, language detect  │
-│                          │                                                               │
-│                          └─ src/lib/engine/*      — domain engine                        │
-│                              ├─ fetcher.ts      source fetching (http/tarball/local)     │
-│                              ├─ parser.ts       Snort2/3/Suricata rule parser            │
-│                              ├─ convert.ts      IP/domain/URL lists → rules              │
-│                              ├─ sidmap.ts       private SID ranges                       │
-│                              ├─ build.ts        merge + dedup + renumbering              │
-│                              ├─ exporter.ts     file / HTTP push / directory             │
-│                              ├─ vpn.ts          wg-quick: up/down/status/checks          │
-│                              ├─ service.ts      orchestration, cron (node-cron), seed    │
-│                              └─ seed.ts         catalog of 25 preconfigured sources      │
-│                          │                                                               │
-│                          └─ Prisma ORM ──► SQLite (WAL) — data/hub.db                    │
-│                                                                                          │
-│  wireguard-tools, iptables, iproute2, procps (sysctl) — system layer                     │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
-        │ volume ./data (/app/data)
-        ▼
-   DB, archive cache, final files (data/exports), WireGuard configs
+```mermaid
+flowchart TB
+    Browser["Browser<br/>Web UI · 9 tabs · RU/EN"]
+
+    subgraph DOCKER["Docker container (standalone)"]
+        subgraph NEXTJS["Next.js 16 — single server: UI + REST API · port 3080 → 3000"]
+            UI["Web UI<br/>app/page.tsx · components/hub"]
+            API["REST API<br/>app/api — route handlers"]
+            I18N["i18n<br/>lib/i18n — RU/EN dictionaries,<br/>language detection, header switcher"]
+            subgraph ENGINE["Domain engine — lib/engine"]
+                direction LR
+                FETCHER["fetcher.ts<br/>source fetching<br/>http · tarball · local"]
+                PARSER["parser.ts<br/>rule parsing<br/>Snort 2/3 · Suricata"]
+                CONVERT["convert.ts · sidmap.ts<br/>lists → rules,<br/>private SID ranges"]
+                BUILDER["build.ts<br/>merge · dedup · SID remap"]
+                EXPORTER["exporter.ts<br/>file · HTTP push · directory"]
+                VPN["vpn.ts<br/>wg-quick up/down/status"]
+                SERVICE["service.ts<br/>orchestration · cron · seed"]
+                SEED["seed.ts<br/>25 preconfigured sources"]
+            end
+        end
+        PRISMA[("Prisma ORM")]
+        SYSLAYER["System layer<br/>wireguard-tools · iptables ·<br/>iproute2 · procps (sysctl)"]
+    end
+
+    subgraph EXT["External systems"]
+        SOURCES["Rule sources<br/>snort.org · ET Open ·<br/>PT Attack Detection · abuse.ch …"]
+        CLEARNDR["Clear NDR<br/>Suricata-based NDR platform"]
+    end
+
+    DB[("SQLite (WAL)<br/>data/hub.db")]
+    VOLUME[("Volume ./data → /app/data<br/>DB · archive cache · data/exports ·<br/>sidmap.json · wg configs")]
+
+    Browser -- "HTTP :3080" --> UI
+    UI -- "fetch JSON" --> API
+    UI -.- I18N
+    API --> SERVICE
+    FETCHER -- "applyAuth + gzip magic bytes" --> SOURCES
+    EXPORTER -- "final .rules" --> CLEARNDR
+    VPN --> SYSLAYER
+    SERVICE --> PRISMA
+    PRISMA --> DB
+    DB -.- VOLUME
+
+    classDef ui fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef engine fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ext fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    classDef store fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef sys fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    class UI,API,I18N ui
+    class FETCHER,PARSER,CONVERT,BUILDER,EXPORTER,VPN,SERVICE,SEED engine
+    class SOURCES,CLEARNDR ext
+    class DB,VOLUME,PRISMA store
+    class SYSLAYER sys
 ```
 
 There is a single server: Next.js serves both the UI and the API. No separate “backend”
@@ -91,14 +117,61 @@ recreate the DB.
 
 ## 4. Rule processing pipeline
 
-```
-Sources ─► fetch ─► parse ─► convert ─► merge/dedup ─► build ─► validate ─► export
-   │         │        │         │           │            │          │           │
-   │      fetcher  parser   convert.ts   build.ts     build.ts  scripts/   exporter.ts
-   │                         ▲                      ▲        (suricata -T)
-   │                         └─ indicator lists ───└─ SID conflicts
-   ▼
- data/cache (tar.gz), data/archives (local)
+```mermaid
+flowchart LR
+    subgraph SRC["Sources — 25 preconfigured + your own"]
+        direction TB
+        SRC1["ruleset / tarball<br/>snort.org · ET Open ·<br/>PT AD · abuse.ch"]
+        SRC2["local files<br/>and directories"]
+        SRC3["indicator lists<br/>ip · domain · url"]
+    end
+
+    subgraph FETCH["Fetching — fetcher.ts"]
+        direction TB
+        AUTH["applyAuth():<br/>oinkcode → reg-rules/file/code,<br/>authkey · basic"]
+        CHECK{"HTTP 200<br/>and gzip 1f 8b?"}
+        CACHE[("archive cache<br/>data/cache<br/>cacheTtlMinutes")]
+    end
+
+    PARSE["Parsing — parser.ts<br/>header + options, multiline,<br/>pcre with braces"]
+    CONV["Conversion — convert.ts · sidmap.ts<br/>IP chunks · domains · URLs,<br/>private SID range, guards"]
+
+    RULES[("Prisma · Rule — per source<br/>sid · rev · raw · contentHash<br/>suricataOk · compatNotes")]
+
+    subgraph BUILD["Build — build.ts · service.ts"]
+        direction TB
+        MERGE["mergeSources(): SID conflict →<br/>highest-rev / source-priority /<br/>renumber-private · dropIncompatible"]
+        CONTENT["content dedup: SHA-1<br/>without sid/rev/msg/metadata/reference"]
+        REMAP["remapToClearndrBlock():<br/>SID → free block 1e9+,<br/>shared sidmap.json map"]
+        GATE{"Clear NDR gate:<br/>conflicting twins?"}
+    end
+
+    FINAL["renderFinalFile():<br/>clearndr-import.rules,<br/>sha256 + Build record"]
+    VALID["Validation: static compatibility<br/>filter (suricataOk);<br/>offline package — suricata -T loop"]
+    EXPORT["Export — exporter.ts<br/>file · HTTP POST + Bearer ·<br/>volume directory"]
+    CRON["cron — node-cron<br/>fetch → build → export"]
+    LOG["LogEntry: error —<br/>build aborted"]
+
+    SRC1 --> AUTH
+    SRC2 --> AUTH
+    SRC3 --> AUTH
+    AUTH --> CHECK
+    CHECK -- "yes: rule text" --> PARSE
+    CHECK -- "yes: ip/domain/url list" --> CONV
+    CHECK -- "no: HTML, rate limit, error" --> CACHE
+    CACHE -- "fallback: previously downloaded archive" --> PARSE
+    PARSE --> RULES
+    CONV --> RULES
+    RULES --> MERGE
+    MERGE --> CONTENT
+    CONTENT --> REMAP
+    REMAP --> GATE
+    GATE -- "no: 0 twins" --> FINAL
+    GATE -- "yes" --> LOG
+    FINAL --> VALID
+    VALID --> EXPORT
+    CRON -.-> FETCH
+    CRON -.-> BUILD
 ```
 
 Steps:
@@ -117,7 +190,83 @@ Steps:
 6. **Export (`exporter.ts`)** — three modes: file for manual import, HTTP POST to Clear NDR
    (with a Bearer token), copy to a directory (shared volume).
 
-## 5. Fetching: snort.org authentication and limits
+## 5. Rules quality pipeline
+
+The system principle: **an unvalidated ruleset cannot reach Clear NDR**. Quality is enforced
+by five gates — each one blocks defective material at its own stage.
+
+```mermaid
+flowchart TD
+    subgraph G1["Gate 1 — Fetching · fetcher.ts"]
+        direction TB
+        A1{"HTTP 200?"}
+        A2{"body = gzip 1f 8b?"}
+        A3[("archive cache<br/>+ cacheNote to the log")]
+        A1 -- "no" --> A3
+        A2 -- "no: HTML page of a rate limit<br/>or personal cabinet" --> A3
+        A1 -- "yes" --> A2
+    end
+
+    subgraph G2["Gate 2 — Parsing and compatibility · parser.ts"]
+        direction TB
+        B1{"line = a rule<br/>(header + options)?"}
+        B2{"checkSuricataCompat():<br/>preproc · react · resp · rawbytes ·<br/>asn1 · dce_* · activate/dynamic ·<br/>Snort 3 sticky buffers?"}
+        BN["suricataOk = false<br/>compatNotes"]
+        B1 -- "yes" --> B2
+        B2 -- "incompatible" --> BN
+    end
+
+    subgraph G3["Gate 3 — Storage · service.ts"]
+        direction TB
+        C1["in-source SID dedup —<br/>the highest rev is kept"]
+        C2["contentHash: canonical SHA-1<br/>without sid/rev/msg/metadata/reference"]
+        C1 --> C2
+    end
+
+    subgraph G4["Gate 4 — Build · build.ts"]
+        direction TB
+        D1["policies: dropDisabledMsg ·<br/>dropIncompatible · content dedup"]
+        D2["SID conflict → strategy:<br/>highest-rev / source-priority /<br/>renumber-private"]
+        D3["remap to the free clearndr block<br/>1,000,000,000+ — sidmap.json map,<br/>md5 formula shared with the python pipeline"]
+        D4{"conflicting twins — rules matching<br/>after removing sid and reference:*?"}
+        D1 --> D2
+        D2 --> D3
+        D3 --> D4
+    end
+
+    G5{"Gate 5 — Engine validation<br/>suricata -T · offline dist/ package<br/>loop: log parsing →<br/>exclude/fix → repeat"}
+    FAIL["BUILD ABORTED — the file is not written,<br/>LogEntry: error"]
+    OK["final file: 0 duplicates,<br/>0 SID conflicts, 0 Suricata errors<br/>+ sha256 and stats in Build"]
+    EXPORT["export to Clear NDR allowed"]
+
+    G1 --> G2
+    G2 --> G3
+    G3 --> G4
+    D4 -- "yes" --> FAIL
+    D4 -- "no" --> G5
+    G5 -- "0 errors" --> OK
+    OK --> EXPORT
+```
+
+What each gate does:
+
+1. **Fetching** — a bad response is never stored as an archive: gzip magic bytes are checked
+   before writing to disk (a rate-limit HTML page no longer breaks tar “not in gzip format”);
+   on failure the run continues from a previously downloaded cache, explicitly noted in the log.
+2. **Parsing and compatibility** — a rule is parsed only if the line matches the header pattern;
+   Suricata-incompatible constructs are marked `suricataOk = false` with reasons listed in
+   `compatNotes` (never silently dropped).
+3. **Storage** — only the highest `rev` of each SID survives within a source; content is
+   canonicalized (SHA-1 without sid/rev/msg/metadata/reference) for later content dedup.
+4. **Build** — policies from settings, SID conflict resolution by strategy, SID move to the free
+   clearndr block; the **conflicting-twins gate**: pairs matching after removing `sid` and
+   `reference:*` break the Clear NDR import (“conflicting SID in same source”), so if any remain
+   the whole build fails — a bad file is never written.
+5. **Engine validation** — the offline `dist/` package runs the `suricata -T` loop → log parsing
+   → exclude/fix broken rules → repeat **until zero errors**; the online build applies the static
+   compatibility filter. Export is only possible from a set that passed the gates.
+
+## 6. Fetching: snort.org authentication and limits
 
 `fetcher.ts` supports `authType`: `none`, `oinkcode`, `authkey` (query parameter), `basic`
 (login/password in `extraJson`).
@@ -137,7 +286,7 @@ snort.org behavior verified in practice:
   prevents re-downloading; `422` = Invalid oinkcode, `403`/`429` = rate limit; the oinkcode
   appears in error messages only as a fingerprint (`abcd…ef01`), the full code is never logged.
 
-## 6. Deduplication and SID strategies
+## 7. Deduplication and SID strategies
 
 | Policy | What it does |
 |---|---|
@@ -151,7 +300,7 @@ snort.org behavior verified in practice:
 Statistics for every step (per source: fetched/in build/dropped by SID/by content/incompatible)
 are written to `Build.statsJson` and shown in the “Build & Export” tab.
 
-## 7. WireGuard VPN layer
+## 8. WireGuard VPN layer
 
 `vpn.ts` manages the tunnel inside the container:
 
@@ -166,7 +315,7 @@ are written to `Build.statsJson` and shown in the “Build & Export” tab.
 - `wg-quick` in the image is patched as in upstream (`ac74ed6`): `src_valid_mark` is written
   only if the value is not already 1 (read-only `/proc/sys`).
 
-## 8. Web UI
+## 9. Web UI
 
 A single-page application (Next.js App Router, client components) with 9 tabs:
 
@@ -185,7 +334,7 @@ A single-page application (Next.js App Router, client components) with 9 tabs:
 Components — shadcn/ui (Radix primitives) + Tailwind CSS; icons — Lucide; technology logos —
 inline SVG from simple-icons (`tech-logos.tsx`, CC0).
 
-## 9. Localization (RU/EN)
+## 10. Localization (RU/EN)
 
 The layer lives in `src/lib/i18n/`:
 
@@ -212,7 +361,7 @@ Mechanics:
 6. Language parity is enforced by tests: equal key sets, no empty values, matching
    placeholders, no Cyrillic in EN.
 
-## 10. REST API
+## 11. REST API
 
 | Method/path | Purpose |
 |---|---|
@@ -230,7 +379,7 @@ Mechanics:
 API errors are returned as `{"error": "…"}` with the real cause (not an opaque HTTP 500) and
 duplicated into container logs.
 
-## 11. Delivery and operations
+## 12. Delivery and operations
 
 - **Dockerfile** — multi-stage build: builder (`oven/bun`) → standalone runtime
   (`node:22-bookworm-slim`) + `wireguard-tools`, `iptables`, `iproute2`, `openresolv`, `procps`.

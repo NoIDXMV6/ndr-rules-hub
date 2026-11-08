@@ -355,12 +355,19 @@ docker-compose.yml          # NET_ADMIN, /dev/net/tun, volume ./data
 
 ### Ruleset quality pipeline
 
+```mermaid
+flowchart LR
+    A["sources"] --> B["fetch"]
+    B --> C["merge<br/>SID / content dedup"]
+    C --> D["s2x_convert.py<br/>Snort 2/3 → Suricata 7"]
+    D --> E{"suricata -T"}
+    E -- "0 errors" --> F["dist/ package<br/>+ SHA256SUMS"]
+    E -- "load errors" --> G["log parsing:<br/>exclude / fix broken"]
+    G --> C
+    F --> H["export to Clear NDR"]
 ```
-sources → fetch → merge (SID/content dedup) → s2x_convert → suricata -T
-    ↑                                                    │
-    └─────── exclude/fix broken ← log parsing ←─────────┘
-                                  → package (0 errors) → export to Clear NDR
-```
+
+The full description of the quality gates is in [architecture.en.md, section 5](architecture.en.md#5-rules-quality-pipeline).
 
 Running the pipeline manually (in a sandbox without Docker):
 ```bash
