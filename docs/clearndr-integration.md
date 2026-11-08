@@ -17,6 +17,41 @@
 | Автообновление | встроенный планировщик Clear NDR | встроенный cron Hub (или cron на Clear NDR) |
 | Когда выбирать | Hub и Clear NDR в одной сети | Hub недоступен с Clear NDR (DMZ, NAT) |
 
+Обе схемы на одной карте (сплошные стрелки — доставка файла, пунктир — запуск по расписанию):
+
+```mermaid
+flowchart TB
+    subgraph HUB["NDR Rules Hub — Next.js :3080"]
+        direction TB
+        BLD["Сборка<br/>clearndr-import.rules + sha256"]
+        CRON["cron Hub — Настройки → Расписание<br/>обновление → сборка → экспорт"]
+        REST["exporter.ts — режим «Clear NDR REST»<br/>кнопка «Экспортировать в Clear NDR»<br/>или шаг cron (cronExport)"]
+        PULLAPI["GET /api/export<br/>последняя сборка по HTTP"]
+        BLD --> REST
+        BLD --> PULLAPI
+        CRON -.-> BLD
+    end
+
+    subgraph CNDR["Clear NDR (Scirius)"]
+        direction TB
+        SRC["Source «NDR Rules Hub»<br/>PUSH: method local · PULL: method http"]
+        RS["Ruleset + включённая категория"]
+        UPALL["update_push_all<br/>update → generate → push"]
+        SUR["Suricata 7 — набор в работе"]
+        SRC --> RS
+        RS --> UPALL
+        UPALL --> SUR
+    end
+
+    REST -- "Схема B: PUSH — Hub отправляет сам<br/>find-or-create → upload → update_push_all<br/>Authorization: Token" --> SRC
+    PULLAPI -- "Схема A: PULL — Clear NDR забирает файл<br/>источник-URL + Recurrence / cron" --> SRC
+
+    classDef engine fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ext fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    class BLD,CRON,REST,PULLAPI engine
+    class SRC,RS,UPALL,SUR ext
+```
+
 В обеих схемах файл один и тот же — `clearndr-import.rules` (итоговый набор после дедупликации, remap SID в блок 1e9+ и валидации `suricata -T`).
 
 ---
@@ -62,6 +97,25 @@ curl -sk https://clearndr.local/rest/rules/source/?name=__probe__ \
 ## 3. Схема A: PULL — Clear NDR сам забирает файл с Hub
 
 Идея: итоговый файл уже отдаётся Hub по HTTP — `GET http://<hub>:3080/api/export`. В Clear NDR создаётся источник (Source) типа «HTTP URL» на этот адрес, привязывается к набору (Ruleset), а обновление выполняет штатный планировщик Clear NDR. Hub при этом остаётся «тупым» поставщиком файла: после каждой сборки новый файл уже лежит по тому же адресу.
+
+Поток данных при плановом обновлении:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Clear NDR — планировщик celery<br/>Suricata → Update → Recurrence
+    participant S as Source «NDR Rules Hub»<br/>method http · uri /api/export
+    participant H as Hub — GET /api/export
+    participant X as Suricata
+
+    C->>S: триггер по расписанию (например, Daily)
+    S->>H: GET http://hub-host:3080/api/export
+    H-->>S: 200 — clearndr-import.rules
+    S->>S: импорт правил в базу источников
+    C->>C: generate ruleset — включённая категория
+    C->>X: push файла → перезапуск движка
+    Note over C,X: кнопка Suricata → Update делает то же немедленно, а cron с update_push_all — то же без UI
+```
 
 ### Предпосылки
 
@@ -175,6 +229,36 @@ curl -sk -X POST "$BASE/rest/suricata/update_push_all/" -H "$TOK" \
 GET  /rest/rules/source/?name=NDR Rules Hub   → найти источник (создать при отсутствии)
 POST /rest/rules/source/<pk>/upload/          → multipart-загрузка clearndr-import.rules
 POST /rest/suricata/update_push_all/          → пересобрать набор и применить к Suricata
+```
+
+Та же цепочка в виде последовательности — со всеми ветками (источник есть/нет, конфликт SID, флаг применения):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant H as Hub — exporter.ts<br/>режим «Clear NDR REST»
+    participant A as Clear NDR — REST API Scirius<br/>/rest/… · Authorization: Token
+    participant X as Suricata
+
+    H->>A: GET /rest/rules/source/?name=NDR Rules Hub
+    alt источник найден
+        A-->>H: results → pk источника
+    else источника нет
+        H->>A: POST /rest/rules/source/ — method local, datatype sig
+        A-->>H: 201 → pk нового источника
+    end
+    H->>A: POST /rest/rules/source/{pk}/upload/ — multipart clearndr-import.rules
+    A->>A: импорт правил в базу источников
+    alt конфликт SID в файле
+        A-->>H: 400 conflicting SID — Hub: «включите дедупликацию в настройках сборки»
+    end
+    A-->>H: {"upload":"ok"}
+    opt флаг «Применять набор» включён (по умолчанию)
+        H->>A: POST /rest/suricata/update_push_all/
+        A->>X: update источников → generate набора → push → перезапуск
+        A-->>H: {"update_push_all":"ok"}
+    end
+    H-->>H: журнал (scope export) — шаги цепочки
 ```
 
 Все шаги видны в «Журнале» Hub (scope `export`): `источник «NDR Rules Hub» найден (pk=7); файл clearndr-import.rules загружен и импортирован (6.2 МБ); набор применён к Suricata (update_push_all: ok)`.

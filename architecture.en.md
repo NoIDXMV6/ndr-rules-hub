@@ -7,8 +7,8 @@
 **Русская версия → [architecture.md](architecture.md)** · README: [README.md](README.md) · [README.en.md](README.en.md)
 
 This document describes how the system is built: components, the data model, the rule
-processing and quality pipelines, fetching mechanics, deduplication and export, the VPN layer,
-the UI and localization.
+processing and quality pipelines, fetching mechanics, deduplication and export, the Clear NDR
+integration, the VPN layer, the UI and localization.
 
 ---
 
@@ -33,6 +33,11 @@ Key problems it solves:
 Reliability principle: **an unvalidated ruleset cannot reach Clear NDR** — the final file is
 run through the real Suricata engine (`suricata -T`), and export is blocked until zero errors.
 
+Delivery of the final set to Clear NDR is automated too: **PULL** (Clear NDR fetches the file
+from the Hub on a schedule) or **PUSH** (the Hub sends it itself via the Scirius REST API with
+a token). Step-by-step guide — [docs/clearndr-integration.en.md](docs/clearndr-integration.en.md),
+integration architecture — section 12.
+
 ## 2. Component diagram
 
 ```mermaid
@@ -50,7 +55,7 @@ flowchart TB
                 PARSER["parser.ts<br/>rule parsing<br/>Snort 2/3 · Suricata"]
                 CONVERT["convert.ts · sidmap.ts<br/>lists → rules,<br/>private SID ranges"]
                 BUILDER["build.ts<br/>merge · dedup · SID remap"]
-                EXPORTER["exporter.ts<br/>file · HTTP push · directory"]
+                EXPORTER["exporter.ts<br/>file · Clear NDR REST ·<br/>HTTP POST · directory"]
                 VPN["vpn.ts<br/>wg-quick up/down/status"]
                 SERVICE["service.ts<br/>orchestration · cron · seed"]
                 SEED["seed.ts<br/>25 preconfigured sources"]
@@ -73,7 +78,7 @@ flowchart TB
     UI -.- I18N
     API --> SERVICE
     FETCHER -- "applyAuth + gzip magic bytes" --> SOURCES
-    EXPORTER -- "final .rules" --> CLEARNDR
+    EXPORTER -- "final .rules<br/>REST API / file / directory" --> CLEARNDR
     VPN --> SYSLAYER
     SERVICE --> PRISMA
     PRISMA --> DB
@@ -148,7 +153,7 @@ flowchart LR
 
     FINAL["renderFinalFile():<br/>clearndr-import.rules,<br/>sha256 + Build record"]
     VALID["Validation: static compatibility<br/>filter (suricataOk);<br/>offline package — suricata -T loop"]
-    EXPORT["Export — exporter.ts<br/>file · HTTP POST + Bearer ·<br/>volume directory"]
+    EXPORT["Export — exporter.ts<br/>file · Clear NDR REST (Token) ·<br/>HTTP POST · volume directory"]
     CRON["cron — node-cron<br/>fetch → build → export"]
     LOG["LogEntry: error —<br/>build aborted"]
 
@@ -187,8 +192,10 @@ Steps:
    conflict resolution, optional renumbering; compatibility filter.
 5. **Validation** — the `scripts/s2x_convert.py` converter + the `suricata -T` loop (for the
    offline `dist/` package; the online build applies the static compatibility filter).
-6. **Export (`exporter.ts`)** — three modes: file for manual import, HTTP POST to Clear NDR
-   (with a Bearer token), copy to a directory (shared volume).
+6. **Export (`exporter.ts`)** — five modes: file for manual import; **Clear NDR REST** — native
+   integration (find/create the source → multipart upload → `update_push_all`,
+   `Authorization: Token`); HTTP POST to any endpoint (Token/Bearer); copy to a directory
+   (shared volume); disabled. Details — section 12.
 
 ## 5. Rules quality pipeline
 
@@ -389,7 +396,7 @@ A single-page application (Next.js App Router, client components) with 9 tabs:
 | Rules | rule database with search by SID/msg/source and pagination |
 | Build & Export | build, per-source statistics, files in the export directory |
 | WireGuard VPN | environment check, config editor, profiles, active interfaces |
-| Settings | oinkcode, dedup policies, export, cron |
+| Settings | oinkcode, dedup policies, export (mode, URL, token, source), cron |
 | Logs | all engine events |
 | Help | goals/objectives, pipeline, limits, troubleshooting — accordions |
 | About | developer, project, acknowledgements, technologies with logos, logo — accordions |
@@ -475,7 +482,149 @@ sequenceDiagram
     B->>B: card refresh or error banner
 ```
 
-## 12. Delivery and operations
+## 12. Clear NDR integration: rule delivery
+
+The final ruleset reaches Clear NDR in one of four ways: download the file and import it
+manually; **PULL** — Clear NDR fetches the file from the Hub itself; **PUSH** — the Hub sends
+it itself through the Scirius REST API; HTTP POST to an arbitrary endpoint or copying to a
+shared directory. The step-by-step guide with commands, the token and a deployment checklist —
+[docs/clearndr-integration.en.md](docs/clearndr-integration.en.md) (RU:
+[docs/clearndr-integration.md](docs/clearndr-integration.md)).
+
+### 12.1 Two delivery schemes
+
+```mermaid
+flowchart TB
+    subgraph HUB["NDR Rules Hub — Next.js :3080"]
+        direction TB
+        BLD["Build<br/>clearndr-import.rules + sha256"]
+        CRON["Hub cron — Settings → Schedule<br/>fetch → build → export"]
+        REST["exporter.ts — “Clear NDR REST” mode<br/>the “Export to Clear NDR” button<br/>or the cron step (cronExport)"]
+        PULLAPI["GET /api/export<br/>latest build over HTTP"]
+        BLD --> REST
+        BLD --> PULLAPI
+        CRON -.-> BLD
+    end
+
+    subgraph CNDR["Clear NDR (Scirius)"]
+        direction TB
+        SRC["Source “NDR Rules Hub”<br/>PUSH: method local · PULL: method http"]
+        RS["Ruleset + enabled category"]
+        UPALL["update_push_all<br/>update → generate → push"]
+        SUR["Suricata 7 — ruleset in production"]
+        SRC --> RS
+        RS --> UPALL
+        UPALL --> SUR
+    end
+
+    REST -- "Scheme B: PUSH — the Hub sends it<br/>find-or-create → upload → update_push_all<br/>Authorization: Token" --> SRC
+    PULLAPI -- "Scheme A: PULL — Clear NDR fetches the file<br/>URL source + Recurrence / cron" --> SRC
+
+    classDef engine fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ext fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    class BLD,CRON,REST,PULLAPI engine
+    class SRC,RS,UPALL,SUR ext
+```
+
+| | Scheme A: PULL | Scheme B: PUSH |
+|---|---|---|
+| Who initiates | Clear NDR fetches the file from the Hub | The Hub pushes the file to Clear NDR |
+| Network access | Clear NDR → Hub (:3080, `GET /api/export`) | Hub → Clear NDR (443, `/rest/…`) |
+| Configured in Clear NDR | a URL source + ruleset + schedule | nothing — the source is created automatically |
+| Configured in the Hub | nothing | “Clear NDR REST” mode, URL, token |
+| Auto-update | Clear NDR Recurrence / cron `update_push_all` | Hub cron (`cronExport`) / cron `update_push_all` |
+
+### 12.2 PUSH: the Scirius REST API call chain
+
+The “Clear NDR REST” mode (`exporter.ts → pushToClearndrRest`) performs three steps: find or
+create a local source, upload the file (multipart; the rules are imported immediately), apply
+the ruleset. Authorization — `Authorization: Token <token>`: the token is obtained in the
+Clear NDR web UI (user menu → **Edit Token → Regenerate**); it is 40 hex characters bound to
+the account and its permissions (`rules.source_edit`, `rules.ruleset_update_push`). Clear NDR
+rejects the `Bearer` format (HTTP 401) — the authorization type is selected in the Hub export
+settings.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant H as Hub — exporter.ts<br/>“Clear NDR REST” mode
+    participant A as Clear NDR — Scirius REST API<br/>/rest/… · Authorization: Token
+    participant X as Suricata
+
+    H->>A: GET /rest/rules/source/?name=NDR Rules Hub
+    alt source found
+        A-->>H: results → source pk
+    else source missing
+        H->>A: POST /rest/rules/source/ — method local, datatype sig
+        A-->>H: 201 → new source pk
+    end
+    H->>A: POST /rest/rules/source/{pk}/upload/ — multipart clearndr-import.rules
+    A->>A: import the rules into the source database
+    alt SID conflict in the file
+        A-->>H: 400 conflicting SID — Hub: “enable deduplication in the build settings”
+    end
+    A-->>H: {"upload":"ok"}
+    opt “Apply ruleset” flag is on (default)
+        H->>A: POST /rest/suricata/update_push_all/
+        A->>X: update sources → generate ruleset → push → restart
+        A-->>H: {"update_push_all":"ok"}
+    end
+    H-->>H: log (scope export) — chain steps
+```
+
+Settings — the “Settings → Export to Clear NDR” tab: base URL (root only, no `/rest` — it is
+appended automatically), authorization type, token (a password field), source name
+(“NDR Rules Hub” by default), the “Apply ruleset after upload” flag. Errors come with hints:
+401/403 — “token rejected… Edit Token → Regenerate”; “conflicting SID” — “enable deduplication
+in the build settings”. Every chain step is visible in the Logs (scope `export`).
+
+### 12.3 PULL: Clear NDR fetches the file itself
+
+In Clear NDR, create a “HTTP URL” source pointing at `GET http://<hub>:3080/api/export` (the
+latest build is always served there), attach it to a ruleset, enable the category; the update
+is performed by the built-in scheduler (Suricata → Update → Recurrence) or a cron with
+`update_push_all`. Automatic setup — the idempotent `scripts/clearndr-setup-pull.sh`:
+create the source → ruleset → enable the category → `update_push_all`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Clear NDR — celery scheduler<br/>Suricata → Update → Recurrence
+    participant S as Source “NDR Rules Hub”<br/>method http · uri /api/export
+    participant H as Hub — GET /api/export
+    participant X as Suricata
+
+    C->>S: schedule trigger (e.g. Daily)
+    S->>H: GET http://hub-host:3080/api/export
+    H-->>S: 200 — clearndr-import.rules
+    S->>S: import the rules into the source database
+    C->>C: generate ruleset — enabled category
+    C->>X: push the file → engine restart
+    Note over C,X: the Suricata → Update button does the same immediately, a cron with update_push_all does the same without the UI
+```
+
+### 12.4 Auto-update — three independent options
+
+| Option | Where it is configured | What happens on schedule |
+|---|---|---|
+| a) Clear NDR Recurrence | Clear NDR UI → Suricata → Update → Recurrence (a celery task) | Clear NDR downloads the fresh file from the Hub, imports it, rebuilds the ruleset, restarts Suricata |
+| b) cron `update_push_all` | a cron on any server that can reach Clear NDR | `POST /rest/suricata/update_push_all/` — update → generate → push |
+| c) Hub cron | Settings → Schedule (`cronEnabled` + `cronExport = true`) | Hub: fetch sources → build → push to Clear NDR (`clearndr` mode) |
+
+Option (c) also works with the PULL scheme: after the cron build the fresh file is already at
+`/api/export`, where (a) or (b) picks it up.
+
+### 12.5 Testing without a production server
+
+`scripts/clearndr-mock-server.py` reproduces the Scirius REST API (Token auth, DRF pagination,
+multipart upload, the “conflicting SID” gate). End-to-end test: start the mock, set
+`http://127.0.0.1:8080` and the token `mock-clearndr-token` in the Hub settings, press
+“Export to Clear NDR”, then compare `/_stats` — the file sha256 must match byte for byte.
+Helper scripts: `clearndr-check.sh` (token, sources, rulesets check), `clearndr-push.sh`
+(push a ready file from cron), `clearndr-setup-pull.sh` (PULL setup). Commands — section 5
+of the guide.
+
+## 13. Delivery and operations
 
 - **Dockerfile** — multi-stage build: builder (`oven/bun`) → standalone runtime
   (`node:22-bookworm-slim`) + `wireguard-tools`, `iptables`, `iproute2`, `openresolv`, `procps`.
@@ -484,5 +633,8 @@ sequenceDiagram
   (`ip_forward`, `src_valid_mark`), volume `./data:/app/data`, port 3080→3000.
 - **Orchestration** — `service.ts`: cron (node-cron, `TZ`) runs “update sources → build →
   export”; the same cycle is available via the “Full cycle” button.
+- **Clear NDR integration scripts** — `scripts/clearndr-check.sh` (token, sources, rulesets
+  check), `clearndr-setup-pull.sh` (idempotent PULL setup), `clearndr-push.sh` (push a ready
+  file, cron-friendly), `clearndr-mock-server.py` (Scirius REST API mock).
 - **Tests** — vitest, 84 tests: parser, converters, deduplication, fetcher (including
   magic bytes and cache), wg-quick, i18n.

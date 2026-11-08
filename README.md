@@ -4,7 +4,7 @@
 
 # NDR Rules Hub
 
-**[English documentation → README.en.md](README.en.md)** · архитектура: [architecture.md (рус)](architecture.md) · [architecture.en.md (eng)](architecture.en.md)
+**[English documentation → README.en.md](README.en.md)** · архитектура: [architecture.md (рус)](architecture.md) · [architecture.en.md (eng)](architecture.en.md) · интеграция с Clear NDR: [docs/clearndr-integration.md (рус)](docs/clearndr-integration.md) · [docs/clearndr-integration.en.md (eng)](docs/clearndr-integration.en.md)
 
 Сервис управления источниками правил **Snort / Suricata** с полнофункциональным Web UI, автоматической
 загрузкой по расписанию, конвертацией Snort 2/3 → Suricata, дедупликацией, устранением конфликтов SID,
@@ -329,7 +329,7 @@ src/lib/engine/
   convert.ts                # конвертеры IP/домены/URL → правила
   fetcher.ts                # загрузка (url/tarball/local, oinkcode/auth-key/basic)
   build.ts                  # mergeSources: дедуп по SID/содержимому, перенумерация
-  exporter.ts               # файл / HTTP / каталог для Clear NDR
+  exporter.ts               # файл · Clear NDR REST (upload → apply) · HTTP POST · каталог
   vpn.ts                    # wg-quick: конфиг, up/down, status, проверка окружения
   service.ts                # оркестрация: fetch → build → export, cron, сид каталога
   seed.ts                   # каталог 25 источников + настройки по умолчанию

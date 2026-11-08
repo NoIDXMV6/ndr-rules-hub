@@ -17,6 +17,41 @@ Exact instructions for automatic delivery of the final ruleset from **NDR Rules 
 | Auto-update | Clear NDR’s built-in scheduler | the Hub’s built-in cron (or a cron on Clear NDR) |
 | When to choose | Hub and Clear NDR on the same network | the Hub is unreachable from Clear NDR (DMZ, NAT) |
 
+Both schemes on one map (solid arrows — file delivery, dashed — schedule trigger):
+
+```mermaid
+flowchart TB
+    subgraph HUB["NDR Rules Hub — Next.js :3080"]
+        direction TB
+        BLD["Build<br/>clearndr-import.rules + sha256"]
+        CRON["Hub cron — Settings → Schedule<br/>fetch → build → export"]
+        REST["exporter.ts — “Clear NDR REST” mode<br/>the “Export to Clear NDR” button<br/>or the cron step (cronExport)"]
+        PULLAPI["GET /api/export<br/>latest build over HTTP"]
+        BLD --> REST
+        BLD --> PULLAPI
+        CRON -.-> BLD
+    end
+
+    subgraph CNDR["Clear NDR (Scirius)"]
+        direction TB
+        SRC["Source “NDR Rules Hub”<br/>PUSH: method local · PULL: method http"]
+        RS["Ruleset + enabled category"]
+        UPALL["update_push_all<br/>update → generate → push"]
+        SUR["Suricata 7 — ruleset in production"]
+        SRC --> RS
+        RS --> UPALL
+        UPALL --> SUR
+    end
+
+    REST -- "Scheme B: PUSH — the Hub sends it<br/>find-or-create → upload → update_push_all<br/>Authorization: Token" --> SRC
+    PULLAPI -- "Scheme A: PULL — Clear NDR fetches the file<br/>URL source + Recurrence / cron" --> SRC
+
+    classDef engine fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ext fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    class BLD,CRON,REST,PULLAPI engine
+    class SRC,RS,UPALL,SUR ext
+```
+
 In both schemes the file is the same — `clearndr-import.rules` (the final set after deduplication, SID remap into the 1e9+ block, and `suricata -T` validation).
 
 ---
@@ -62,6 +97,25 @@ curl -sk https://clearndr.local/rest/rules/source/?name=__probe__ \
 ## 3. Scheme A: PULL — Clear NDR fetches the file from the Hub
 
 The idea: the Hub already serves the final file over HTTP — `GET http://<hub>:3080/api/export`. In Clear NDR, create a Source of type “HTTP URL” pointing at that address, attach it to a Ruleset, and let Clear NDR’s built-in scheduler do the updating. The Hub stays a plain file provider: after every build the fresh file is served at the same address.
+
+The data flow during a scheduled update:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Clear NDR — celery scheduler<br/>Suricata → Update → Recurrence
+    participant S as Source “NDR Rules Hub”<br/>method http · uri /api/export
+    participant H as Hub — GET /api/export
+    participant X as Suricata
+
+    C->>S: schedule trigger (e.g. Daily)
+    S->>H: GET http://hub-host:3080/api/export
+    H-->>S: 200 — clearndr-import.rules
+    S->>S: import the rules into the source database
+    C->>C: generate ruleset — enabled category
+    C->>X: push the file → engine restart
+    Note over C,X: the Suricata → Update button does the same immediately, a cron with update_push_all does the same without the UI
+```
 
 ### Prerequisites
 
@@ -175,6 +229,36 @@ What the Hub does on export (the “Export to Clear NDR” button, the end of �
 GET  /rest/rules/source/?name=NDR Rules Hub   → find the source (create if missing)
 POST /rest/rules/source/<pk>/upload/          → multipart upload of clearndr-import.rules
 POST /rest/suricata/update_push_all/          → rebuild the ruleset and apply it to Suricata
+```
+
+The same chain as a sequence — with all branches (source exists/missing, SID conflict, the apply flag):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant H as Hub — exporter.ts<br/>“Clear NDR REST” mode
+    participant A as Clear NDR — Scirius REST API<br/>/rest/… · Authorization: Token
+    participant X as Suricata
+
+    H->>A: GET /rest/rules/source/?name=NDR Rules Hub
+    alt source found
+        A-->>H: results → source pk
+    else source missing
+        H->>A: POST /rest/rules/source/ — method local, datatype sig
+        A-->>H: 201 → new source pk
+    end
+    H->>A: POST /rest/rules/source/{pk}/upload/ — multipart clearndr-import.rules
+    A->>A: import the rules into the source database
+    alt SID conflict in the file
+        A-->>H: 400 conflicting SID — Hub: “enable deduplication in the build settings”
+    end
+    A-->>H: {"upload":"ok"}
+    opt “Apply ruleset” flag is on (default)
+        H->>A: POST /rest/suricata/update_push_all/
+        A->>X: update sources → generate ruleset → push → restart
+        A-->>H: {"update_push_all":"ok"}
+    end
+    H-->>H: log (scope export) — chain steps
 ```
 
 Every step is visible in the Hub’s “Logs” (scope `export`): `source “NDR Rules Hub” found (pk=7); file clearndr-import.rules uploaded and imported (6.2 MB); ruleset applied to Suricata (update_push_all: ok)`.

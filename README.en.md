@@ -4,7 +4,7 @@
 
 # NDR Rules Hub
 
-**[Русская документация → README.md](README.md)** · architecture: [architecture.md (rus)](architecture.md) · [architecture.en.md (eng)](architecture.en.md)
+**[Русская документация → README.md](README.md)** · architecture: [architecture.md (rus)](architecture.md) · [architecture.en.md (eng)](architecture.en.md) · Clear NDR integration: [docs/clearndr-integration.md (rus)](docs/clearndr-integration.md) · [docs/clearndr-integration.en.md (eng)](docs/clearndr-integration.en.md)
 
 A management service for **Snort / Suricata** rule sources with a full-featured Web UI, scheduled
 automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID conflict resolution,
@@ -329,7 +329,7 @@ src/lib/engine/
   convert.ts                # IP/domain/URL → rule converters
   fetcher.ts                # fetching (url/tarball/local, oinkcode/auth-key/basic)
   build.ts                  # mergeSources: SID/content dedup, renumbering
-  exporter.ts               # file / HTTP / directory for Clear NDR
+  exporter.ts               # file · Clear NDR REST (upload → apply) · HTTP POST · directory
   vpn.ts                    # wg-quick: config, up/down, status, environment check
   service.ts                # orchestration: fetch → build → export, cron, catalog seed
   seed.ts                   # catalog of 25 sources + default settings
