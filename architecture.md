@@ -633,5 +633,10 @@ DRF-пагинация, multipart-upload, гейт «conflicting SID»). Скв�
 - **Скрипты интеграции с Clear NDR** — `scripts/clearndr-check.sh` (проверка токена, источников
   и наборов), `clearndr-setup-pull.sh` (идемпотентная настройка PULL-схемы), `clearndr-push.sh`
   (push готового файла, cron-совместим), `clearndr-mock-server.py` (mock REST API Scirius).
+- **Обновление Clear NDR** — `scripts/clearndr-update.sh`: обновление docker-стека Clear NDR
+  Community (stamusctl) на новую версию с сохранением всех настроек — дамп PostgreSQL до остановки
+  (`pg_dumpall`), архив `config/` и volume `<project>_db-data`, затем штатный
+  `stamusctl compose update` → `pull` → `up -d`, health-checks (контейнеры, веб-интерфейс,
+  REST API по токену) и автооткат `config/` при неудаче. Инструкция — `docs/clearndr-update.md`.
 - **Тесты** — vitest, 84 теста: парсер, конвертеры, дедупликация, загрузчик (включая
   magic-байты и кэш), wg-quick, i18n.

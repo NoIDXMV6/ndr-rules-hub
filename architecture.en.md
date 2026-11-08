@@ -636,5 +636,11 @@ of the guide.
 - **Clear NDR integration scripts** — `scripts/clearndr-check.sh` (token, sources, rulesets
   check), `clearndr-setup-pull.sh` (idempotent PULL setup), `clearndr-push.sh` (push a ready
   file, cron-friendly), `clearndr-mock-server.py` (Scirius REST API mock).
+- **Clear NDR upgrade** — `scripts/clearndr-update.sh`: upgrades the Clear NDR Community docker
+  stack (stamusctl) to a new version while preserving every setting — PostgreSQL dump before
+  stopping (`pg_dumpall`), archive of `config/` and the `<project>_db-data` volume, then the
+  standard `stamusctl compose update` → `pull` → `up -d`, health checks (containers, web UI,
+  REST API with a token) and automatic `config/` rollback on failure. Guide —
+  `docs/clearndr-update.en.md`.
 - **Tests** — vitest, 84 tests: parser, converters, deduplication, fetcher (including
   magic bytes and cache), wg-quick, i18n.

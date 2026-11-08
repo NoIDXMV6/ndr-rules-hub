@@ -346,10 +346,12 @@ scripts/
   clearndr-check.sh         # Clear NDR REST API check (token, sources, rulesets)
   clearndr-setup-pull.sh    # pull scheme setup: Hub-URL source + ruleset + schedule
   clearndr-push.sh          # push delivery of a .rules file to Clear NDR (cron-friendly)
+  clearndr-update.sh        # in-place Clear NDR stack upgrade (backups + rollback)
   clearndr-mock-server.py   # Clear NDR mock (Scirius REST) for integration testing
   make-favicon.mjs + make-favicon-ico.py  # favicon.ico from public/logo.svg (sharp + ICO)
 docs/
   clearndr-integration.md / .en.md  # exact guide to delivering and auto-updating rules to Clear NDR
+  clearndr-update.md / .en.md       # guide to upgrading the Clear NDR stack with all settings preserved
 dist/                       # VALIDATED package for Clear NDR (zip + README + SHA256)
 src/app/api/…               # REST API (Next.js route handlers)
 src/components/hub/…        # Web UI (9 tabs, bilingual)

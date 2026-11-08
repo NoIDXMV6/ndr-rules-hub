@@ -1,0 +1,278 @@
+# Обновление Clear NDR на новую версию с сохранением всех настроек
+
+Точная инструкция и скрипт: как обновить установленный **Clear NDR Community** (Stamus Networks,
+docker-стек под управлением `stamusctl`) на новую версию, не потеряв ни одной настройки: источники
+правил, наборы (rulesets), включённые категории, remap SID, пороги/подавления, пользователей и
+API-токены, конфигурацию Suricata/nginx и сертификаты.
+
+> Процедура основана на официальной документации Stamus Networks:
+> [common-operations](https://docs.clearndr.io/docs/start/common-operations) (штатный путь обновления),
+> [stamusctl compose update](https://docs.clearndr.io/docs/stamusctl/compose/update) (команда
+> обновления шаблона с сохранением пользовательских значений) и
+> [github.com/StamusNetworks/stamusctl](https://github.com/StamusNetworks/stamusctl).
+> Скрипт: `scripts/clearndr-update.sh`. Проверен на мок-стенде (37/37: dry-run, полный цикл,
+> автооткат при сбое, работа без терминала).
+
+---
+
+## 1. Как устроено обновление и что сохраняется
+
+Обновление состоит из двух независимых частей:
+
+| Часть | Команда | Что происходит |
+|---|---|---|
+| CLI `stamusctl` | скачать свежий бинарь с `dl.clearndr.io` | инструмент управления стеком (по желанию, флаг `--update-cli`) |
+| Стек Clear NDR | `stamusctl compose update --version VER` → `compose pull` → `compose up -d` | новый шаблон + свежие образы; **пользовательские значения конфигурации stamusctl сохраняет автоматически** |
+
+Команда `compose update` официально документирована как «merge existing configuration with new
+template → preserves custom configuration values → maintains compatibility with existing data» —
+то есть настройки, заданные через `stamusctl config set` (интерфейсы, HOME_NET и т.п.), переносятся
+в новый шаблон сами. Тем не менее скрипт дополнительно снимает три уровня бэкапа:
+
+| Уровень | Что | Когда снимается | Файл |
+|---|---|---|---|
+| 1. Дамп БД | `pg_dumpall` PostgreSQL (сервис `db`, пользователь `selks`): источники, наборы, категории, SID, пользователи, **API-токены** | **до остановки стека** (пока БД жива) | `backups/db-dump-<ts>.sql.gz` |
+| 2. Каталог `config/` | compose-файлы, конфиги Suricata/nginx/fluentd, TLS-сертификаты, значения stamusctl | после остановки стека | `backups/config-<ts>.tar.gz` |
+| 3. Docker volume | `<project>_db-data` — сырые файлы данных PostgreSQL | после остановки стека | `backups/volume-<...>_db-data-<ts>.tar.gz` |
+
+Плюс в каждом прогоне создаётся `manifest-<ts>.txt` (версии, `stamusctl config get`, список
+контейнеров и образов до обновления) и `SHA256SUMS-<ts>.txt`. Исключения из архива `config/` —
+данные событий OpenSearch, pcap и логи (это не настройки; полный снимок — флаг `--full-config`).
+
+Карта процесса:
+
+```mermaid
+flowchart TB
+    subgraph B["1. Подготовка (стек работает)"]
+        P["preflight: docker, stamusctl,<br/>каталог инстанса, место на диске"]
+        S["снимок состояния → manifest"]
+        D["pg_dumpall → db-dump.sql.gz"]
+        C{"подтверждение<br/>(даунтайм!)"}
+        P --> S --> D --> C
+    end
+
+    subgraph U["2. Обновление"]
+        DOWN["stamusctl compose down"]
+        TC["tar config/ → config.tar.gz"]
+        TV["docker run … tar volume → volume.tar.gz"]
+        UPD["stamusctl compose update --version VER<br/>(сохраняет пользовательские значения)"]
+        PULL["stamusctl compose pull"]
+        UP["stamusctl compose up -d"]
+        DOWN --> TC --> TV --> UPD --> PULL --> UP
+    end
+
+    subgraph V["3. Проверки и итог"]
+        HC{"контейнеры Up +<br/>https://localhost/ + REST API"}
+        OK["отчёт: версия X → Y,<br/>путь бэкапов"]
+        RB["ОТКАТ: восстановить config/<br/>из архива, up -d"]
+        UP --> HC
+        HC -- "ok" --> OK
+        HC -- "fail" --> RB
+    end
+
+    C -- "да" --> DOWN
+    C -- "нет" --> X["выход без изменений"]
+
+    classDef engine fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ext fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    class P,S,D,TC,TV,UPD,PULL,UP engine
+    class C,HC,X ext
+```
+
+---
+
+## 2. Предусловия
+
+1. Установка Clear NDR Community в **docker** (канонический способ через `stamusctl`:
+   `stamusctl compose init` создаёт каталог `config/` рядом с данными). Проверка:
+   `stamusctl config list` показывает ваш инстанс.
+2. `stamusctl` в PATH. Если нет — установить:
+   ```bash
+   wget https://dl.clearndr.io/stamusctl-linux-amd64
+   chmod +x stamusctl-linux-amd64
+   sudo mv stamusctl-linux-amd64 /usr/local/bin/stamusctl
+   stamusctl version
+   ```
+3. Запущенный Docker Engine (`docker ps` работает) и работающий стек (для дампа БД).
+4. Достаточно места в каталоге бэкапов: ≥ 2 × размер `config/` + 2 ГБ (скрипт проверяет и
+   откажется продолжать при нехватке).
+5. Права: команды docker — из группы `docker` или через `sudo`.
+
+---
+
+## 3. Использование скрипта
+
+```bash
+# 1) Посмотреть план, ничего не меняя (безопасно выполнять всегда)
+sudo ./scripts/clearndr-update.sh --dry-run
+
+# 2) Обновить до последней версии (из каталога инстанса — родителя config/)
+sudo ./scripts/clearndr-update.sh
+
+# 3) Обновить до конкретной версии + заодно обновить stamusctl
+sudo ./scripts/clearndr-update.sh --version 1.2.0 --update-cli
+
+# 4) Если запуск не из каталога инстанса
+sudo ./scripts/clearndr-update.sh --instance /opt/clearndr
+
+# 5) Автоматически (cron/CI): без вопросов, с проверкой REST API по токену
+sudo ./scripts/clearndr-update.sh --yes \
+     --token 3064d9deadbeef36436daba5531e105123ec0fee
+```
+
+Полный набор флагов:
+
+| Флаг | Значение по умолчанию | Описание |
+|---|---|---|
+| `--version VER` | `latest` (определяется по релизам stamusctl-templates) | целевая версия шаблона/стека |
+| `--instance DIR` | текущий каталог | каталог инстанса (родитель `config/`) |
+| `--config-dir DIR` | `<instance>/config` | нестандартный каталог конфигурации |
+| `--backup-dir DIR` | `<instance>/backups` | куда складывать бэкапы |
+| `--update-cli` | выкл | заодно обновить бинарник `stamusctl` (dl.clearndr.io) |
+| `--skip-db-dump` | выкл | не снимать дамп PostgreSQL (не рекомендуется) |
+| `--skip-volume` | выкл | не копировать docker volume с данными БД |
+| `--full-config` | выкл | архивировать `config/` целиком, включая данные событий |
+| `--url URL` | `https://localhost/` | адрес веб-интерфейса для health-check |
+| `--token TOKEN` | `$CLEAR_NDR_TOKEN` | токен для проверки REST API после обновления |
+| `--health-timeout S` | 300 | сколько секунд ждать готовности стека |
+| `--yes` | выкл | не спрашивать подтверждение (принимать дефолты `compose update`) |
+| `--no-rollback` | выкл | запретить автооткат при неудаче |
+| `--dry-run` | выкл | только показать план и команды |
+
+> В интерактивном режиме `stamusctl compose update` может спросить значения конфигурации —
+> Enter принимает текущие/дефолтные значения (так рекомендует документация). При `--yes`
+> скрипт сам «нажимает Enter» на всех промптах.
+
+---
+
+## 4. Что делает скрипт по шагам
+
+1. **Preflight** — docker, stamusctl, curl, tar; каталог инстанса; текущая версия (`stamusctl
+   config version`); целевая версия (аргумент или последний релиз stamusctl-templates через
+   GitHub API); проверка свободного места.
+2. **Снимок состояния** → `manifest-<ts>.txt`: версии, `config get`, контейнеры, образы.
+3. **Дамп БД** (стек ещё работает): `pg_dumpall -U selks | gzip` → `db-dump-<ts>.sql.gz`.
+   Если стек остановлен — дамп пропускается с предупреждением (не фатально).
+4. **План + подтверждение**: печатается всё, что будет сделано; без `--yes` спрашивает `да/нет`
+   (в non-tty без `--yes` — отказ).
+5. **Остановка**: `stamusctl compose down --timeout 90` (graceful).
+6. **Бэкап `config/`** → `config-<ts>.tar.gz` (исключая данные событий/pcap/логи).
+7. **Бэкап volume** `<project>_db-data` через `docker run --rm … tar` →
+   `volume-<...>-<ts>.tar.gz`.
+8. **[опц.] Обновление stamusctl** — бинарь с `dl.clearndr.io` (amd64/arm64), замена в каталоге,
+   где стоит текущий.
+9. **Обновление стека**: `stamusctl compose update --version VER` (Enter на промптах = дефолты)
+   → `compose pull` → `compose up -d`.
+10. **Health-check** (до `--health-timeout` секунд): контейнеры `scirius`, `db`, `suricata`,
+    `nginx` в состоянии `Up`; веб-интерфейс отвечает 200/302; при заданном токене —
+    `GET /rest/rules/source/` (HTTP 200 + число источников = настройки правил на месте);
+    просмотр свежих ошибок в журнале scirius.
+11. **Итог**: отчёт «версия X → Y», путь к бэкапам, next steps. Код выхода 0.
+12. **При неудаче — автооткат**: `compose down` → текущий `config/` переносится в
+    `config.failed-<ts>` → распаковка архива `config-<ts>.tar.gz` → `compose up -d`.
+    Код выхода 2. Данные БД (volume) при откате не трогаются — дамп для точечного
+    восстановления лежит рядом (см. §6).
+
+Все сообщения дублируются в лог `<backup-dir>/update-<ts>.log` (права 600 — в бэкапах и логах
+есть потенциально секретные значения конфигурации).
+
+---
+
+## 5. Проверка после обновления (ручной чек-лист)
+
+1. ☐ Веб-интерфейс открывается, логин работает.
+2. ☐ **Sources** — источник «NDR Rules Hub» на месте, дата последнего обновления источников
+   свежая; **Rulesets** — `rules_count` соответствует ожидаемому.
+3. ☐ **Suricata → Update** — пересборка/применение проходит без ошибок.
+4. ☐ Если Hub настроен (PULL/PUSH, см. [clearndr-integration.md](clearndr-integration.md)) —
+   токен действует (`scripts/clearndr-check.sh` → HTTP 200), автопоставка правил продолжает
+   работать: после cron-цикла в History Clear NDR появились записи `update_source`/`update_push_all`.
+5. ☐ Через сутки — журнал Clear NDR без ошибок, диск не переполнен (`docker system df`).
+
+Скрипт проверяет пункты 1–3 автоматически; пункт 4 — по токену (`--token`).
+
+---
+
+## 6. Откат и восстановление вручную
+
+Скрипт откатывает `config/` автоматически. Данные PostgreSQL (volume) он **не** трогает —
+при необходимости точечного восстановления из дампа:
+
+```bash
+# 1. Поднять только БД
+stamusctl compose up -d db
+
+# 2. Восстановить кластер из дампа (пользователь selks — шаблонный)
+zcat backups/db-dump-<ts>.sql.gz | \
+  docker exec -i "$(stamusctl compose ps -q db)" psql -U selks -d postgres
+
+# 3. Перезапустить стек целиком
+stamusctl compose restart
+```
+
+Восстановление каталога конфигурации вручную (если нужен откат без скрипта):
+
+```bash
+stamusctl compose down
+mv config config.broken-<ts>
+tar xzf backups/config-<ts>.tar.gz -C /путь/к/инстансу
+stamusctl compose up -d
+```
+
+> Если `compose pull` уже перезаписал локальные теги образов (при `latest`-версиях), для отката
+> на конкретную версию укажите её: `stamusctl compose update --version <старая>` + `pull` + `up -d`.
+
+---
+
+## 7. Ручной вариант без скрипта (штатный минимум)
+
+Ровно то, что делает скрипт, в минимальном виде — когда нужно «здесь и сейчас»:
+
+```bash
+cd /путь/к/инстансу            # родитель config/
+
+# 0. Бэкап настроек (обязательный минимум)
+stamusctl config get > config-before-update.txt
+docker exec "$(stamusctl compose ps -q db)" pg_dumpall -U selks | gzip > db-dump.sql.gz
+
+# 1. Обновление шаблона + образов
+stamusctl compose update            # или: stamusctl compose update --version 1.2.0
+stamusctl compose pull
+
+# 2. Перезапуск
+stamusctl compose up -d
+
+# 3. Проверка
+stamusctl compose ps
+stamusctl config version
+curl -k -sI https://localhost/ | head -1
+```
+
+---
+
+## 8. Диагностика типовых ситуаций
+
+| Симптом | Причина и решение |
+|---|---|
+| «Каталог конфигурации инстанса не найден» | Скрипт запущен не из каталога инстанса. Укажите `--instance /opt/clearndr` или запустите из родителя `config/` |
+| «Не найден stamusctl» | Установите бинарь (§2) или задайте `STAMUSCTL_PATH=/путь/к/stamusctl` |
+| «Мало места в …/backups» | Освободите место или укажите `--backup-dir` на другой диск |
+| «Стек не запущен — дамп БД пропущен» | Информационное: дамп снимается только из живого стека. Запустите стек или продолжайте без дампа |
+| `compose update` спросил значения конфигурации | Это штатно: Enter = принять текущие/дефолтные. В cron используйте `--yes` |
+| Health-check не проходит за 300 с | Большие образы качаются долго: увеличьте `--health-timeout 600`. Проверьте `stamusctl compose logs` |
+| REST API вернул не 200 | Токен перегенерирован/недействителен — возьмите свежий (Edit Token → Regenerate, см. раздел 2 [clearndr-integration.md](clearndr-integration.md)) и повторите `scripts/clearndr-check.sh` |
+| После обновления «слетели» дашборды OpenSearch | Штатно: Admin → System Settings → Kibana → «Reset SN dashboards»; заранее экспортируйте saved objects (Stack Management → Saved Objects → Export) |
+| Нужен откат CLI stamusctl | Скачайте предыдущий релиз с GitHub и замените бинарь — `compose update` версии шаблона это не меняет |
+
+---
+
+## 9. Чек-лист обновления
+
+1. ☐ `stamusctl config list` — инстанс виден; `docker ps` — стек работает.
+2. ☐ `clearndr-update.sh --dry-run` — план выглядит корректно, места на диске достаточно.
+3. ☐ Окно даунтайма согласовано (обычно 2–10 минут).
+4. ☐ Запуск: `clearndr-update.sh [--version X.Y.Z] [--update-cli] --yes --token <токен>`.
+5. ☐ Код выхода 0; отчёт «X → Y»; бэкапы в `backups/` (3 файла + manifest + SHA256SUMS).
+6. ☐ Ручной чек-лист §5 пройден (Sources/Rulesets/Suricata → Update/автопоставка).
+7. ☐ Через сутки: `docker image prune -f`, старые `backups/config.failed-*` удалены,
+   свежий `backups/` перенесён на долговременное хранение.
