@@ -126,6 +126,8 @@ describe('parseProbeOutput: разбор вывода probe-скрипта', () 
     'pg_tag\tpostgres:16',
     'suricata_interfaces\ttzsp0',
     'mikrocata\t1',
+    'compose_ok\t0',
+    'compose_err\tservice "opensearch" refers to undefined network network: invalid compose project',
     'max_map_count\t262144',
     'mem_avail_mb\t7900',
     'docker_root\t/var/lib/docker',
@@ -144,11 +146,19 @@ describe('parseProbeOutput: разбор вывода probe-скрипта', () 
     expect(p.pgTag).toBe('postgres:16')
     expect(p.suricataInterfaces).toBe('tzsp0')
     expect(p.mikrocata).toBe(true)
+    expect(p.composeOk).toBe(false)
+    expect(p.composeErr).toContain('undefined network network')
     expect(p.maxMapCount).toBe(262144)
     expect(p.memAvailMb).toBe(7900)
     expect(p.diskFreeMb).toBe(41200)
     expect(p.webHttp).toBe('200')
     expect(p.apiSources).toBe('5')
+  })
+
+  it('compose_ok=1 и отсутствие compose_err → целостная конфигурация', () => {
+    const p = parseProbeOutput('compose_ok\t1\nstack_version\t9.9.9')
+    expect(p.composeOk).toBe(true)
+    expect(p.composeErr).toBeUndefined()
   })
 
   it('контейнеры: имя, статус, сервис, признак Up', () => {
@@ -204,6 +214,11 @@ describe('buildProbeScript: probe-скрипт хоста', () => {
     expect(s).toContain('CT\\t{{.Names}}\\t{{.Status}}')
     expect(s).toContain('Authorization: Token $TOKEN')
     expect(s).toContain('/rest/rules/source/')
+    // v4: проверка целостности конфигурации инстанса
+    expect(s).toContain('config/docker-compose.yml')
+    expect(s).toContain('config -q')
+    expect(s).toContain('p compose_ok 1')
+    expect(s).toContain('clearndr-repair-stack.sh')
   })
 
   it('одинарные кавычки в URL/токене вырезаются (нет инъекций)', () => {

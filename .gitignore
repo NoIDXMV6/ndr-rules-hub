@@ -70,3 +70,4 @@ server.log
 # ── песочница: клон Scirius и артефакты релизов ──────────────────────────
 /vendor/
 /dist/
+tool-results/

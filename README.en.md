@@ -32,7 +32,7 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 | **Build** | A final `suricata.rules` file with a header, per-source statistics and SHA-256 |
 | **Clear NDR export** | 1) file for manual import; 2) **native integration via the Clear NDR (Scirius) REST API** — upload + `update_push_all` with a token; 3) pull scheme: Clear NDR fetches the file from the Hub (`/api/export`) and updates itself on its own schedule; 4) HTTP POST to any endpoint; 5) copying to a shared directory (volume). Step-by-step guide — [docs/clearndr-integration.en.md](docs/clearndr-integration.en.md) |
 | **WireGuard VPN** | Full setup: wg-quick config editor, syntax check, up/down, status (`wg show`), environment check (wg, wg-quick, /dev/net/tun, NET_ADMIN). Rule downloads through the tunnel |
-| **Clear NDR update** | A tab that detects the installed version → finds the latest stamusctl-templates release → when a newer one exists, lets you pick options (OpenSearch/PostgreSQL data, backups, stamusctl CLI) and start the update in one click. The `clearndr-update.sh` script runs on the host (SSH or local), the log streams in real time, failures trigger automatic rollback, and the result is verified (containers, web UI, REST API). Guide — [docs/clearndr-update.en.md](docs/clearndr-update.en.md) |
+| **Clear NDR update** | A tab that detects the installed version → finds the latest stamusctl-templates release → when a newer one exists, lets you pick options (OpenSearch/PostgreSQL data, backups, stamusctl CLI) and start the update in one click. The `clearndr-update.sh` script runs on the host (SSH, or local when the hub is deployed in a container on the Clear NDR host), the log streams in real time, failures trigger automatic rollback, and the result is verified (containers, web UI, REST API). v4: self-restore of a missing `config/docker-compose.yaml`, `docker compose config` validation, auto-patch of the `networks` section (a gap in the 3.3.x templates), backup gate and rollback guard. A separate `clearndr-repair-stack.sh` repairs a broken instance `config/`. Guide — [docs/clearndr-update.en.md](docs/clearndr-update.en.md) |
 | **Schedule** | cron (node-cron): source update → build → export. Controlled from the UI |
 | **Logs** | All fetch/build/export/VPN events with levels and filters |
 | **Bilingual UI** | Russian and English via localization files (`src/lib/i18n/`). Language detected from browser strings (`navigator.languages`), RU/EN switch in the header, choice persisted in `localStorage`. Favicon (`public/favicon.ico`, 16–256 px) and logo included |
@@ -350,7 +350,8 @@ scripts/
   clearndr-check.sh         # Clear NDR REST API check (token, sources, rulesets)
   clearndr-setup-pull.sh    # pull scheme setup: Hub-URL source + ruleset + schedule
   clearndr-push.sh          # push delivery of a .rules file to Clear NDR (cron-friendly)
-  clearndr-update.sh        # in-place Clear NDR stack upgrade (backups + rollback)
+  clearndr-update.sh        # in-place Clear NDR stack upgrade (backups + rollback + config/ v4 safeguards)
+  clearndr-repair-stack.sh  # repair a broken instance config/ (missing compose file, networks section)
   clearndr-mock-server.py   # Clear NDR mock (Scirius REST) for integration testing
   make-favicon.mjs + make-favicon-ico.py  # favicon.ico from public/logo.svg (sharp + ICO)
 docs/

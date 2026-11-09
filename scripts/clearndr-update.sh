@@ -36,6 +36,20 @@
 #   • Health-checks (контейнеры, веб-интерфейс, REST API по токену), сбор
 #     диагностики при сбое (fail-logs) и автооткат config/ с проверкой результата.
 #
+# Возможности (v4) — защита от повреждённой конфигурации (инцидент 09.11.2026,
+# когда после сбойного обновления в config/ пропал docker-compose.yaml):
+#   • Preflight-восстановление: если compose-файла нет — скрипт сам возвращает
+#     его (и остальные файлы) из config.failed-*/ или архивов config-*.tar.gz;
+#   • Проверка «docker compose config» ДО изменений и ПОСЛЕ compose update:
+#     проект обязан загружаться, иначе обновление прерывается/откатывается;
+#   • Автопатч сетей: шаблоны 3.3.x ссылаются на сеть network, не определяя её
+#     («refers to undefined network») — скрипт дописывает секцию networks
+#     (external на фактическую docker-сеть стека, найденную по seed);
+#   • Целостность бэкапа: архив config/ без compose-файла считается неполным —
+#     обновление прерывается ДО деструктивных действий;
+#   • Защита отката: если свежий архив снят с уже повреждённого config/,
+#     откат автоматически берёт старый полный архив или config.failed-*/.
+#
 # Примеры:
 #   sudo ./clearndr-update.sh                              # до последней версии
 #   sudo ./clearndr-update.sh --version 1.2.0              # до конкретной версии
@@ -71,6 +85,8 @@ OPENSEARCH_DATA="ask"        # ask|keep|wipe|guide
 PG_STRATEGY="ask"            # ask|restore|cancel
 NO_COLOR=0                   # --no-color
 SKIP_MIKROCATA_CHECK=0       # --skip-mikrocata-check
+RESTORED_COMPOSE=0           # v4: compose-файл возвращён из бэкапа в ходе прогона
+NETWORKS_PATCHED=0           # v4: сколько раз дописывалась секция networks
 
 STACK_SERVICES=(scirius db suricata nginx opensearch)   # критичные сервисы стека
 COMPOSE_STOP_TIMEOUT=90
@@ -278,6 +294,171 @@ stack() {  # любая команда stamusctl compose/config — из кат�
   ( cd "$INSTANCE_DIR" && "$STAMUSCTL_BIN" "$@" )
 }
 
+# ------------------------- целостность конфигурации (v4) ---------------------
+compose_file_name() {  # docker-compose.yaml|yml либо код 1, если файла нет
+  if [ -f "$CONFIG_DIR/docker-compose.yaml" ]; then echo docker-compose.yaml
+  elif [ -f "$CONFIG_DIR/docker-compose.yml" ]; then echo docker-compose.yml
+  else return 1; fi
+}
+
+# Источник для восстановления compose-файла: config.failed-*/ или архивы.
+# Возвращает ПУТЬ К ФАЙЛУ (docker-compose.yaml внутри config.failed) или архив.
+find_good_config_source() {
+  local cand f
+  # 1) сохранённые «сломанные» конфиги (свежие сверху) — там может быть compose-файл
+  while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    for f in docker-compose.yaml docker-compose.yml; do
+      [ -f "$cand/config/$f" ] && { echo "$cand/config/$f"; return 0; }
+    done
+  done < <(ls -1dt "$INSTANCE_DIR"/config.failed-*/ 2>/dev/null || true)
+  # 2) архивы config-*.tar.gz (свежие сверху), содержащие compose-файл
+  while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    if [ -s "$cand" ] && tar tzf "$cand" 2>/dev/null | grep -q 'docker-compose\.'; then
+      echo "$cand"; return 0
+    fi
+  done < <(ls -1t "${BACKUP_DIR_OPT:-}"/config-*.tar.gz "${BACKUP_DIR:-}"/config-*.tar.gz "$INSTANCE_DIR"/backups/config-*.tar.gz \
+             "$INSTANCE_DIR/../backups"/config-*.tar.gz "$INSTANCE_DIR/../../backups"/config-*.tar.gz /opt/ClearNDR/backups/config-*.tar.gz 2>/dev/null \
+           | awk '!seen[$0]++' || true)
+  return 1
+}
+
+# Распаковать из архива config-*.tar.gz только те файлы, которых не хватает
+restore_missing_from_archive() {
+  local arch="$1" f restored=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    f="${f#config/}"
+    case "$f" in ''|*/) continue ;; esac
+    if [ ! -e "$CONFIG_DIR/$f" ]; then
+      if tar xzf "$arch" -C "$INSTANCE_DIR" "config/$f" 2>/dev/null; then
+        msg_warn "Восстановлен отсутствующий файл: config/$f"
+        restored=$((restored + 1))
+        case "$f" in docker-compose.yaml|docker-compose.yml) RESTORED_COMPOSE=1 ;; esac
+      fi
+    fi
+  done < <(tar tzf "$arch" 2>/dev/null | grep -v '/$' || true)
+  [ "$restored" -gt 0 ] && msg_ok "Восстановлено файлов из архива: $restored"
+  return 0
+}
+
+ensure_compose_file() {  # без compose-файла стек неуправляем (stat … no such file)
+  compose_file_name >/dev/null 2>&1 && return 0
+  msg_warn "В $CONFIG_DIR нет docker-compose.yaml — stamusctl compose down/up упадёт с «no such file or directory»."
+  if [ "$DRY_RUN" -eq 1 ]; then
+    msg_err "dry-run: сначала восстановите конфигурацию (clearndr-repair-stack.sh --instance-dir $INSTANCE_DIR)."
+    exit 1
+  fi
+  local src
+  src="$(find_good_config_source)" || {
+    msg_err "Источник для восстановления не найден (config.failed-*, backups/config-*.tar.gz)."
+    msg_err "Восстановите конфигурацию: clearndr-repair-stack.sh --instance-dir $INSTANCE_DIR"
+    exit 1
+  }
+  msg_warn "Восстанавливаю недостающие файлы config/ из: $src"
+  case "$src" in
+    *.tar.gz) restore_missing_from_archive "$src" ;;
+    *)  local d; d="$(dirname "$src")"
+        mkdir -p "$CONFIG_DIR"
+        cp -an "$d/." "$CONFIG_DIR/" 2>/dev/null || true
+        RESTORED_COMPOSE=1 ;;
+  esac
+  if compose_file_name >/dev/null 2>&1; then
+    msg_ok "compose-файл на месте — конфигурация восстановлена из $src"
+  else
+    msg_err "Восстановление не помогло — используйте clearndr-repair-stack.sh --instance-dir $INSTANCE_DIR"
+    exit 1
+  fi
+}
+
+# Фактическая docker-сеть стека (для external-определения в compose)
+detect_network_name() {
+  local seed ct nets n
+  seed="$(detect_seed)"
+  if [ -n "$seed" ]; then
+    ct="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -- "$seed" | head -1 || true)"
+    if [ -n "$ct" ]; then
+      nets="$(docker inspect "$ct" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null || true)"
+      [ -n "$nets" ] && { echo "$nets" | awk '{print $1}'; return 0; }
+    fi
+    n="$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -- "$seed" | head -1 || true)"
+    [ -n "$n" ] && { echo "$n"; return 0; }
+  fi
+  return 1
+}
+
+append_network_definition() {  # $1 — логическое имя сети из compose
+  local net="$1" f actual
+  f="$(compose_file_name)" || return 1
+  actual="$(detect_network_name || true)"
+  {
+    echo ''
+    echo '# Секция добавлена clearndr-update.sh: шаблон ссылается на сеть, не определяя её'
+    echo 'networks:'
+    echo "  $net:"
+    if [ -n "${actual:-}" ]; then
+      echo "    name: $actual"
+      echo '    external: true'
+    fi
+  } >> "$CONFIG_DIR/$f"
+  NETWORKS_PATCHED=$((NETWORKS_PATCHED + 1))
+  # предупреждения — в stderr: функцию зовут внутри $() для кода возврата,
+  # stdout уходит в переменную вызывающего и на консоль не попадает
+  if [ -n "${actual:-}" ]; then
+    msg_warn "В $f добавлена сеть «$net» → существующая docker-сеть «$actual» (external)" >&2
+  else
+    msg_warn "В $f добавлена сеть «$net» (compose создаст сеть проекта — фактическую определить не удалось)" >&2
+  fi
+  return 0
+}
+
+# Проверка, что проект вообще загружается docker compose, с автопатчем сетей.
+# 0 — ок; 1 — не удалось (причина напечатана).
+ensure_compose_networks() {
+  local err net tries=0 appended=" "
+  while true; do
+    if err="$(validate_compose_project)"; then return 0; fi
+    net="$(printf '%s' "$err" | sed -n 's/.*refers to undefined network \([^:]*\).*/\1/p' | head -1 | xargs || true)"
+    if [ -z "$net" ] || [ "$tries" -ge 3 ] || [[ "$appended" == *" $net "* ]]; then
+      printf '%s' "$err"
+      return 1
+    fi
+    if grep -Eq '^networks:' "$CONFIG_DIR/$(compose_file_name)" 2>/dev/null; then
+      printf 'сеть «%s» не определена, но секция networks: в файле уже есть — добавьте сеть в неё вручную\n' "$net"
+      return 1
+    fi
+    tries=$((tries + 1)); appended="$appended$net "
+    append_network_definition "$net" || { printf 'не удалось дописать секцию networks\n'; return 1; }
+  done
+}
+
+validate_compose_project() {  # 0 — проект валиден; 1 — печатает ошибку
+  local f err
+  f="$(compose_file_name)" || { echo "compose-файл отсутствует в $CONFIG_DIR"; return 1; }
+  # старый docker без compose-плагина: проверка недоступна — не блокируем обновление
+  docker compose version >/dev/null 2>&1 || return 0
+  if err="$(docker compose --project-directory "$CONFIG_DIR" -f "$CONFIG_DIR/$f" config -q 2>&1)"; then
+    return 0
+  fi
+  echo "${err:-docker compose config завершился ошибкой}"
+  return 1
+}
+
+# Архив для отката: основной либо другой источник, содержащий compose-файл
+select_rollback_archive() {
+  local a="$1" alt
+  if [ -s "$a" ] && tar tzf "$a" 2>/dev/null | grep -q 'docker-compose\.'; then
+    echo "$a"; return 0
+  fi
+  [ -s "$a" ] && msg_warn "Архив $a не содержит compose-файл (снят с уже повреждённого config/)"
+  if alt="$(find_good_config_source)"; then
+    msg_warn "Использую источник с compose-файлом: $alt"
+    echo "$alt"; return 0
+  fi
+  return 1
+}
+
 stack_running() {  # запущен ли контейнер scirius (центральный сервис стека)
   docker ps --format '{{.Names}}' 2>/dev/null | grep -q -- '-scirius'
 }
@@ -347,6 +528,16 @@ preflight() {
   find_instance
   docker ps >/dev/null 2>&1 || { msg_err "Docker недоступен (docker ps) — нужен запущенный Docker Engine."; exit 1; }
   msg_ok "Docker Engine доступен"
+
+  # целостность конфигурации (v4): compose-файл обязан быть, проект обязан грузиться
+  ensure_compose_file
+  local cerr
+  if ! cerr="$(ensure_compose_networks)"; then
+    msg_err "Конфигурация стека не проходит проверку docker compose: $cerr"
+    msg_err "Восстановите config/ (clearndr-repair-stack.sh --instance-dir $INSTANCE_DIR) — обновление прервано БЕЗ изменений."
+    exit 1
+  fi
+  msg_ok "Конфигурация стека проходит проверку docker compose"
 
   # хост-предусловия OpenSearch (bootstrap-проверки внутри контейнера)
   local mm
@@ -762,16 +953,23 @@ recheck_strategy_after_update() {
 
 cancel_and_restore() {
   msg_info "Отмена обновления — восстанавливаю прежнюю конфигурацию…"
-  local cfg_archive="$BACKUP_DIR/config-$TS.tar.gz"
-  if [ -s "$cfg_archive" ]; then
-    stack compose down || true
-    rm -rf "$CONFIG_DIR"
-    tar xzf "$cfg_archive" -C "$INSTANCE_DIR"
-    run_prog "Запуск прежнего стека" stack compose up -d || true
-    msg_ok "Обновление отменено, прежняя конфигурация восстановлена и запущена"
-  else
-    msg_err "Архив config/ не найден ($cfg_archive) — восстановите вручную"
-  fi
+  local cfg_archive
+  cfg_archive="$(select_rollback_archive "$BACKUP_DIR/config-$TS.tar.gz")" || {
+    msg_err "Ни один источник config/ не содержит compose-файл — восстановите вручную (clearndr-repair-stack.sh)"
+    exit 2
+  }
+  stack compose down || true
+  local broken="$INSTANCE_DIR/config.failed-cancel-$TS"
+  mv "$CONFIG_DIR" "$broken" && msg_info "Текущий config/ перемещён в $broken"
+  mkdir -p "$CONFIG_DIR"
+  case "$cfg_archive" in
+    *.tar.gz) tar xzf "$cfg_archive" -C "$INSTANCE_DIR" || msg_err "Не удалось распаковать $cfg_archive" ;;
+    *)        cp -a "$(dirname "$cfg_archive")/." "$CONFIG_DIR/" 2>/dev/null || true ;;
+  esac
+  local cerr; cerr="$(ensure_compose_networks 2>&1 || true)"
+  [ -n "$cerr" ] && msg_warn "Восстановленный проект: замечание docker compose: $cerr"
+  run_prog "Запуск прежнего стека" stack compose up -d || true
+  msg_ok "Обновление отменено, прежняя конфигурация восстановлена и запущена"
   exit 0
 }
 
@@ -843,6 +1041,13 @@ backup_config() {  # уровень 2: каталог config/
   fi
   chmod 600 "$out"
   [ -s "$out" ] || { msg_err "Архив config/ пуст — продолжение опасно."; exit 1; }
+  # v4: архив без compose-файла бесполезен для отката — прерываем ДО деструктивных шагов
+  if ! tar tzf "$out" 2>/dev/null | grep -q 'docker-compose\.'; then
+    msg_err "Архив $out НЕ содержит compose-файл — config/ повреждён (нет docker-compose.yaml/yml)."
+    msg_err "Откат из такого архива оставит стек неуправляемым."
+    msg_err "Восстановите конфигурацию: clearndr-repair-stack.sh --instance-dir $INSTANCE_DIR"
+    exit 1
+  fi
   msg_ok "Архив config/: $out ($(du -h "$out" | awk '{print $1}'))"
 }
 
@@ -902,6 +1107,7 @@ do_compose_update() {  # stamusctl может спрашивать значен�
 }
 
 update_stack() {
+  RESTORED_COMPOSE=0   # v4: флаг относится к потере файла ИМЕННО при compose update
   step "Обновление конфигурации: stamusctl compose update --version $TARGET_VERSION"
   if [ "$DRY_RUN" -eq 1 ]; then
     msg_info "dry-run: stamusctl compose update --version $TARGET_VERSION"
@@ -912,6 +1118,25 @@ update_stack() {
     fi
   fi
   msg_ok "Конфигурация обновлена, значения сохранены stamusctl"
+
+  # v4: пользовательские файлы (и compose-файл, если шаблон его потерял) —
+  # возвращаем ДО pull: compose pull требует валидного проекта
+  restore_custom_files
+  if [ "$RESTORED_COMPOSE" -eq 1 ]; then
+    msg_warn "compose-файл возвращён из бэкапа: stamusctl compose update не оставил новый."
+    msg_warn "Стек будет поднят прежней конфигурацией — проверьте результат обновления."
+  fi
+  local cerr
+  if ! cerr="$(ensure_compose_networks)"; then
+    msg_err "Новая конфигурация не проходит проверку docker compose: $cerr"
+    msg_err "Обычная причина: шаблон ссылается на сеть, не определяя её (секция networks)."
+    return 1
+  fi
+  if [ "$NETWORKS_PATCHED" -gt 0 ]; then
+    msg_ok "Новая конфигурация проходит проверку docker compose (дописано секций networks: $NETWORKS_PATCHED)"
+  else
+    msg_ok "Новая конфигурация проходит проверку docker compose"
+  fi
 
   step "Загрузка новых образов"
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -982,6 +1207,7 @@ restore_custom_files() {
       if tar xzf "$arch" -C "$INSTANCE_DIR" "config/$f" 2>/dev/null; then
         msg_warn "Восстановлен пользовательский файл, отсутствующий в новой конфигурации: config/$f"
         restored=$((restored + 1))
+        case "$f" in docker-compose.yaml|docker-compose.yml) RESTORED_COMPOSE=1 ;; esac
       fi
     fi
   done <<< "$old_files"
@@ -1045,7 +1271,6 @@ start_stack() {
   recheck_strategy_after_update
   verify_suricata_interfaces
   wipe_opensearch_data || return 1
-  restore_custom_files
   restore_pg_from_dump || return 1
   step "Запуск стека"
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -1209,13 +1434,29 @@ rollback() {
     msg_info "dry-run: откат — restore config/ из $BACKUP_DIR/config-$TS.tar.gz, затем compose up -d"
     return 2
   fi
-  local cfg_archive="$BACKUP_DIR/config-$TS.tar.gz"
-  [ -s "$cfg_archive" ] || { msg_err "Архив config/ для отката не найден: $cfg_archive"; return 2; }
+  local cfg_archive
+  cfg_archive="$(select_rollback_archive "$BACKUP_DIR/config-$TS.tar.gz")" || {
+    msg_err "Ни один архив/каталог config/ не содержит compose-файл — автоматический откат невозможен."
+    msg_err "Восстановите вручную: clearndr-repair-stack.sh --instance-dir $INSTANCE_DIR"
+    return 2
+  }
   stack compose down || true
   local broken="$INSTANCE_DIR/config.failed-$TS"
   mv "$CONFIG_DIR" "$broken" && msg_info "Текущий (сломанный) config/ перемещён в $broken"
-  if tar xzf "$cfg_archive" -C "$INSTANCE_DIR"; then
-    msg_ok "config/ восстановлен из архива"
+  local restored=0
+  case "$cfg_archive" in
+    *.tar.gz)
+      if tar xzf "$cfg_archive" -C "$INSTANCE_DIR"; then restored=1; msg_ok "config/ восстановлен из архива"; fi ;;
+    *)
+      mkdir -p "$CONFIG_DIR"
+      if cp -a "$(dirname "$cfg_archive")/." "$CONFIG_DIR/" 2>/dev/null; then restored=1; msg_ok "config/ восстановлен из каталога $(dirname "$cfg_archive")"; fi ;;
+  esac
+  if [ "$restored" -eq 1 ]; then
+    # v4: секция networks могла остаться в шаблоне неопределённой — допатчиваем
+    local cerr
+    if ! cerr="$(ensure_compose_networks)"; then
+      msg_warn "Восстановленная конфигурация: замечание docker compose: $cerr"
+    fi
     if run_prog "Запуск прежнего стека" stack compose up -d; then
       msg_ok "Команда запуска выполнена"
     else

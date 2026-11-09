@@ -319,7 +319,7 @@ PersistentKeepalive = 25
     sshHelp:
       'На хосте добавьте публичный ключ (пару к приватному) в authorized_keys пользователю root (или пользователю с NOPASSWD sudo). Скрипт обновления копируется на хост автоматически перед запуском — вручную ничего запускать не нужно. Лог и артефакты прогона: <instance>/.hub-update-runs/<прогон>.',
     localHelp:
-      'Режим local запускает скрипт прямо из контейнера хаба. Работает, только если контейнеру хаба доступны docker (сокет, CLI и stamusctl) и каталог инстанса. Для типовой установки используйте SSH.',
+      'Режим local — когда хаб развёрнут в контейнере на хосте с Clear NDR: скрипт запускается прямо из контейнера хаба. В образ уже входят docker CLI и stamusctl (amd64). Требуются монтирования: /var/run/docker.sock:/var/run/docker.sock и каталог инстанса по тому же пути (например /opt/ClearNDR:/opt/ClearNDR); healthUrl должен быть доступен из контейнера (например https://172.17.0.1/).',
     versionTitle: 'Версия Clear NDR',
     versionDesc: 'Установленная версия шаблона и последний релиз stamusctl-templates',
     installed: 'Установлена',
@@ -338,6 +338,10 @@ PersistentKeepalive = 25
     checkMapCount: 'vm.max_map_count (OpenSearch ≥ 262144)',
     checkMem: 'Свободная память',
     checkDisk: 'Место под docker',
+    checkCompose: 'Конфигурация стека (docker compose)',
+    composeBroken: 'Конфигурация инстанса повреждена:',
+    composeBrokenShort: 'ошибка конфигурации',
+    composeRepairHint: 'Восстановите на хосте: sudo clearndr-repair-stack.sh --instance-dir <инстанс> (скрипт идёт в составе NDR Rules Hub, каталог scripts/). Обновление при повреждённой конфигурации заблокировано.',
     mikrocataFound: 'Интеграция MikroTik (mikrocata2selks) обнаружена — будет проверена',
     mikrocataNone: 'Интеграция MikroTik не обнаружена',
     stackState: 'Состояние стека',

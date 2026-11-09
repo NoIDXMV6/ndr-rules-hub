@@ -322,7 +322,7 @@ PersistentKeepalive = 25
     sshHelp:
       'On the host, add the public key (pair of this private key) to authorized_keys of root (or a user with NOPASSWD sudo). The update script is copied to the host automatically before each run — nothing to launch by hand. Run log and artifacts: <instance>/.hub-update-runs/<run>.',
     localHelp:
-      'Local mode runs the script straight from the hub container. It only works when the hub container can access Docker (socket, CLI and stamusctl) and the instance directory. Use SSH for a typical install.',
+      'Local mode — for a hub deployed in a container on the Clear NDR host: the script runs straight from the hub container. The image already ships docker CLI and stamusctl (amd64). Required mounts: /var/run/docker.sock:/var/run/docker.sock and the instance directory at the same path (e.g. /opt/ClearNDR:/opt/ClearNDR); healthUrl must be reachable from the container (e.g. https://172.17.0.1/).',
     versionTitle: 'Clear NDR version',
     versionDesc: 'Installed template version and the latest stamusctl-templates release',
     installed: 'Installed',
@@ -341,6 +341,10 @@ PersistentKeepalive = 25
     checkMapCount: 'vm.max_map_count (OpenSearch ≥ 262144)',
     checkMem: 'Free memory',
     checkDisk: 'Docker disk space',
+    checkCompose: 'Stack config (docker compose)',
+    composeBroken: 'Instance configuration is broken:',
+    composeBrokenShort: 'config error',
+    composeRepairHint: 'Repair on the host: sudo clearndr-repair-stack.sh --instance-dir <instance> (shipped with NDR Rules Hub, scripts/ directory). Updates are blocked while the configuration is broken.',
     mikrocataFound: 'MikroTik integration (mikrocata2selks) detected — it will be verified',
     mikrocataNone: 'No MikroTik integration detected',
     stackState: 'Stack state',

@@ -642,15 +642,21 @@ of the guide.
   stack (stamusctl) to a new version while preserving every setting — PostgreSQL dump before
   stopping (`pg_dumpall`), archive of `config/` and the `<project>_db-data` volume, then the
   standard `stamusctl compose update` → `pull` → `up -d`, health checks (containers, web UI,
-  REST API with a token) and automatic `config/` rollback on failure. Guide —
-  `docs/clearndr-update.en.md`.
+  REST API with a token) and automatic `config/` rollback on failure. v4: preflight integrity
+  checks of `config/` with self-restore of the compose file from `config.failed-*/`/archives,
+  `docker compose config` project validation before and after the update, auto-patch of
+  undefined networks (a gap in the 3.3.x templates), a backup gate and a rollback guard against
+  archives taken of an already-broken config. Manual repair — `scripts/clearndr-repair-stack.sh`.
+  Guide — `docs/clearndr-update.en.md`.
   From the UI — the “Clear NDR Update” tab (`lib/engine/clearndr-update.ts`): host probe (stack
-  version, preflight, containers) + GitHub API for the latest release → running the script on
-  the host over SSH (base64 wrapper, `nohup setsid` runner, log/rc under
-  `<instance>/.hub-update-runs/<runId>`) or locally (spawn detached) → log polling → result
-  checks; cancel sends SIGTERM to the runner process group.
-- **Tests** — vitest, 105 tests: parser, converters, deduplication, fetcher (including
+  version, preflight, containers, `docker compose config` validity) + GitHub API for the latest
+  release → running the script on the host over SSH (base64 wrapper, `nohup setsid` runner,
+  log/rc under `<instance>/.hub-update-runs/<runId>`) or locally (spawn detached; docker CLI and
+  amd64 stamusctl ship in the hub image) → log polling → result checks; cancel sends SIGTERM to
+  the runner process group.
+- **Tests** — vitest, 106 tests: parser, converters, deduplication, fetcher (including
   magic bytes and cache), wg-quick, i18n, Clear NDR update logic (versions, CLI-args builder,
-  probe parsing, runner); plus the bash mock bench for the update script (54 checks) and an
-  e2e bench for the update section with the standalone server (`scripts/e2e-hub-update.sh`,
-  15 checks).
+  probe parsing, runner); plus the bash mock bench for the update script (72 checks, including
+  config/ restore, network patching and the backup gate), the repair-script mock bench
+  (20 checks) and an e2e bench for the update section with the standalone server
+  (`scripts/e2e-hub-update.sh`, 15 checks).

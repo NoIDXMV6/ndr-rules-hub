@@ -639,13 +639,19 @@ DRF-пагинация, multipart-upload, гейт «conflicting SID»). Скв�
   Community (stamusctl) на новую версию с сохранением всех настроек — дамп PostgreSQL до остановки
   (`pg_dumpall`), архив `config/` и volume `<project>_db-data`, затем штатный
   `stamusctl compose update` → `pull` → `up -d`, health-checks (контейнеры, веб-интерфейс,
-  REST API по токену) и автооткат `config/` при неудаче. Инструкция — `docs/clearndr-update.md`.
+  REST API по токену) и автооткат `config/` при неудаче. v4: предпроверка целостности `config/`
+  с авто-восстановлением compose-файла из `config.failed-*/`/архивов, валидация проекта
+  `docker compose config` до и после обновления, автопатч неопределённых сетей (гэп шаблонов
+  3.3.x), бэкап-гейт и защита отката от архива, снятого с повреждённого конфига. Восстановление
+  вручную — `scripts/clearndr-repair-stack.sh`. Инструкция — `docs/clearndr-update.md`.
   Из UI — вкладка «Обновление Clear NDR» (`lib/engine/clearndr-update.ts`): probe хоста (версия
-  стека, предпроверки, контейнеры) + GitHub API для последнего релиза → запуск скрипта на хосте
-  по SSH (base64-обёртка, раннер `nohup setsid`, лог/rc в `<instance>/.hub-update-runs/<runId>`)
-  или локально (spawn detached) → поллинг лога → проверки результата; отмена — SIGTERM группе
+  стека, предпроверки, контейнеры, валидность `docker compose config`) + GitHub API для последнего
+  релиза → запуск скрипта на хосте по SSH (base64-обёртка, раннер `nohup setsid`, лог/rc в
+  `<instance>/.hub-update-runs/<runId>`) или локально (spawn detached; docker CLI и stamusctl
+  amd64 входят в образ хаба) → поллинг лога → проверки результата; отмена — SIGTERM группе
   процессов раннера.
-- **Тесты** — vitest, 105 тестов: парсер, конвертеры, дедупликация, загрузчик (включая
+- **Тесты** — vitest, 106 тестов: парсер, конвертеры, дедупликация, загрузчик (включая
   magic-байты и кэш), wg-quick, i18n, логика обновления Clear NDR (версии, сборка CLI-аргументов,
-  разбор probe, раннер); плюс bash-мок-стенд скрипта обновления (54 проверки) и e2e-стенд
-  раздела обновления со standalone-сервером (`scripts/e2e-hub-update.sh`, 15 проверок).
+  разбор probe, раннер); плюс bash-мок-стенд скрипта обновления (72 проверки, включая
+  восстановление config/, патч сетей и бэкап-гейт), мок-стенд repair-скрипта (20 проверок)
+  и e2e-стенд раздела обновления со standalone-сервером (`scripts/e2e-hub-update.sh`, 15 проверок).

@@ -344,11 +344,19 @@ export function UpdateTab({ onChange }: { data: unknown; onChange: () => void })
               {!probe.ok && probe.error && (
                 <p className="text-xs text-red-700 mb-2 rounded-lg border border-red-300/60 bg-red-50 p-2 font-mono">{probe.error}</p>
               )}
+              {probe.ok && probe.composeOk === false && (
+                <p className="text-xs text-red-800 mb-2 rounded-lg border border-red-300/60 bg-red-50 p-2 font-mono break-words">
+                  {t.update.composeBroken} {probe.composeErr ?? '—'}
+                  <br />
+                  {t.update.composeRepairHint}
+                </p>
+              )}
               {probe.ok && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <Pill label={t.update.checkMapCount} ok={mapOk} warnText={probe?.maxMapCount !== undefined ? String(probe.maxMapCount) : undefined} okText="≥ 262144" />
                   <Pill label={t.update.checkMem} ok={memOk} warnText={probe?.memAvailMb !== undefined ? `${probe.memAvailMb} MB` : undefined} okText="≥ 3 ГБ" />
                   <Pill label={t.update.checkDisk} ok={diskOk} warnText={probe?.diskFreeMb !== undefined ? `${probe.diskFreeMb} MB` : undefined} okText="≥ 5 ГБ" />
+                  <Pill label={t.update.checkCompose} ok={probe.composeOk !== false} neutral={probe.composeOk === undefined} warnText={probe.composeOk === false ? t.update.composeBrokenShort : probe.composeOk === undefined ? undefined : 'OK'} />
                   <Pill label="mikrocata2selks" ok={true} neutral warnText={probe?.mikrocata ? t.update.mikrocataFound : t.update.mikrocataNone} />
                 </div>
               )}

@@ -59,6 +59,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && grep -q 'src_valid_mark) -ne 1' /usr/bin/wg-quick \
     || { echo 'FAIL: wg-quick src_valid_mark patch did not apply'; exit 1; }
 
+# Режим «local» раздела «Обновление Clear NDR» (хаб в контейнере на хосте с
+# Clear NDR): стек управляется через смонтированный /var/run/docker.sock.
+# docker CLI — из официального образа (мультиарх); stamusctl — только amd64,
+# arm64-сборок upstream не публикует (на других архитектурах — режим SSH).
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      curl -fsSL --max-time 300 -o /usr/local/bin/stamusctl \
+        "https://dl.clearndr.io/stamusctl-linux-amd64" \
+      && chmod +x /usr/local/bin/stamusctl \
+      && stamusctl version 2>/dev/null | head -1 \
+      || { echo 'FAIL: stamusctl download/execute failed'; exit 1; }; \
+    else \
+      echo "stamusctl: недоступен для ${TARGETARCH} — используйте режим SSH раздела обновления"; \
+    fi
+
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
@@ -71,11 +87,12 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/db-template ./db-template
-# скрипт обновления Clear NDR — источник для «Синхронизировать скрипт»
-# в разделе «Обновление Clear NDR» (копируется на хост перед каждым прогоном)
+# скрипты обновления/восстановления Clear NDR — источник для «Синхронизировать скрипт»
+# в разделе «Обновление Clear NDR» (копируются на хост перед прогоном)
 COPY scripts/clearndr-update.sh /app/scripts/clearndr-update.sh
+COPY scripts/clearndr-repair-stack.sh /app/scripts/clearndr-repair-stack.sh
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/clearndr-update.sh && \
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/clearndr-update.sh /app/scripts/clearndr-repair-stack.sh && \
     mkdir -p /app/data/exports /app/data/cache /app/data/archives /app/data/wireguard /app/data/clearndr-update/runs
 
 VOLUME ["/app/data"]

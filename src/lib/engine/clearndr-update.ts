@@ -100,6 +100,8 @@ export interface HostProbe {
   pgTag?: string              // postgres:16
   suricataInterfaces?: string
   mikrocata?: boolean
+  composeOk?: boolean         // проект инстанса проходит «docker compose config»
+  composeErr?: string         // причина, если конфигурация повреждена (или проверка недоступна)
   maxMapCount?: number
   memAvailMb?: number
   dockerRoot?: string
@@ -274,6 +276,8 @@ export function parseProbeOutput(raw: string): Partial<HostProbe> {
       case 'pg_tag': p.pgTag = val; break
       case 'suricata_interfaces': p.suricataInterfaces = val; break
       case 'mikrocata': p.mikrocata = val === '1'; break
+      case 'compose_ok': p.composeOk = val === '1'; break
+      case 'compose_err': p.composeErr = val; break
       case 'max_map_count': p.maxMapCount = parseInt(val, 10) || 0; break
       case 'mem_avail_mb': p.memAvailMb = parseInt(val, 10) || 0; break
       case 'docker_root': p.dockerRoot = val; break
@@ -318,6 +322,27 @@ export function buildProbeScript(cfg: { instanceDir: string; healthUrl: string; 
     `p os_tag "$(grep -rhoE "image:[[:space:]]*[\\"']?[^\\"'[:space:]]*opensearch:[0-9][^\\"'[:space:]]*" "$CFG" 2>/dev/null | awk '{print $2}' | tr -d '\\"' | head -1)"`,
     `p pg_tag "$(grep -rhoE "image:[[:space:]]*[\\"']?[^\\"'[:space:]]*postgres:[0-9][^\\"'[:space:]]*" "$CFG" 2>/dev/null | awk '{print $2}' | tr -d '\\"' | head -1)"`,
     `( cd "$INSTANCE" 2>/dev/null && p suricata_interfaces "$(stamusctl config get suricata.interfaces 2>/dev/null | tail -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\\"' | xargs)" )`,
+    // целостность конфигурации инстанса (как v4-проверки clearndr-update.sh):
+    // compose-файл на месте и проект загружается docker compose
+    `CF=`,
+    `for cf in "$INSTANCE/config/docker-compose.yaml" "$INSTANCE/config/docker-compose.yml"; do`,
+    `  [ -f "$cf" ] && CF="$cf" && break`,
+    `done`,
+    `if [ -n "$CF" ]; then`,
+    `  if docker compose version >/dev/null 2>&1; then`,
+    `    if docker compose --project-directory "$INSTANCE/config" -f "$CF" config -q >/dev/null 2>&1; then`,
+    `      p compose_ok 1`,
+    `    else`,
+    `      p compose_ok 0`,
+    `      p compose_err "$(docker compose --project-directory "$INSTANCE/config" -f "$CF" config -q 2>&1 | head -2 | tr '\\n' ' ' | cut -c1-220)"`,
+    `    fi`,
+    `  else`,
+    `    p compose_err "docker compose недоступен — проверка конфигурации пропущена"`,
+    `  fi`,
+    `else`,
+    `  p compose_ok 0`,
+    `  p compose_err "docker-compose.yaml|yml отсутствует в $INSTANCE/config — стек неуправляем (восстановление: clearndr-repair-stack.sh)"`,
+    `fi`,
     // предпроверки хоста (как preflight скрипта)
     `p max_map_count "$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)"`,
     `p mem_avail_mb "$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"`,

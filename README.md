@@ -32,7 +32,7 @@
 | **Сборка** | Итоговый `suricata.rules`-файл с заголовком, статистикой по каждому источнику и SHA-256 |
 | **Экспорт в Clear NDR** | 1) файл для ручного импорта; 2) **нативная интеграция через REST API Clear NDR (Scirius)** — upload + `update_push_all` по токену; 3) pull-схема: Clear NDR сам забирает файл с Hub (`/api/export`) и обновляется по своему расписанию; 4) HTTP POST на произвольный эндпоинт; 5) копирование в общий каталог (volume). Пошаговая инструкция — [docs/clearndr-integration.md](docs/clearndr-integration.md) |
 | **WireGuard VPN** | Полноценная настройка: редактор wg-quick конфига, проверка синтаксиса, up/down, статус (`wg show`), проверка окружения (wg, wg-quick, /dev/net/tun, NET_ADMIN). Загрузка правил через туннель |
-| **Обновление Clear NDR** | Вкладка: определить установленную версию → найти последний релиз stamusctl-templates → при наличии более нового — выбрать опции (данные OpenSearch/PostgreSQL, бэкапы, CLI stamusctl) и запустить обновление одним кликом. Скрипт `clearndr-update.sh` выполняется на хосте (SSH или local), лог — в реальном времени, при сбое — автооткат, после — проверки: контейнеры, web UI, REST API. Инструкция — [docs/clearndr-update.md](docs/clearndr-update.md) |
+| **Обновление Clear NDR** | Вкладка: определить установленную версию → найти последний релиз stamusctl-templates → при наличии более нового — выбрать опции (данные OpenSearch/PostgreSQL, бэкапы, CLI stamusctl) и запустить обновление одним кликом. Скрипт `clearndr-update.sh` выполняется на хосте (SSH или local — когда хаб в контейнере на хосте с Clear NDR), лог — в реальном времени, при сбое — автооткат, после — проверки: контейнеры, web UI, REST API. v4: самовосстановление пропавшего `config/docker-compose.yaml`, валидация `docker compose config`, автопатч секции `networks` (гэп шаблонов 3.3.x), бэкап-гейт и защита отката. Отдельный `clearndr-repair-stack.sh` чинит повреждённый `config/` инстанса. Инструкция — [docs/clearndr-update.md](docs/clearndr-update.md) |
 | **Расписание** | cron (node-cron): обновление источников → сборка → экспорт. Управление из UI |
 | **Журнал** | Все события загрузок/сборок/экспорта/VPN с уровнями и фильтрами |
 | **Двуязычный интерфейс** | Русский и английский через файлы локализации (`src/lib/i18n/`). Язык определяется по строкам браузера (`navigator.languages`), переключатель RU/EN в шапке, выбор запоминается в `localStorage`. Favicon (`public/favicon.ico`, 16–256 px) и логотип — в комплекте |
@@ -350,7 +350,8 @@ scripts/
   clearndr-check.sh         # проверка REST API Clear NDR (токен, источники, наборы)
   clearndr-setup-pull.sh    # настройка pull-схемы: источник-URL на Hub + ruleset + расписание
   clearndr-push.sh          # push-доставка .rules в Clear NDR (cron-совместим)
-  clearndr-update.sh        # обновление установленного Clear NDR на новую версию (бэкапы + откат)
+  clearndr-update.sh        # обновление установленного Clear NDR на новую версию (бэкапы + откат + защита config/ v4)
+  clearndr-repair-stack.sh  # восстановление повреждённого config/ инстанса (пропавший compose-файл, секция networks)
   clearndr-mock-server.py   # mock Clear NDR (Scirius REST) для тестирования интеграции
   make-favicon.mjs + make-favicon-ico.py  # favicon.ico из public/logo.svg (sharp + ICO)
 docs/

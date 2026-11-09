@@ -439,10 +439,18 @@ flowchart LR
 ### 10.4. Local mode
 
 Runs the script directly from the hub container (`spawn` detached, log under
-`/app/data/clearndr-update/runs/`). It works only when the hub container can access Docker
-(socket + CLI + stamusctl) and the instance directory, and the Clear NDR URL is reachable
-from the container (e.g. `https://172.17.0.1/`). Use SSH for a typical install — it requires
-no changes to the hub's docker-compose.
+`/app/data/clearndr-update/runs/`). Handy when the **hub is deployed in a container on the
+Clear NDR host itself**: the hub image already ships docker CLI and stamusctl (amd64).
+Required mounts in the hub's docker-compose:
+
+```yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # stack control
+      - /opt/ClearNDR:/opt/ClearNDR                 # host path = container path
+```
+
+and a `healthUrl` reachable from the container (e.g. `https://172.17.0.1/`, not `localhost`).
+For a typical remote install use SSH — it requires no changes to the hub's docker-compose.
 
 ### 10.5. Hub environment variables
 
@@ -450,3 +458,57 @@ no changes to the hub's docker-compose.
 |---|---|
 | `CLEARNDR_UPDATE_SCRIPT` | path to the script inside the hub container (default `/app/scripts/clearndr-update.sh` — already in the image) |
 | `CLEARNDR_RELEASES_JSON` | path to a local JSON `{ "tag_name": "v1.2.3", … }` instead of the GitHub API call (offline / closed perimeter) |
+
+## 11. Broken configuration: diagnostics and repair (v4)
+
+Since v4 the script is hardened against the 2026-11-09 incident, when a failed update left
+the instance directory without `docker-compose.yaml` and the next run rolled back from an
+archive taken of the already-broken `config/`.
+
+### 11.1. Symptoms
+
+```text
+stamusctl compose down
+ERROR Status: stat /opt/ClearNDR/.../config/docker-compose.yaml: no such file or directory, Code: 14
+# or after manually restoring the file from the 3.3.x template:
+ERROR Status: service "opensearch" refers to undefined network network: invalid compose project, Code: 15
+```
+
+The second error is a known gap of stamusctl-templates 3.3.x: services reference the
+`network` network, but the template does not define a top-level `networks:` section.
+
+### 11.2. Repair: clearndr-repair-stack.sh
+
+A standalone script (`scripts/clearndr-repair-stack.sh`, shipped in the hub image):
+
+```bash
+sudo ./clearndr-repair-stack.sh                        # find broken instances under /opt/ClearNDR
+sudo ./clearndr-repair-stack.sh --instance-dir /opt/ClearNDR/config/events-stack/opensearch_dashboards
+sudo ./clearndr-repair-stack.sh --dry-run              # show the plan only
+sudo ./clearndr-repair-stack.sh --no-up                # do not start the stack
+```
+
+What it does: finds instances without a compose file → restores missing files from the best
+source (a: `config.failed-*/`, b: `config-*.tar.gz` archives with content verification,
+c: a hand-made `config/config/docker-compose.yaml`, which is also quarantined) → appends the
+`networks` section (external, bound to the actual docker network found by the container seed
+suffix) → validates the project with `docker compose config` → optionally starts the stack
+and waits for the opensearch health check, parsing the log on failure. Existing files are
+never overwritten.
+
+> From the hub container: `docker cp ndr-rules-hub:/app/scripts/clearndr-repair-stack.sh .`
+> and run it on the host (the hub's local mode is not suitable — the hub must not update its own host stack).
+
+### 11.3. Safeguards in clearndr-update.sh (v4)
+
+| Mechanism | What it does |
+|---|---|
+| Preflight restore | if `config/docker-compose.yaml` is missing, the script restores it (and other files) from `config.failed-*/` or archives before any changes |
+| `docker compose config` validation | before changes and after `compose update`: the project must load, otherwise the update aborts/rolls back |
+| Network auto-patch | after `compose update` appends undefined networks (external, bound to the actual stack network by seed) |
+| Backup gate | a `config/` archive without the compose file is considered incomplete — the update stops BEFORE destructive steps |
+| Rollback guard | a fresh archive taken of an already-broken `config/` is replaced by an older full archive or `config.failed-*/` |
+
+The “Update Clear NDR” tab shows the configuration state in the preflight block
+(“Stack config (docker compose)”) and blocks the update when it is broken, hinting the
+repair script command.

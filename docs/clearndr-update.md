@@ -438,10 +438,19 @@ flowchart LR
 ### 10.4. Режим local
 
 Запускает скрипт прямо из контейнера хаба (`spawn` detached, лог в
-`/app/data/clearndr-update/runs/`). Работает только если контейнеру хаба доступны
-docker (сокет + CLI + stamusctl) и каталог инстанса, а URL Clear NDR доступен из контейнера
-(например `https://172.17.0.1/`). Для типовой установки используйте SSH — он не требует
-никаких изменений в docker-compose хаба.
+`/app/data/clearndr-update/runs/`). Удобен, когда **хаб развёрнут в контейнере на самом хосте
+Clear NDR**: в образ хаба уже входят docker CLI и stamusctl (amd64). Требуются монтирования
+в docker-compose хаба:
+
+```yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # управление стеком
+      - /opt/ClearNDR:/opt/ClearNDR                 # путь на хосте = путь в контейнере
+```
+
+и доступный из контейнера `healthUrl` (например `https://172.17.0.1/`, не `localhost`).
+Для типовой удалённой установки используйте SSH — он не требует никаких изменений
+в docker-compose хаба.
 
 ### 10.5. Переменные окружения хаба
 
@@ -449,3 +458,56 @@ docker (сокет + CLI + stamusctl) и каталог инстанса, а URL
 |---|---|
 | `CLEARNDR_UPDATE_SCRIPT` | путь к скрипту внутри контейнера хаба (по умолчанию `/app/scripts/clearndr-update.sh` — уже в образе) |
 | `CLEARNDR_RELEASES_JSON` | путь к локальному JSON `{ "tag_name": "v1.2.3", … }` вместо запроса к GitHub API (offline/закрытый контур) |
+
+## 11. Повреждённая конфигурация: диагностика и восстановление (v4)
+
+С версии v4 скрипт защищён от инцидента 09.11.2026, когда после сбойного обновления
+в каталоге инстанса пропал `docker-compose.yaml`, а повторный запуск откатился из архива,
+снятого уже с повреждённого `config/`.
+
+### 11.1. Симптомы
+
+```text
+stamusctl compose down
+ERROR Status: stat /opt/ClearNDR/.../config/docker-compose.yaml: no such file or directory, Code: 14
+# или после ручного восстановления файла из шаблона 3.3.x:
+ERROR Status: service "opensearch" refers to undefined network network: invalid compose project, Code: 15
+```
+
+Вторая ошибка — известный гэп шаблонов stamusctl-templates 3.3.x: сервисы ссылаются на сеть
+`network`, но секция `networks:` в шаблоне не определена.
+
+### 11.2. Восстановление: clearndr-repair-stack.sh
+
+Отдельный скрипт (`scripts/clearndr-repair-stack.sh`, идёт в образе хаба):
+
+```bash
+sudo ./clearndr-repair-stack.sh                        # найти повреждённые инстансы в /opt/ClearNDR
+sudo ./clearndr-repair-stack.sh --instance-dir /opt/ClearNDR/config/events-stack/opensearch_dashboards
+sudo ./clearndr-repair-stack.sh --dry-run              # только показать план
+sudo ./clearndr-repair-stack.sh --no-up                # не запускать стек
+```
+
+Что делает: находит инстансы без compose-файла → восстанавливает недостающие файлы из
+лучшего источника (a: `config.failed-*/`, b: архивы `config-*.tar.gz` с проверкой содержимого,
+c: созданный вручную `config/config/docker-compose.yaml`, который заодно уводит в карантин) →
+дописывает секцию `networks` (external на фактическую docker-сеть, найденную по seed-суффиксу
+контейнеров) → проверяет проект `docker compose config` → по флагу поднимает стек и ждёт
+health-check opensearch с разбором журнала при сбое. Существующие файлы НЕ перезаписывает.
+
+> Из контейнера хаба: `docker cp ndr-rules-hub:/app/scripts/clearndr-repair-stack.sh .`
+> и запустить на хосте (режим local хаба не подходит — сам хаб обновлять нельзя).
+
+### 11.3. Защита в clearndr-update.sh (v4)
+
+| Механизм | Что делает |
+|---|---|
+| Preflight-восстановление | если `config/docker-compose.yaml` пропал — скрипт сам возвращает его и остальные файлы из `config.failed-*/` или архивов до любых изменений |
+| Проверка `docker compose config` | до изменений и после `compose update`: проект обязан загружаться, иначе обновление прерывается/откатывается |
+| Автопатч сетей | после `compose update` дописывает неопределённые сети (external на фактическую сеть стека по seed) |
+| Бэкап-гейт | архив `config/` без compose-файла считается неполным — обновление прерывается ДО деструктивных шагов |
+| Защита отката | свежий архив, снятый с уже повреждённого `config/`, заменяется старым полным архивом или `config.failed-*/` |
+
+Вкладка «Обновление Clear NDR» показывает состояние конфигурации в блоке предпроверок
+(«Конфигурация стека (docker compose)») и блокирует запуск обновления при повреждении,
+подсказывая команду repair-скрипта.

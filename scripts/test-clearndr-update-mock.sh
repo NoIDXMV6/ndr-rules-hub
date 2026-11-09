@@ -53,6 +53,16 @@ SEED="$(cat "$MOCKBIN/seed")"
 is_a=0; for a in "$@"; do [ "$a" = "-a" ] && is_a=1; done
 case "$1 $2" in
   "ps "*)
+    # точность реального docker: --format '{{.Names}}' печатает ТОЛЬКО имена
+    onlyn=0; for a in "$@"; do [ "$a" = "{{.Names}}" ] && onlyn=1; done
+    if [ $is_a -eq 1 ] && [ $onlyn -eq 1 ]; then
+      if [ "$STATE" = fail ]; then
+        printf 'config-opensearch-%s\nconfig-scirius-%s\n' "$SEED" "$SEED"
+      else
+        for s in opensearch scirius db suricata nginx; do printf 'config-%s-%s\n' "$s" "$SEED"; done
+      fi
+      exit 0
+    fi
     if [ $is_a -eq 1 ]; then
       if [ "$STATE" = fail ]; then
         printf 'config-opensearch-%s\tExited (1) 3 minutes ago\topensearchproject/opensearch:3.3.1\n' "$SEED"
@@ -72,8 +82,26 @@ case "$1 $2" in
   "volume ls") printf 'db-data-%s\nopensearch-data-%s\nfluentd-pos-%s\n' "$SEED" "$SEED" "$SEED" ;;
   "volume rm") echo "$3" >> "$MOCKBIN/volume-rm.log"; exit 0 ;;
   "info "*) echo "/tmp" ;;
+  "network ls") echo "config_network" ;;
+  "compose version") echo "Docker Compose version v2.29.0" ;;
+  "compose "*)
+    # имитация проверки проекта: v4-скрипт зовёт docker compose config -q
+    VAL="$(cat "$MOCKBIN/compose-validate" 2>/dev/null || echo off)"
+    if [ "$VAL" != on ]; then exit 0; fi
+    prev=""; cf=""
+    for a in "$@"; do [ "$prev" = "-f" ] && cf="$a"; prev="$a"; done
+    if [ ! -f "$cf" ]; then echo "stat ${cf:-unknown}: no such file or directory"; exit 14; fi
+    if ! grep -q '^networks:' "$cf"; then
+      echo 'service "opensearch" refers to undefined network network: invalid compose project'; exit 15
+    fi
+    exit 0 ;;
   "logs "*) LOGS_DIR="$(cat "$MOCKBIN/logs-dir" 2>/dev/null || echo "")"; CT="$4"; [ -n "$LOGS_DIR" ] && [ -f "$LOGS_DIR/$CT.log" ] && cat "$LOGS_DIR/$CT.log" || echo "(no logs)" ;;
-  "inspect "*) echo '{"Status":"unhealthy","FailingStreak":5,"Log":[{"ExitCode":1,"Output":"curl: (7) Failed to connect"}]}' ;;
+  "inspect "*)
+    case "$*" in
+      *State.Health.Status*) echo healthy ;;
+      *NetworkSettings.Networks*) echo "config_network " ;;
+      *) echo '{"Status":"unhealthy","FailingStreak":5,"Log":[{"ExitCode":1,"Output":"curl: (7) Failed to connect"}]}' ;;
+    esac ;;
   "exec "*)
     case "$*" in
       *pg_dumpall*) echo "CREATE TABLE rules_source;"; echo "CREATE TABLE rules_ruleset;" ;;
@@ -139,11 +167,26 @@ case "$SUB" in
       update)
         head -c 4096 > /dev/null 2>&1 || true   # читает stdin как реальный stamusctl
         CFG="$PWD/config"
-        [ -f "$CFG/docker-compose.yml" ] && sed -i 's/opensearch:2.5.0/opensearch:3.3.1/; s/postgres:16/postgres:17/' "$CFG/docker-compose.yml"
+        BEHAV="$(cat "$MOCKBIN/update-behavior" 2>/dev/null || echo custom)"
+        case "$BEHAV" in
+          lose-compose)
+            rm -f "$CFG/docker-compose.yml" "$CFG/docker-compose.yaml" ;;   # шаблон потерял compose-файл (инцидент 09.11)
+          lose-networks)
+            if [ -f "$CFG/docker-compose.yml" ]; then
+              grep -v '^networks:' "$CFG/docker-compose.yml" | grep -v '^  network:' > "$CFG/.tmp" \
+                && mv "$CFG/.tmp" "$CFG/docker-compose.yml"   # шаблон 3.3.x: сеть не определена
+            fi
+            sed -i 's/opensearch:2.5.0/opensearch:3.3.1/; s/postgres:16/postgres:17/' "$CFG/docker-compose.yml" 2>/dev/null || true ;;
+          *)
+            [ -f "$CFG/docker-compose.yml" ] && sed -i 's/opensearch:2.5.0/opensearch:3.3.1/; s/postgres:16/postgres:17/' "$CFG/docker-compose.yml" ;;
+        esac
         rm -f "$CFG/custom-mikrotik.conf"        # шаблон "потерял" пользовательский файл
         echo eth0 > "$MOCKBIN/interfaces-value"  # и "потерял" suricata.interfaces
         echo "template updated" ;;
-      down)    echo "stack down"; echo ok > "$MOCKBIN/state" ;;   # после down — имитация успешного отката
+      down)
+        DB="$(cat "$MOCKBIN/down-behavior" 2>/dev/null || echo ok)"
+        if [ "$DB" = lose-compose ]; then rm -f "$PWD/config/docker-compose.yml" "$PWD/config/docker-compose.yaml"; fi
+        echo "stack down"; echo ok > "$MOCKBIN/state" ;;   # после down — имитация успешного отката
       up)
         if [ "$STATE" = fail ]; then
           printf 'Network clearndr  Creating\n'
@@ -198,6 +241,25 @@ EOF
 
   chmod +x "$WORK/bin/docker" "$WORK/bin/stamusctl" "$WORK/bin/sysctl" "$WORK/bin/curl" "$WORK/bin/systemctl" "$WORK/bin/ip"
   echo "$SEED" > "$WORK/bin/seed"
+  echo off > "$WORK/bin/compose-validate"
+  echo custom > "$WORK/bin/update-behavior"
+  echo ok > "$WORK/bin/down-behavior"
+}
+
+# свежий config/ для v4-сценариев (с секцией networks, как в старом шаблоне)
+fresh_config_v4() {
+  rm -rf "$WORK/instance/config" "$WORK/instance/config.failed-"* 2>/dev/null
+  mkdir -p "$WORK/instance/config"
+  cat > "$WORK/instance/config/docker-compose.yml" <<EOF
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.5.0
+  db:
+    image: postgres:16
+networks:
+  network:
+EOF
+  echo "tzsp0" > "$WORK/bin/interfaces-value"
 }
 
 # фикстура журнала opensearch при несовместимых индексах
@@ -350,6 +412,55 @@ contains "$out" "Ручная конвертация данных OpenSearch" "�
 contains "$out" "прервано БЕЗ изменений" "обновление прервано без изменений"
 not_contains "$out" "ОТКАТ" "откат не выполнялся"
 [ ! -f "$WORK/bin/volume-rm.log" ] && ok "тома не удалялись (стек не тронут)" || bad "тома удалялись при guide!"
+
+# ============================ 8-11. Защита конфигурации (v4) =================
+
+echo "== 8. Preflight-восстановление пропавшего compose-файла из архива =="
+fresh_config_v4
+# «хороший» архив с полным config/ (как бэкап прошлой успешной установки)
+tar czf "$WORK/backups/config-20261109-000000.tar.gz" -C "$WORK/instance" config
+rm -f "$WORK/instance/config/docker-compose.yml"   # инцидент: файл пропал
+rm -f "$WORK/backups"/fail-logs-* 2>/dev/null
+echo on > "$WORK/bin/compose-validate"
+rc="$(run_update ok s8 --yes --skip-volume)"
+out="$(cat "$WORK/out-s8.txt")"
+check_rc "$rc" 0 "цикл после авто-восстановления завершился успехом"
+contains "$out" "нет docker-compose.yaml" "пропажа compose-файла обнаружена в preflight"
+contains "$out" "compose-файл на месте — конфигурация восстановлена" "compose-файл восстановлен из архива"
+contains "$out" "Конфигурация стека проходит проверку docker compose" "preflight-валидация пройдена"
+[ -f "$WORK/instance/config/docker-compose.yml" ] && ok "docker-compose.yml вернулся в config/" || bad "compose-файл не восстановлен"
+
+echo "== 9. Автопатч сетей после compose update (шаблон не определяет сеть) =="
+fresh_config_v4
+rm -f "$WORK/backups/config-20261109-000000.tar.gz"
+echo lose-networks > "$WORK/bin/update-behavior"
+rc="$(run_update ok s9 --yes --skip-volume)"
+out="$(cat "$WORK/out-s9.txt")"
+check_rc "$rc" 0 "цикл с патчем сетей завершился успехом"
+contains "$out" "Конфигурация стека проходит проверку docker compose" "preflight: сети допатчены до изменений"
+contains "$out" "Новая конфигурация проходит проверку docker compose" "после update: сети допатчены"
+contains "$out" "существующая docker-сеть «config_network» (external)" "сеть привязана к фактической (external)"
+grep -q '^networks:' "$WORK/instance/config/docker-compose.yml" && ok "секция networks: есть в файле" || bad "секция networks: не добавлена"
+grep -q 'name: config_network' "$WORK/instance/config/docker-compose.yml" && ok "указано имя фактической сети" || bad "нет name: сети"
+
+echo "== 10. compose update потерял compose-файл — возврат из бэкапа =="
+fresh_config_v4
+echo lose-compose > "$WORK/bin/update-behavior"
+rc="$(run_update ok s10 --yes --skip-volume)"
+out="$(cat "$WORK/out-s10.txt")"
+check_rc "$rc" 0 "цикл с потерей compose-файла при update завершился успехом"
+contains "$out" "compose-файл возвращён из бэкапа" "потеря файла при update обнаружена и компенсирована"
+contains "$out" "Новая конфигурация проходит проверку docker compose" "проект валиден после возврата"
+[ -f "$WORK/instance/config/docker-compose.yml" ] && ok "docker-compose.yml на месте после update" || bad "compose-файл не возвращён"
+
+echo "== 11. Пропажа compose-файла при остановке — бэкап-гейт прерывает обновление =="
+fresh_config_v4
+echo lose-compose > "$WORK/bin/down-behavior"
+rc="$(run_update ok s11 --yes --skip-volume)"
+out="$(cat "$WORK/out-s11.txt")"
+check_rc "$rc" 1 "бэкап-гейт: обновление прервано с кодом 1"
+contains "$out" "НЕ содержит compose-файл" "аргументированный отказ: архив без compose-файла"
+contains "$out" "clearndr-repair-stack.sh" "подсказка про repair-скрипт"
 
 # ============================ итоги =========================================
 echo
