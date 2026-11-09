@@ -69,6 +69,11 @@ server.log
 !/scripts/clearndr-repair-stack.sh
 !/scripts/clearndr-events-restore.sh
 !/scripts/clearndr-osd3-workspaces-fix.sh
+!/scripts/clearndr-osd-analytics-setup.sh
+!/scripts/clearndr-osd-dashboard-import.sh
+!/scripts/osd-pack-generator.py
+!/scripts/osd-packs
+!/scripts/test-clearndr-osd-mock.sh
 !/scripts/test-clearndr-update-mock.sh
 !/scripts/test-clearndr-repair-mock.sh
 !/scripts/gh_release_backfill.sh

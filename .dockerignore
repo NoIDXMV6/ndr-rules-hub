@@ -16,6 +16,9 @@ scripts
 !scripts/clearndr-update.sh
 !scripts/clearndr-repair-stack.sh
 !scripts/clearndr-events-restore.sh
+!scripts/clearndr-osd-analytics-setup.sh
+!scripts/clearndr-osd-dashboard-import.sh
+!scripts/osd-packs
 tests
 docs
 *.log

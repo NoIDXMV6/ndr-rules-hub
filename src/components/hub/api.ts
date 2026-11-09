@@ -137,6 +137,11 @@ export const api = {
     fetch('/api/clearndr-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
   updateSaveSettings: (data: UpdateSettingsUi) =>
     fetch('/api/clearndr-update', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; settings: UpdateStatus['settings'] }>(r)),
+  // дашборды OpenSearch (аналитика)
+  osdStatus: () => fetch('/api/clearndr-osd', { cache: 'no-store' }).then((r) => j<OsdStatus>(r)),
+  osdRun: (runId: string, tail = 24000) => fetch(`/api/clearndr-osd?log=${encodeURIComponent(runId)}&tail=${tail}`, { cache: 'no-store' }).then((r) => j<OsdRunStatus>(r)),
+  osdAction: (body: Record<string, unknown>) =>
+    fetch('/api/clearndr-osd', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
 }
 
 // ── Раздел «Обновление Clear NDR» ────────────────────────────────────────────
@@ -242,6 +247,56 @@ export interface UpdateSettingsUi {
   scriptPath: string
   healthUrl: string
   apiToken: string
+}
+
+// ── Раздел «Дашборды OpenSearch» ─────────────────────────────────────────────
+
+export interface OsdProbe {
+  ok: boolean
+  mode: 'ssh' | 'local'
+  error?: string
+  cluster?: string
+  esVersion?: string
+  osdVersion?: string
+  alerting?: boolean
+  anomaly?: boolean
+  security?: boolean
+  indices?: number
+  docs?: number
+  packs?: number
+  monitors?: number
+  adetectors?: number
+  sdetectors?: number
+  ranAt: string
+}
+
+export interface OsdRunMeta {
+  runId: string
+  mode: 'ssh' | 'local'
+  kind: 'apply' | 'import' | 'remove'
+  startedAt: string
+  finishedAt?: string
+  exitCode?: number
+  args: string[]
+  remoteDir?: string
+}
+
+export interface OsdStatus {
+  settings: UpdateSettingsUi & { sshKeySet: boolean }
+  packs: string[]
+  applyKinds: string[]
+  probe: OsdProbe
+  activeRun: { runId: string; active: boolean; exitCode?: number } | null
+  runs: OsdRunMeta[]
+}
+
+export interface OsdRunStatus {
+  runId: string
+  active: boolean
+  exitCode?: number
+  log: string
+  startedAt?: string
+  finishedAt?: string
 }
 
 export interface RuleRow {

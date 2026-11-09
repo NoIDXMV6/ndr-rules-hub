@@ -87,14 +87,17 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/db-template ./db-template
-# скрипты обновления/восстановления Clear NDR — источник для «Синхронизировать скрипт»
-# в разделе «Обновление Clear NDR» (копируются на хост перед прогоном)
+# скрипты обновления/восстановления/аналитики Clear NDR — источник для
+# «Синхронизировать скрипты» в разделах «Обновление» и «Дашборды OpenSearch»
 COPY scripts/clearndr-update.sh /app/scripts/clearndr-update.sh
 COPY scripts/clearndr-repair-stack.sh /app/scripts/clearndr-repair-stack.sh
 COPY scripts/clearndr-events-restore.sh /app/scripts/clearndr-events-restore.sh
+COPY scripts/clearndr-osd-analytics-setup.sh /app/scripts/clearndr-osd-analytics-setup.sh
+COPY scripts/clearndr-osd-dashboard-import.sh /app/scripts/clearndr-osd-dashboard-import.sh
+COPY scripts/osd-packs/ /app/scripts/osd-packs/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/clearndr-update.sh /app/scripts/clearndr-repair-stack.sh /app/scripts/clearndr-events-restore.sh && \
-    mkdir -p /app/data/exports /app/data/cache /app/data/archives /app/data/wireguard /app/data/clearndr-update/runs
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/clearndr-update.sh /app/scripts/clearndr-repair-stack.sh /app/scripts/clearndr-events-restore.sh /app/scripts/clearndr-osd-analytics-setup.sh /app/scripts/clearndr-osd-dashboard-import.sh && \
+    mkdir -p /app/data/exports /app/data/cache /app/data/archives /app/data/wireguard /app/data/clearndr-update/runs /app/data/clearndr-osd/runs
 
 VOLUME ["/app/data"]
 EXPOSE 3000

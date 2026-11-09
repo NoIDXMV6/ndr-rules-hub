@@ -10,6 +10,7 @@ import { RulesTab } from '@/components/hub/rules-tab'
 import { BuildTab } from '@/components/hub/build-tab'
 import { VpnTab } from '@/components/hub/vpn-tab'
 import { UpdateTab } from '@/components/hub/update-tab'
+import { OsdTab } from '@/components/hub/osd-tab'
 import { SettingsTab } from '@/components/hub/settings-tab'
 import { LogsTab } from '@/components/hub/logs-tab'
 import { HelpTab } from '@/components/hub/help-tab'
@@ -120,6 +121,7 @@ export default function Home() {
             <TabsTrigger value="build" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.build}</TabsTrigger>
             <TabsTrigger value="vpn" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.vpn}</TabsTrigger>
             <TabsTrigger value="update" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.update}</TabsTrigger>
+            <TabsTrigger value="osd" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.osd}</TabsTrigger>
             <TabsTrigger value="settings" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.settings}</TabsTrigger>
             <TabsTrigger value="logs" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.logs}</TabsTrigger>
             <TabsTrigger value="help" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.help}</TabsTrigger>
@@ -143,6 +145,9 @@ export default function Home() {
           </TabsContent>
           <TabsContent value="update" className="mt-4">
             <UpdateTab data={data} onChange={refresh} />
+          </TabsContent>
+          <TabsContent value="osd" className="mt-4">
+            <OsdTab data={data} onChange={refresh} />
           </TabsContent>
           <TabsContent value="settings" className="mt-4">
             <SettingsTab data={data} onChange={refresh} />

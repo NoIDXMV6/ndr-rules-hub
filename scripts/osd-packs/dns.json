@@ -1,0 +1,157 @@
+{
+ "key": "dns",
+ "title": "DNS",
+ "description": "DNS-запросы, типы, rcode, источники — база для выявления туннелей и C2.",
+ "indexPattern": {
+  "id": "ndr-logstash-pattern",
+  "title": "logstash-*",
+  "timeFieldName": "__F:ts__"
+ },
+ "objects": [
+  {
+   "id": "ndr-pack-dns-h01",
+   "type": "visualization",
+   "version": 1,
+   "attributes": {
+    "title": "DNS-события по времени",
+    "visState": "{\"title\": \"DNS-события по времени\", \"type\": \"histogram\", \"params\": {\"type\": \"histogram\", \"grid\": {\"categoryLines\": false}, \"categoryAxes\": [{\"id\": \"CategoryAxis-1\", \"type\": \"category\", \"position\": \"bottom\", \"show\": true, \"style\": {}, \"scale\": {\"type\": \"linear\"}, \"labels\": {\"show\": true, \"truncate\": 100}, \"title\": {\"text\": \"__F:ts__\"}}], \"valueAxes\": [{\"id\": \"ValueAxis-1\", \"name\": \"LeftAxis-1\", \"type\": \"value\", \"position\": \"left\", \"show\": true, \"style\": {}, \"scale\": {\"type\": \"linear\", \"mode\": \"normal\"}, \"labels\": {\"show\": true}, \"title\": {\"text\": \"Count\"}}], \"seriesParams\": [{\"show\": true, \"type\": \"histogram\", \"mode\": \"stacked\", \"data\": {\"label\": \"Count\", \"id\": \"1\"}, \"valueAxis\": \"ValueAxis-1\", \"drawLinesBetweenPoints\": true, \"showCircles\": true}], \"addTooltip\": true, \"addLegend\": true, \"legendPosition\": \"right\", \"times\": [], \"addTimeMarker\": false}, \"aggs\": [{\"id\": \"1\", \"enabled\": true, \"type\": \"count\", \"schema\": \"metric\", \"params\": {}}, {\"id\": \"2\", \"enabled\": true, \"type\": \"date_histogram\", \"schema\": \"segment\", \"params\": {\"field\": \"__F:ts__\", \"interval\": \"auto\", \"min_doc_count\": 1, \"extended_bounds\": {}}}]}",
+    "uiStateJSON": "{}",
+    "description": "Создано NDR Rules Hub (pack)",
+    "kibanaSavedObjectMeta": {
+     "searchSourceJSON": "{\"indexRefName\": \"index_0\", \"filter\": [{\"meta\": {\"index\": \"__IP__\", \"negate\": false, \"disabled\": false, \"alias\": \"\", \"key\": \"__F:event_type__\", \"value\": \"dns\", \"params\": {\"query\": \"dns\"}, \"type\": \"phrase\"}, \"query\": {\"match\": {\"__F:event_type__\": {\"query\": \"dns\", \"type\": \"phrase\"}}}, \"$state\": {\"store\": \"appState\"}}]}"
+    }
+   },
+   "references": [
+    {
+     "id": "__IP__",
+     "name": "index_0",
+     "type": "index-pattern"
+    }
+   ]
+  },
+  {
+   "id": "ndr-pack-dns-t01",
+   "type": "visualization",
+   "version": 1,
+   "attributes": {
+    "title": "Топ DNS-запросов",
+    "visState": "{\"title\": \"Топ DNS-запросов\", \"type\": \"table\", \"params\": {\"perPage\": 10, \"showPartialRows\": false, \"showMetricsAtAllLevels\": false, \"sort\": {\"columnIndex\": null, \"direction\": null}, \"showTotal\": false, \"totalFunc\": \"sum\"}, \"aggs\": [{\"id\": \"1\", \"enabled\": true, \"type\": \"count\", \"schema\": \"metric\", \"params\": {}}, {\"id\": \"2\", \"enabled\": true, \"type\": \"terms\", \"schema\": \"bucket\", \"params\": {\"field\": \"__F:dns_name__\", \"size\": 10, \"orderAgg\": {\"id\": \"2-order\", \"enabled\": true, \"type\": \"count\", \"schema\": \"orderAgg\", \"params\": {}}, \"order\": \"desc\", \"orderBy\": \"2-order\", \"otherBucket\": false, \"otherBucketLabel\": \"Другое\", \"missingBucket\": false, \"missingBucketLabel\": \"Отсутствует\", \"min_doc_count\": 1, \"customLabel\": \"Запрос\"}}]}",
+    "uiStateJSON": "{}",
+    "description": "Создано NDR Rules Hub (pack)",
+    "kibanaSavedObjectMeta": {
+     "searchSourceJSON": "{\"indexRefName\": \"index_0\", \"filter\": [{\"meta\": {\"index\": \"__IP__\", \"negate\": false, \"disabled\": false, \"alias\": \"\", \"key\": \"__F:event_type__\", \"value\": \"dns\", \"params\": {\"query\": \"dns\"}, \"type\": \"phrase\"}, \"query\": {\"match\": {\"__F:event_type__\": {\"query\": \"dns\", \"type\": \"phrase\"}}}, \"$state\": {\"store\": \"appState\"}}]}"
+    }
+   },
+   "references": [
+    {
+     "id": "__IP__",
+     "name": "index_0",
+     "type": "index-pattern"
+    }
+   ]
+  },
+  {
+   "id": "ndr-pack-dns-p01",
+   "type": "visualization",
+   "version": 1,
+   "attributes": {
+    "title": "Типы запросов",
+    "visState": "{\"title\": \"Типы запросов\", \"type\": \"pie\", \"params\": {\"type\": \"pie\", \"addTooltip\": true, \"addLegend\": true, \"legendPosition\": \"right\", \"isDonut\": true, \"labels\": {\"show\": false, \"values\": true, \"last_level\": true, \"truncate\": 100}}, \"aggs\": [{\"id\": \"1\", \"enabled\": true, \"type\": \"count\", \"schema\": \"metric\", \"params\": {}}, {\"id\": \"2\", \"enabled\": true, \"type\": \"terms\", \"schema\": \"bucket\", \"params\": {\"field\": \"__F:dns_type__\", \"size\": 10, \"orderAgg\": {\"id\": \"2-order\", \"enabled\": true, \"type\": \"count\", \"schema\": \"orderAgg\", \"params\": {}}, \"order\": \"desc\", \"orderBy\": \"2-order\", \"otherBucket\": false, \"otherBucketLabel\": \"Другое\", \"missingBucket\": false, \"missingBucketLabel\": \"Отсутствует\", \"min_doc_count\": 1, \"customLabel\": \"Тип\"}}]}",
+    "uiStateJSON": "{}",
+    "description": "Создано NDR Rules Hub (pack)",
+    "kibanaSavedObjectMeta": {
+     "searchSourceJSON": "{\"indexRefName\": \"index_0\", \"filter\": [{\"meta\": {\"index\": \"__IP__\", \"negate\": false, \"disabled\": false, \"alias\": \"\", \"key\": \"__F:event_type__\", \"value\": \"dns\", \"params\": {\"query\": \"dns\"}, \"type\": \"phrase\"}, \"query\": {\"match\": {\"__F:event_type__\": {\"query\": \"dns\", \"type\": \"phrase\"}}}, \"$state\": {\"store\": \"appState\"}}]}"
+    }
+   },
+   "references": [
+    {
+     "id": "__IP__",
+     "name": "index_0",
+     "type": "index-pattern"
+    }
+   ]
+  },
+  {
+   "id": "ndr-pack-dns-t02",
+   "type": "visualization",
+   "version": 1,
+   "attributes": {
+    "title": "Коды ответа (rcode)",
+    "visState": "{\"title\": \"Коды ответа (rcode)\", \"type\": \"table\", \"params\": {\"perPage\": 10, \"showPartialRows\": false, \"showMetricsAtAllLevels\": false, \"sort\": {\"columnIndex\": null, \"direction\": null}, \"showTotal\": false, \"totalFunc\": \"sum\"}, \"aggs\": [{\"id\": \"1\", \"enabled\": true, \"type\": \"count\", \"schema\": \"metric\", \"params\": {}}, {\"id\": \"2\", \"enabled\": true, \"type\": \"terms\", \"schema\": \"bucket\", \"params\": {\"field\": \"__F:dns_rcode__\", \"size\": 10, \"orderAgg\": {\"id\": \"2-order\", \"enabled\": true, \"type\": \"count\", \"schema\": \"orderAgg\", \"params\": {}}, \"order\": \"desc\", \"orderBy\": \"2-order\", \"otherBucket\": false, \"otherBucketLabel\": \"Другое\", \"missingBucket\": false, \"missingBucketLabel\": \"Отсутствует\", \"min_doc_count\": 1, \"customLabel\": \"rcode\"}}]}",
+    "uiStateJSON": "{}",
+    "description": "Создано NDR Rules Hub (pack)",
+    "kibanaSavedObjectMeta": {
+     "searchSourceJSON": "{\"indexRefName\": \"index_0\", \"filter\": [{\"meta\": {\"index\": \"__IP__\", \"negate\": false, \"disabled\": false, \"alias\": \"\", \"key\": \"__F:event_type__\", \"value\": \"dns\", \"params\": {\"query\": \"dns\"}, \"type\": \"phrase\"}, \"query\": {\"match\": {\"__F:event_type__\": {\"query\": \"dns\", \"type\": \"phrase\"}}}, \"$state\": {\"store\": \"appState\"}}]}"
+    }
+   },
+   "references": [
+    {
+     "id": "__IP__",
+     "name": "index_0",
+     "type": "index-pattern"
+    }
+   ]
+  },
+  {
+   "id": "ndr-pack-dns-t03",
+   "type": "visualization",
+   "version": 1,
+   "attributes": {
+    "title": "Топ источников запросов",
+    "visState": "{\"title\": \"Топ источников запросов\", \"type\": \"table\", \"params\": {\"perPage\": 10, \"showPartialRows\": false, \"showMetricsAtAllLevels\": false, \"sort\": {\"columnIndex\": null, \"direction\": null}, \"showTotal\": false, \"totalFunc\": \"sum\"}, \"aggs\": [{\"id\": \"1\", \"enabled\": true, \"type\": \"count\", \"schema\": \"metric\", \"params\": {}}, {\"id\": \"2\", \"enabled\": true, \"type\": \"terms\", \"schema\": \"bucket\", \"params\": {\"field\": \"__F:src_ip__\", \"size\": 10, \"orderAgg\": {\"id\": \"2-order\", \"enabled\": true, \"type\": \"count\", \"schema\": \"orderAgg\", \"params\": {}}, \"order\": \"desc\", \"orderBy\": \"2-order\", \"otherBucket\": false, \"otherBucketLabel\": \"Другое\", \"missingBucket\": false, \"missingBucketLabel\": \"Отсутствует\", \"min_doc_count\": 1, \"customLabel\": \"Источник\"}}]}",
+    "uiStateJSON": "{}",
+    "description": "Создано NDR Rules Hub (pack)",
+    "kibanaSavedObjectMeta": {
+     "searchSourceJSON": "{\"indexRefName\": \"index_0\", \"filter\": [{\"meta\": {\"index\": \"__IP__\", \"negate\": false, \"disabled\": false, \"alias\": \"\", \"key\": \"__F:event_type__\", \"value\": \"dns\", \"params\": {\"query\": \"dns\"}, \"type\": \"phrase\"}, \"query\": {\"match\": {\"__F:event_type__\": {\"query\": \"dns\", \"type\": \"phrase\"}}}, \"$state\": {\"store\": \"appState\"}}]}"
+    }
+   },
+   "references": [
+    {
+     "id": "__IP__",
+     "name": "index_0",
+     "type": "index-pattern"
+    }
+   ]
+  },
+  {
+   "id": "ndr-pack-dns",
+   "type": "dashboard",
+   "version": 1,
+   "attributes": {
+    "title": "NDR · DNS",
+    "hits": 0,
+    "description": "DNS-активность сети",
+    "panelsJSON": "[{\"panelIndex\": \"1\", \"gridData\": {\"x\": 0, \"y\": 0, \"w\": 48, \"h\": 10, \"i\": \"1\"}, \"embeddableConfig\": {}, \"id\": \"ndr-pack-dns-h01\", \"type\": \"visualization\", \"version\": \"3.3.0\"}, {\"panelIndex\": \"2\", \"gridData\": {\"x\": 0, \"y\": 10, \"w\": 16, \"h\": 15, \"i\": \"2\"}, \"embeddableConfig\": {}, \"id\": \"ndr-pack-dns-t01\", \"type\": \"visualization\", \"version\": \"3.3.0\"}, {\"panelIndex\": \"3\", \"gridData\": {\"x\": 16, \"y\": 10, \"w\": 16, \"h\": 15, \"i\": \"3\"}, \"embeddableConfig\": {}, \"id\": \"ndr-pack-dns-p01\", \"type\": \"visualization\", \"version\": \"3.3.0\"}, {\"panelIndex\": \"4\", \"gridData\": {\"x\": 32, \"y\": 10, \"w\": 16, \"h\": 15, \"i\": \"4\"}, \"embeddableConfig\": {}, \"id\": \"ndr-pack-dns-t02\", \"type\": \"visualization\", \"version\": \"3.3.0\"}, {\"panelIndex\": \"5\", \"gridData\": {\"x\": 0, \"y\": 25, \"w\": 48, \"h\": 12, \"i\": \"5\"}, \"embeddableConfig\": {}, \"id\": \"ndr-pack-dns-t03\", \"type\": \"visualization\", \"version\": \"3.3.0\"}]",
+    "optionsJSON": "{\"hidePanelTitles\": false, \"useMargins\": true}",
+    "timeRestore": false
+   },
+   "references": [
+    {
+     "id": "ndr-pack-dns-h01",
+     "name": "panel_1",
+     "type": "visualization"
+    },
+    {
+     "id": "ndr-pack-dns-t01",
+     "name": "panel_2",
+     "type": "visualization"
+    },
+    {
+     "id": "ndr-pack-dns-p01",
+     "name": "panel_3",
+     "type": "visualization"
+    },
+    {
+     "id": "ndr-pack-dns-t02",
+     "name": "panel_4",
+     "type": "visualization"
+    },
+    {
+     "id": "ndr-pack-dns-t03",
+     "name": "panel_5",
+     "type": "visualization"
+    }
+   ]
+  }
+ ]
+}
