@@ -15,6 +15,7 @@ scripts
 # скрипты обновления/восстановления нужны в образе (раздел «Обновление Clear NDR»)
 !scripts/clearndr-update.sh
 !scripts/clearndr-repair-stack.sh
+!scripts/clearndr-events-restore.sh
 tests
 docs
 *.log
