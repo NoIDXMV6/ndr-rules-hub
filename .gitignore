@@ -68,6 +68,7 @@ server.log
 !/scripts/clearndr-update.sh
 !/scripts/clearndr-repair-stack.sh
 !/scripts/clearndr-events-restore.sh
+!/scripts/clearndr-osd3-workspaces-fix.sh
 !/scripts/test-clearndr-update-mock.sh
 !/scripts/test-clearndr-repair-mock.sh
 /mini-services
