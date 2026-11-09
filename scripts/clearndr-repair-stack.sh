@@ -23,10 +23,15 @@
 #
 # Что делает скрипт:
 #   1. Находит инстансы без compose-файла (скан /opt/ClearNDR либо --instance-dir);
+#      каталог config/ может отсутствовать ЦЕЛИКОМ — скрипт создаст его
+#      (контейнеры при этом продолжают работать: их поднимает docker-демон);
 #   2. Восстанавливает недостающие файлы config/ без перезаписи существующих
 #      из лучшего источника:
 #        a) config.failed-*/config/           (сохранённые повреждённые конфиги)
-#        b) архивы config-*.tar.gz            (с проверкой наличия compose-файла)
+#        b) архивы config-*.tar.gz            (с проверкой наличия compose-файла;
+#            для вложенных инстансов, например events-stack/*, берётся ТОЛЬКО
+#            поддерево этого инстанса, префикс «config/…» снимается — файлы
+#            ложатся в <инстанс>/config/, а не внутрь вложенного каталога)
 #        c) созданный вручную config/config/docker-compose.yaml — заодно
 #           уводится в карантин config.quarantine-<метка времени>/
 #   3. Дописывает секцию networks (external на фактическую docker-сеть стека,
@@ -71,6 +76,7 @@ step()     { printf "\n${C_INFO}==>${C_OFF} %s\n" "$*"; }
 TS="$(date +%Y%m%d-%H%M%S)"
 FAILED=0          # количество инстансов, которые починить не удалось
 FIXED=0           # количество успешно починенных инстансов
+EXPLICIT=0        # 1 — инстанс задан явно через --instance-dir
 
 usage() { awk 'NR>1 && !/^#/ {exit} NR>1 {sub(/^# ?/, ""); print}' "$0"; }
 
@@ -202,7 +208,7 @@ find_good_config_source() {  # $1 — instance dir; $2 — config dir; печа�
   done < <(ls -1dt "$inst"/config.failed-*/ 2>/dev/null || true)
   while IFS= read -r cand; do
     [ -n "$cand" ] || continue
-    if [ -s "$cand" ] && tar tzf "$cand" 2>/dev/null | grep -q 'docker-compose\.'; then
+    if [ -s "$cand" ] && [ -n "$(archive_member_for "$inst" "$cand")" ]; then
       echo "$cand"; return 0
     fi
   done < <(ls -1t "$inst"/backups/config-*.tar.gz \
@@ -285,6 +291,65 @@ restore_missing_from_archive() {  # $1 — instance dir; $2 — архив; rc: 
   return 0
 }
 
+# Поддерево инстанса внутри архива config-*.tar.gz. Архив делается так:
+#   tar czf config-<ts>.tar.gz -C <корень установки> config
+# поэтому файлы инстанса <inst> лежат в архиве под «<relpath(inst)>/config/…»:
+#   главный инстанс /opt/ClearNDR/config  → «config/…»
+#   events-stack    /opt/ClearNDR/config/events-stack/opensearch_dashboards
+#                                         → «config/events-stack/opensearch_dashboards/config/…»
+# Корень установки может быть неизвестен (--instance-dir без --scan-root) —
+# поэтому кандидаты перебираются, а архив сам подтверждает нужный (grep листинга).
+archive_member_for() {  # $1 — instance dir; $2 — архив; печатает member либо rc 1
+  local inst="${1%/}" arch="$2" root="${SCAN_ROOT%/}" cand p suffix
+  # 1) инстанс под известным корнем (SCAN_ROOT или /opt/ClearNDR)
+  p="${inst#"$root"}"
+  if [ "$p" = "$inst" ]; then p="${inst#/opt/ClearNDR}"; fi
+  if [ -n "$p" ] && [ "$p" != "$inst" ]; then
+    p="${p#/}"
+    if [ "$(basename "$inst")" = "config" ]; then cand="$p"; else cand="$p/config"; fi
+    if tar tzf "$arch" 2>/dev/null | grep -qE "^${cand}/docker-compose\.(yaml|yml)$"; then
+      echo "$cand"; return 0
+    fi
+  fi
+  # 2) эвристика: поддерево от первого каталога «config» в пути инстанса
+  suffix="$(printf '%s' "$inst" | grep -oE '/config[^/]*/.*' | head -1 || true)"
+  if [ -n "$suffix" ]; then
+    suffix="${suffix#/}"
+    if [ "$(basename "$inst")" = "config" ]; then cand="$suffix"; else cand="$suffix/config"; fi
+    if tar tzf "$arch" 2>/dev/null | grep -qE "^${cand}/docker-compose\.(yaml|yml)$"; then
+      echo "$cand"; return 0
+    fi
+  fi
+  # 3) плоский архив всего config/ — ТОЛЬКО для самого корня установки
+  if [ "$inst" = "$root" ] || [ "$inst" = "/opt/ClearNDR" ]; then
+    if tar tzf "$arch" 2>/dev/null | grep -qE "^config/docker-compose\.(yaml|yml)$"; then
+      echo "config"; return 0
+    fi
+  fi
+  return 1
+}
+
+restore_instance_from_archive() {  # $1 — instance dir; $2 — архив; rc 0 — извлечено
+  local inst="$1" arch="$2" member
+  member="$(archive_member_for "$inst" "$arch")" || {
+    msg_warn "Архив $(basename "$arch") не содержит поддерево этого инстанса — пропущен"
+    return 1
+  }
+  if [ "$DRY_RUN" -eq 1 ]; then
+    msg_info "dry-run: из $(basename "$arch") были бы извлечены файлы ${member}/ → ${inst}/config/ (no-clobber)"
+    return 0
+  fi
+  if [ "$member" = "config" ]; then
+    tar xzf "$arch" -C "$inst" --skip-old-files "$member" 2>/dev/null || true
+  else
+    # снимаем префикс инстанса (config/events-stack/<имя>/), оставляя config/…
+    local strip="${member%/}"; strip="${strip%/*}"
+    tar xzf "$arch" -C "$inst" --skip-old-files --transform "s|^${strip}/||" "$member" 2>/dev/null || true
+  fi
+  msg_ok "Из $(basename "$arch") восстановлены недостающие файлы (${member}/ → config/, no-clobber)"
+  return 0
+}
+
 restore_missing_from_dir() {  # $1 — config dir; $2 — каталог-источник
   local cfg="$1" src="$2" f restored=0
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -356,6 +421,16 @@ bring_stack_up() {  # $1 — config dir
 repair_instance() {  # $1 — instance dir; $2 — config dir
   local inst="$1" cfg="$2" f src msg
   step "Инстанс: $inst"
+  if [ ! -d "$cfg" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      msg_info "dry-run: каталог config/ отсутствует ЦЕЛИКОМ — $cfg был бы создан"
+    elif mkdir -p "$cfg"; then
+      msg_warn "Каталог config/ отсутствовал ЦЕЛИКОМ — создан: $cfg"
+    else
+      msg_err "Не удалось создать $cfg"
+      FAILED=$((FAILED + 1)); return 1
+    fi
+  fi
   if f="$(compose_file_name "$cfg")"; then
     msg_ok "compose-файл на месте: config/$f"
   else
@@ -364,7 +439,7 @@ repair_instance() {  # $1 — instance dir; $2 — config dir
       msg_info "Источник восстановления: $src"
       case "$src" in
         *.tar.gz)
-          restore_missing_from_archive "$inst" "$src" || true
+          restore_instance_from_archive "$inst" "$src" || true
           ;;
         *)
           local srcdir; srcdir="$(dirname "$src")"
@@ -423,7 +498,7 @@ repair_instance() {  # $1 — instance dir; $2 — config dir
     if src="$(find_source_for_files "$inst" "$cfg" "$miss")"; then
       msg_info "Источник восстановления файлов: $src"
       case "$src" in
-        *.tar.gz) [ "$DRY_RUN" -eq 1 ] || tar xzf "$src" -C "$inst" --skip-old-files 2>/dev/null || true ;;
+        *.tar.gz) restore_instance_from_archive "$inst" "$src" || true ;;
         *)        restore_missing_from_dir "$cfg" "$src" || true ;;
       esac
       miss="$(missing_referenced_files "$cfg" | grep . || true)"
@@ -470,6 +545,8 @@ collect_config_dirs() {
 is_instance_config() {  # $1 — config dir; rc 0 — да
   local cfg="$1" inst f
   inst="$(dirname "$cfg")"
+  # инстанс events-stack — считается инстансом, даже если config/ утрачен целиком
+  [ "$(basename "$(dirname "$inst")")" = "events-stack" ] && return 0
   compose_file_name "$cfg" >/dev/null 2>&1 && return 0
   [ -d "$cfg/config" ] && return 0                       # ручной config/config
   ls -d "$inst"/config.failed-*/ >/dev/null 2>&1 && return 0
@@ -495,17 +572,34 @@ main() {
     [ -d "$cfg" ] || { msg_err "Каталог не найден: $cfg"; exit 1; }
     # допускается указание как самого config/, так и родительского каталога
     [ "$(basename "$cfg")" = "config" ] || cfg="$cfg/config"
-    [ -d "$cfg" ] || { msg_err "В $INSTANCE_DIR_OPT нет подкаталога config/"; exit 1; }
+    if [ ! -d "$cfg" ]; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        msg_info "dry-run: подкаталог config/ отсутствует — $cfg был бы создан"
+      else
+        mkdir -p "$cfg" || { msg_err "Не удалось создать $cfg"; exit 1; }
+        msg_warn "Подкаталог config/ отсутствовал ЦЕЛИКОМ — создан: $cfg (файлы восстановит следующий шаг)"
+      fi
+    fi
+    EXPLICIT=1
     cfgs+=("$cfg")
   else
     mapfile -t cfgs < <(collect_config_dirs "$SCAN_ROOT")
+    # events-stack: инстансы под ним ищем отдельно — их config/ тоже мог исчезнуть
+    local es_root="$SCAN_ROOT/config/events-stack" d
+    if [ -d "$es_root" ]; then
+      while IFS= read -r d; do
+        local dup=0 k
+        for k in "${cfgs[@]}"; do [ "$k" = "$d/config" ] && { dup=1; break; }; done
+        [ "$dup" -eq 0 ] && cfgs+=("$d/config")
+      done < <(find "$es_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+    fi
   fi
 
   [ "${#cfgs[@]}" -gt 0 ] || { msg_err "Каталоги config/ не найдены (scan-root=$SCAN_ROOT)"; exit 1; }
 
   local cfg rc_any=0 f msg
   for cfg in "${cfgs[@]}"; do
-    is_instance_config "$cfg" || continue
+    [ "$EXPLICIT" -eq 1 ] || is_instance_config "$cfg" || continue
     local inst; inst="$(dirname "$cfg")"
     if f="$(compose_file_name "$cfg")" && msg="$(validate_compose_project "$cfg")"; then
       msg_ok "Инстанс цел: $cfg (config/$f валиден) — проверю файлы, на которые ссылается compose"

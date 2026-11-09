@@ -29,6 +29,17 @@
 #   4. комбинация предыдущих.
 # Скрипт определяет, какой из вариантов у вас, и по флагу --fix чинит.
 #
+# Порядок восстановления (--fix):
+#   1) штатный kibana_reset в scirius (полный журнал — events-restore-<ts>.log
+#      в каталоге backups рядом с инстансом);
+#   2) при ошибке (например «ES transport error: 400 illegal_argument_exception»
+#      в _kibana_inject) — сбор диагностики (.kibana — индекс или алиас, проба
+#      DELETE напрямую, исходники scirius) и ПРЯМАЯ загрузка штатных дашбордов
+#      из образа scirius в .kibana через REST opensearch (минуя клиент scirius);
+#   3) если и это не сработало — пересоздание индекса .kibana (снимок объектов
+#      сохраняется в backups/kibana-objects-<ts>.json) и повтор шагов 1–2;
+#   4) крайний случай — создание индекс-паттерна logstash-* через API Dashboards.
+#
 # Примеры:
 #   sudo ./clearndr-events-restore.sh                # только диагностика
 #   sudo ./clearndr-events-restore.sh --fix          # диагностика + исправления
@@ -91,6 +102,9 @@ VOLUME_ATTACHED=""
 VOLUME_OTHERS=""                          # другие opensearch-data-*, через |
 EVE_DIR=""; EVE_FRESH=""
 PROBLEMS=0
+TS="$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR=""                                # задаётся в main (backups рядом с инстансом)
+LOG_FILE=""                                  # events-restore-<ts>.log
 
 have_docker() { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
 
@@ -244,6 +258,236 @@ confirm() {  # $1 — вопрос; rc 0 — да
   [ "$a" = "y" ] || [ "$a" = "Y" ] || [ "$a" = "yes" ]
 }
 
+log_append() {  # stdin — данные; $1 — заголовок секции
+  [ -n "$LOG_FILE" ] && [ "$LOG_FILE" != "/dev/null" ] || return 0
+  { echo; echo "=== $1 ==="; cat; } >> "$LOG_FILE" 2>/dev/null || true
+  return 0
+}
+
+run_kibana_reset() {  # штатный путь; полный вывод — в LOG_FILE, на экран — хвост
+  local out rc
+  msg_info "Выполняю в $CT_SCIRIUS: python manage.py kibana_reset (полный журнал: $LOG_FILE)"
+  out="$(docker exec -w /code "$CT_SCIRIUS" python manage.py kibana_reset 2>&1)" && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    out="$(docker exec -w /code "$CT_SCIRIUS" python3 manage.py kibana_reset 2>&1)" && rc=0 || rc=$?
+  fi
+  printf '%s\n' "$out" | log_append "kibana_reset (rc=$rc)"
+  if [ "$rc" -eq 0 ]; then
+    msg_ok "kibana_reset выполнен"
+    return 0
+  fi
+  msg_warn "kibana_reset завершился ошибкой (rc=$rc) — последние строки:"
+  printf '%s\n' "$out" | tail -12 | sed 's/^/    /'
+  return 1
+}
+
+kibana_evidence_dump() {  # диагностика отказа kibana_reset — в LOG_FILE
+  msg_info "Собираю диагностику отказа (состояние .kibana, проба DELETE, исходники scirius)…"
+  {
+    echo "--- grep es_extra_params в scirius (es_data.py, es_query.py) ---"
+    docker exec "$CT_SCIRIUS" sh -c "grep -n -B2 -A6 'es_extra_params' /code/rules/es_data.py /code/rules/es_query.py 2>/dev/null" || true
+    echo "--- контекст es_data.py:1800-1850 (_kibana_inject) ---"
+    docker exec "$CT_SCIRIUS" sed -n '1800,1850p' /code/rules/es_data.py 2>/dev/null || true
+    echo "--- GET /_alias/.kibana* (индекс или алиас?) ---"
+    api "$CT_OPENSEARCH" 'http://localhost:9200/_alias/.kibana*' || true
+    echo
+    echo "--- GET /_cat/indices/.kibana*?v ---"
+    api "$CT_OPENSEARCH" 'http://localhost:9200/_cat/indices/.kibana*?v' || true
+    echo
+    echo "--- GET /.kibana/_mapping (первые 40 строк) ---"
+    api "$CT_OPENSEARCH" 'http://localhost:9200/.kibana/_mapping' | head -40 || true
+    echo
+    echo "--- проба DELETE /.kibana/_doc/__kibana_probe__?refresh=true (тело ответа) ---"
+    docker exec "$CT_OPENSEARCH" curl -sS --max-time 10 -XDELETE \
+      'http://localhost:9200/.kibana/_doc/__kibana_probe__?refresh=true' 2>&1 || true
+    echo
+  } | log_append "диагностика отказа kibana_reset"
+  msg_ok "Диагностика записана в $LOG_FILE"
+}
+
+inject_dashboards_via_curl() {  # прямая загрузка штатных дашбордов из образа scirius
+  step "Прямая загрузка штатных дашбордов в .kibana (через REST opensearch)"
+  local dashdir="" cand tmp ok=0 fail=0 f id resp
+  dashdir="$(docker exec "$CT_SCIRIUS" grep -rhoE '\"/[^\"]*dashboards[^\"]*\"' \
+                /code/scirius/settings /code/scirius/settings.py 2>/dev/null | head -1 || true)"
+  dashdir="${dashdir//\"/}"
+  case "$dashdir" in /*) ;; *) dashdir="" ;; esac
+  if [ -n "$dashdir" ] && ! docker exec "$CT_SCIRIUS" test -d "$dashdir" 2>/dev/null; then
+    dashdir=""
+  fi
+  if [ -z "$dashdir" ]; then
+    while IFS= read -r cand; do
+      [ -n "$cand" ] || continue
+      case "$cand" in /*) ;; *) continue ;; esac
+      if docker exec "$CT_SCIRIUS" test -d "$cand/dashboard" 2>/dev/null \
+         || docker exec "$CT_SCIRIUS" test -d "$cand/visualizations" 2>/dev/null; then
+        dashdir="$cand"; break
+      fi
+    done < <(docker exec "$CT_SCIRIUS" sh -c \
+      'ls -d /opt/selks/*dash* /code/*dash* /opt/*dash* 2>/dev/null; find /opt /code -maxdepth 4 -type d -name dashboard 2>/dev/null | sed "s|/dashboard$||"' \
+      2>/dev/null || true)
+  fi
+  if [ -z "$dashdir" ]; then
+    msg_err "Каталог дашбордов в образе scirius не найден (KIBANA*_DASHBOARDS_PATH)"
+    return 1
+  fi
+  msg_info "Источник дашбордов: $CT_SCIRIUS:$dashdir"
+  tmp="$(mktemp -d /tmp/kibana-dash.XXXXXX)"
+  if ! docker cp "$CT_SCIRIUS:$dashdir" "$tmp/dashboards" >/dev/null 2>&1; then
+    msg_err "Не удалось скопировать $dashdir из контейнера scirius"
+    rm -rf "$tmp"
+    return 1
+  fi
+  for f in "$tmp/dashboards"/*/*.json; do
+    [ -f "$f" ] || continue
+    id="$(basename "$f" .json)"
+    docker exec "$CT_OPENSEARCH" curl -fsS --max-time 10 -XDELETE \
+      "http://localhost:9200/.kibana/_doc/$id?refresh=true" >/dev/null 2>&1 || true
+    if docker exec -i "$CT_OPENSEARCH" curl -fsS --max-time 30 -XPUT \
+        "http://localhost:9200/.kibana/_doc/$id?refresh=true" \
+        -H 'Content-Type: application/json' --data-binary @- < "$f" > "$tmp/last-resp" 2>&1 \
+       && ! grep -q '"error"' "$tmp/last-resp"; then
+      ok=$((ok + 1))
+    else
+      fail=$((fail + 1))
+      { printf 'PUT %s: ' "$id"; head -c 300 "$tmp/last-resp" 2>/dev/null; echo; } \
+        | log_append "ошибки inject_dashboards_via_curl"
+      [ "$fail" -le 3 ] && { msg_warn "Не загрузился объект «$id» (детали в журнале)"; }
+    fi
+  done
+  rm -rf "$tmp"
+  if [ "$ok" -gt 0 ]; then
+    if [ "$fail" -eq 0 ]; then
+      msg_ok "Загружено сохранённых объектов: $ok (без ошибок)"
+    else
+      msg_warn "Загружено сохранённых объектов: $ok, с ошибками: $fail (см. $LOG_FILE)"
+    fi
+    return 0
+  fi
+  msg_err "Ни один объект загрузить не удалось (см. $LOG_FILE)"
+  return 1
+}
+
+wait_dashboards() {
+  local waited=0 st
+  [ -n "$CT_DASHBOARDS" ] || return 0
+  while [ "$waited" -lt "$HEALTH_TIMEOUT" ]; do
+    st="$(docker inspect "$CT_DASHBOARDS" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)"
+    [ "$st" = "healthy" ] || [ "$st" = "running" ] && { msg_ok "opensearch-dashboards снова в строю ($st, за ${waited}с)"; return 0; }
+    sleep 5; waited=$((waited + 5))
+  done
+  msg_warn "opensearch-dashboards не сообщил healthy за ${HEALTH_TIMEOUT}с (продолжаю)"
+  return 0
+}
+
+wipe_kibana() {  # радикальный шаг: пересоздание индекса .kibana (данные logstash-* не трогаются)
+  step "Пересоздание индекса .kibana"
+  local docs="${OS_KIBANA_DOCS:-0}" concrete idx rc=1 json
+  msg_warn "Будет удалён индекс .kibana (сохранённых объектов сейчас: $docs, индекс-паттернов нет)."
+  msg_warn "События (logstash-*) и данные Suricata НЕ затрагиваются. Снимок объектов сохраняется."
+  confirm "Удалить и пересоздать .kibana?" || { msg_info "Пропущено пользователем"; return 1; }
+  api "$CT_OPENSEARCH" 'http://localhost:9200/.kibana/_search?size=500' \
+    > "$BACKUP_DIR/kibana-objects-$TS.json" 2>/dev/null || true
+  msg_ok "Снимок объектов .kibana сохранён: $BACKUP_DIR/kibana-objects-$TS.json"
+  if [ -n "$CT_DASHBOARDS" ] && ct_running "$CT_DASHBOARDS"; then
+    docker stop "$CT_DASHBOARDS" >/dev/null 2>&1 || true
+  fi
+  json="$(api "$CT_OPENSEARCH" 'http://localhost:9200/_alias/.kibana')"
+  concrete="$(printf '%s' "$json" | grep -oE '"\.kibana[0-9_A-Za-z]*"' | tr -d '"' | grep -v '^\.kibana$' | sort -u || true)"
+  if [ -n "$concrete" ]; then
+    while IFS= read -r idx; do
+      [ -n "$idx" ] || continue
+      msg_info ".kibana — алиас; удаляю конкретный индекс: $idx"
+      if docker exec "$CT_OPENSEARCH" curl -fsS --max-time 30 -XDELETE \
+          "http://localhost:9200/$idx" >> "$LOG_FILE" 2>&1; then rc=0; fi
+    done <<< "$concrete"
+  else
+    if docker exec "$CT_OPENSEARCH" curl -fsS --max-time 30 -XDELETE \
+        'http://localhost:9200/.kibana' >> "$LOG_FILE" 2>&1; then rc=0; fi
+  fi
+  if [ "$rc" -eq 0 ]; then
+    msg_ok "Индекс .kibana удалён"
+  else
+    msg_err "Не удалось удалить .kibana (тело ответа — в $LOG_FILE)"
+  fi
+  if [ -n "$CT_DASHBOARDS" ]; then
+    docker start "$CT_DASHBOARDS" >/dev/null 2>&1 || true
+    wait_dashboards
+  fi
+  return "$rc"
+}
+
+create_pattern_via_api() {  # индекс-паттерн logstash-* через API Dashboards
+  if [ -z "$CT_DASHBOARDS" ] || ! ct_running "$CT_DASHBOARDS"; then
+    msg_warn "Dashboards не запущен — индекс-паттерн через API создать нельзя"
+    return 1
+  fi
+  OSD_PATTERNS="$(api "$CT_DASHBOARDS" 'http://localhost:5601/api/saved_objects/_find?type=index-pattern&per_page=100' \
+    | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  if printf '%s' "$OSD_PATTERNS" | grep -q 'logstash'; then
+    msg_ok "Индекс-паттерн logstash-* уже есть"
+    return 0
+  fi
+  confirm "Создать индекс-паттерн logstash-* через API Dashboards?" || { msg_info "Пропущено"; return 1; }
+  if docker exec "$CT_DASHBOARDS" curl -fsS --max-time 15 -X POST \
+      -H 'osd-xsrf: true' -H 'Content-Type: application/json' \
+      -d '{"attributes":{"title":"logstash-*","timeFieldName":"@timestamp"}}' \
+      'http://localhost:5601/api/saved_objects/index-pattern/logstash-*' >/dev/null 2>&1; then
+    msg_ok "Индекс-паттерн logstash-* создан"
+    return 0
+  fi
+  msg_err "Не удалось создать индекс-паттерн через API"
+  return 1
+}
+
+fix_dashboards() {  # лестница: kibana_reset → прямая загрузка → пересоздание .kibana → API
+  step "Восстановление источников данных и дашбордов"
+  if [ -n "$CT_SCIRIUS" ] && [ "$SCIRIUS_RUNNING" -eq 1 ]; then
+    if ! docker exec "$CT_SCIRIUS" test -f /code/manage.py 2>/dev/null; then
+      msg_err "В контейнере scirius нет /code/manage.py — обновите главный стек или сообщите в поддержку"
+      return 1
+    fi
+    msg_warn "Команда kibana_reset УДАЛИТ в Dashboards кастомные объекты (все, кроме штатных Stamus «SN*»)"
+    msg_warn "и заново создаст штатные: индекс-паттерн logstash-*, дашборды, визуализации. Данные (индексы) не трогаются."
+    confirm "Выполнить в scirius: python manage.py kibana_reset?" || { msg_info "Пропущено пользователем"; return 1; }
+    # 1) штатный путь
+    if run_kibana_reset; then
+      return 0
+    fi
+    # 2) диагностика + прямая загрузка из образа scirius (минуя клиент scirius)
+    kibana_evidence_dump
+    msg_info "Пробую прямую загрузку дашбордов через REST opensearch"
+    if inject_dashboards_via_curl; then
+      create_pattern_via_api || true
+      return 0
+    fi
+    # 3) пересоздание .kibana и повтор
+    if wipe_kibana; then
+      msg_info "Индекс .kibana пересоздан — повторяю kibana_reset"
+      if run_kibana_reset; then
+        return 0
+      fi
+      if inject_dashboards_via_curl; then
+        create_pattern_via_api || true
+        return 0
+      fi
+    fi
+    # 4) крайний случай: хотя бы индекс-паттерн через API (без дашбордов Stamus)
+    msg_info "Последний фолбэк: создание индекс-паттерна logstash-* через API Dashboards"
+    create_pattern_via_api || true
+    msg_err "Восстановить сохранённые объекты не удалось — сохраните $LOG_FILE для анализа"
+    return 1
+  elif [ -n "$CT_SCIRIUS" ]; then
+    msg_warn "Контейнер scirius есть, но не запущен — запустите главный стек и повторите --fix."
+    msg_warn "Альтернатива вручную: docker start $CT_SCIRIUS && docker exec -w /code $CT_SCIRIUS python manage.py kibana_reset"
+    return 1
+  else
+    msg_warn "Контейнер scirius не найден — создам индекс-паттерн logstash-* через API (без дашбордов Stamus)."
+    create_pattern_via_api
+    return $?
+  fi
+}
+
 fix_volume_data() {  # перенос данных из старого тома в прикреплённый
   [ "$SKIP_VOLUME_COPY" -eq 1 ] && { msg_info "--skip-volume-copy: перенос данных между томами отключён"; return 1; }
   [ -n "$VOLUME_OTHERS" ] || return 1
@@ -290,48 +534,6 @@ fix_fluentd() {
     fi
   fi
   return 0
-}
-
-fix_dashboards() {  # пересоздание индекс-паттерна + дашбордов
-  step "Восстановление источников данных и дашбордов"
-  if [ -n "$CT_SCIRIUS" ] && [ "$SCIRIUS_RUNNING" -eq 1 ]; then
-    if ! docker exec "$CT_SCIRIUS" test -f /code/manage.py 2>/dev/null; then
-      msg_err "В контейнере scirius нет /code/manage.py — обновите главный стек или сообщите в поддержку"
-      return 1
-    fi
-    msg_warn "Команда kibana_reset УДАЛИТ в Dashboards кастомные объекты (все, кроме штатных Stamus «SN*»)"
-    msg_warn "и заново создаст штатные: индекс-паттерн logstash-*, дашборды, визуализации. Данные (индексы) не трогаются."
-    confirm "Выполнить в scirius: python manage.py kibana_reset?" || { msg_info "Пропущено пользователем"; return 1; }
-    if docker exec -w /code "$CT_SCIRIUS" python manage.py kibana_reset 2>&1 | tail -5; then
-      msg_ok "kibana_reset выполнен"
-      return 0
-    fi
-    msg_warn "python не сработал — пробую python3"
-    if docker exec -w /code "$CT_SCIRIUS" python3 manage.py kibana_reset 2>&1 | tail -5; then
-      msg_ok "kibana_reset выполнен (python3)"
-      return 0
-    fi
-    msg_err "kibana_reset не удался — смотрите вывод выше"
-    return 1
-  elif [ -n "$CT_SCIRIUS" ]; then
-    msg_warn "Контейнер scirius есть, но не запущен — запустите главный стек и повторите --fix."
-    msg_warn "Альтернатива вручную: docker start $CT_SCIRIUS && docker exec -w /code $CT_SCIRIUS python manage.py kibana_reset"
-    return 1
-  else
-    msg_warn "Контейнер scirius не найден — создам только индекс-паттерн logstash-* через API (без дашбордов Stamus)."
-    if [ -n "$CT_DASHBOARDS" ] && ct_running "$CT_DASHBOARDS"; then
-      confirm "Создать индекс-паттерн logstash-* через API Dashboards?" || { msg_info "Пропущено"; return 1; }
-      if docker exec "$CT_DASHBOARDS" curl -fsS --max-time 15 -X POST \
-          -H 'osd-xsrf: true' -H 'Content-Type: application/json' \
-          -d '{"attributes":{"title":"logstash-*","timeFieldName":"@timestamp"}}' \
-          'http://localhost:5601/api/saved_objects/index-pattern/logstash-*' >/dev/null 2>&1; then
-        msg_ok "Индекс-паттерн logstash-* создан (дашборды появятся после запуска scirius и повторного --fix)"
-        return 0
-      fi
-      msg_err "Не удалось создать индекс-паттерн через API"
-    fi
-    return 1
-  fi
 }
 
 wait_opensearch() {
@@ -388,6 +590,12 @@ main() {
     exit 1
   fi
   [ -d "$inst" ] || { msg_err "Каталог инстанса не найден: $inst (укажите --instance-dir)"; exit 1; }
+
+  # журнал и снимки — в backups рядом с инстансом
+  BACKUP_DIR="$(dirname "$inst")/backups"
+  if ! mkdir -p "$BACKUP_DIR" 2>/dev/null; then BACKUP_DIR="/tmp"; fi
+  LOG_FILE="$BACKUP_DIR/events-restore-$TS.log"
+  touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/dev/null"
 
   diagnose_instance "$inst"
   local diag_problems="$PROBLEMS"

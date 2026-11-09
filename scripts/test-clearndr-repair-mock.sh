@@ -109,6 +109,13 @@ fluentd-pos-\$SEED"
     ct="\$3"; [ "\$2" = "--tail" ] && ct="\$4"
     f="\$MOCKBIN/logs-\${ct}"; [ -f "\$f" ] && cat "\$f" || echo "(no logs)"
     exit 0 ;;
+  "cp "*)
+    LOG "docker-cp"
+    dst="\${@: -1}"
+    mkdir -p "\$dst/index-pattern" "\$dst/dashboard"
+    echo '{"type":"index-pattern","id":"logstash","attributes":{"title":"logstash-*","timeFieldName":"@timestamp"}}' > "\$dst/index-pattern/logstash.json"
+    echo '{"type":"dashboard","id":"SN-Demo","attributes":{"title":"SN Demo"}}' > "\$dst/dashboard/SN-Demo.json"
+    exit 0 ;;
   "start "*) LOG "docker-start \$2"; sed -i "/^state\$/d" "\$MOCKBIN/state" 2>/dev/null; exit 0 ;;
   "stop "*) LOG "docker-stop \$2"; exit 0 ;;
   "run "*)
@@ -127,9 +134,26 @@ fluentd-pos-\$SEED"
   "exec "*)
     if printf '%s\n' "\$@" | grep -q 'test -f /code/manage.py'; then exit 0; fi
     if printf '%s\n' "\$@" | grep -q 'kibana_reset'; then
-      LOG "kibana-reset"; echo "Kibana dashboards reloaded successfully"
+      LOG "kibana-reset"
+      if [ -s "\$MOCKBIN/kibana-fail" ]; then
+        echo 'rules.es_graphs.ESError: ES failure: ES transport error: 400 illegal_argument_exception' >&2
+        exit 1
+      fi
+      echo "Kibana dashboards reloaded successfully"
       echo "logstash-*" > "\$MOCKBIN/osd-patterns"
       exit 0
+    fi
+    # ветки для вызовов внутри КОНТЕЙНЕРА SCIRIUS (имя содержит «-scirius-»):
+    # дамп исходников, test -d, путь к дашбордам. Важно: не срабатывать на
+    # имени config-opensearch-dashboards-…!
+    if printf '%s\n' "\$@" | grep -q -- '-scirius-'; then
+      if printf '%s\n' "\$@" | grep -q 'es_extra_params\|sed -n'; then
+        echo '(mock scirius source dump)'; exit 0
+      fi
+      if printf '%s\n' "\$@" | grep -q 'test -d'; then exit 0; fi
+      if [ ! -s "\$MOCKBIN/no-dashboards-dir" ] && printf '%s\n' "\$@" | grep -q 'dashboards'; then
+        echo '/opt/selks/kibana7-dashboards'; exit 0
+      fi
     fi
     # curl внутри контейнера: URL — последний аргумент
     url="\${@: -1}"
@@ -304,16 +328,18 @@ out="$(PATH="$W/bin:$PATH" "$REPAIR" --scan-root "$W/ndrroot" --no-up --no-color
 check_rc "$rc" 1 "A8: rc"
 contains "$out" "Источник не найден" "A8: сообщение об отсутствии источников"
 
-# --- A9: events-инстанс чинится сканом, архив — в своём backups ---
+# --- A9: events-инстанс чинится сканом; архив содержит поддерево events-stack ---
 W="$(new_work a9)"; setup_state "$W" "state=ok"
 EV="$W/ndrroot/config/events-stack/opensearch_dashboards"
-mkdir -p "$EV/config" "$W/ndrroot/backups/tpl/config" "$EV/backups"
-compose_plain > "$W/ndrroot/backups/tpl/config/docker-compose.yaml"
+mkdir -p "$EV/config" "$EV/backups" \
+  "$W/ndrroot/backups/tpl/config/events-stack/opensearch_dashboards/config"
+compose_plain > "$W/ndrroot/backups/tpl/config/events-stack/opensearch_dashboards/config/docker-compose.yaml"
 tar czf "$EV/backups/config-events.tar.gz" -C "$W/ndrroot/backups/tpl" config
 out="$(PATH="$W/bin:$PATH" "$REPAIR" --scan-root "$W/ndrroot" --no-up --no-color 2>&1)"; rc=$?
 check_rc "$rc" 0 "A9: rc"
 [ -f "$EV/config/docker-compose.yaml" ] && ok "A9: events compose восстановлен" || bad "A9: events compose нет"
 contains "$out" "opensearch_dashboards" "A9: events-инстанс найден сканом"
+grep -q 'external: true' "$EV/config/docker-compose.yaml" && ok "A9: сети дописаны" || bad "A9: сетей нет"
 
 # --- A10: --instance-dir для events-инстанса ---
 W="$(new_work a10)"; setup_state "$W" "state=ok"
@@ -323,6 +349,30 @@ compose_plain > "$EV/config.failed-001/config/docker-compose.yaml"
 out="$(PATH="$W/bin:$PATH" "$REPAIR" --instance-dir "$EV" --no-up --no-color 2>&1)"; rc=$?
 check_rc "$rc" 0 "A10: rc"
 [ -f "$EV/config/docker-compose.yaml" ] && ok "A10: compose восстановлен по --instance-dir" || bad "A10: compose нет"
+
+# --- A11: config/ отсутствует ЦЕЛИКОМ → создаётся, compose из архива корня ---
+W="$(new_work a11)"; setup_state "$W" "state=ok"
+EV="$W/ndrroot/config/events-stack/opensearch_dashboards"
+mkdir -p "$EV" "$W/ndrroot/backups/tpl/config/events-stack/opensearch_dashboards/config"
+compose_plain > "$W/ndrroot/backups/tpl/config/events-stack/opensearch_dashboards/config/docker-compose.yaml"
+tar czf "$W/ndrroot/backups/config-20261109-093937.tar.gz" -C "$W/ndrroot/backups/tpl" config
+out="$(PATH="$W/bin:$PATH" "$REPAIR" --instance-dir "$EV" --no-up --no-color 2>&1)"; rc=$?
+check_rc "$rc" 0 "A11: rc"
+[ -f "$EV/config/docker-compose.yaml" ] && ok "A11: config/ создан, compose из архива" || bad "A11: compose нет"
+grep -q 'external: true' "$EV/config/docker-compose.yaml" && ok "A11: сети дописаны" || bad "A11: сетей нет"
+
+# --- A12: скан находит events-инстанс с исчезнувшим config/ ---
+W="$(new_work a12)"; setup_state "$W" "state=ok"
+EV="$W/ndrroot/config/events-stack/opensearch_dashboards"
+mkdir -p "$EV" "$W/ndrroot/backups/tpl/config/events-stack/opensearch_dashboards/config"
+compose_plain > "$W/ndrroot/backups/tpl/config/events-stack/opensearch_dashboards/config/docker-compose.yaml"
+# реалистичный архив: главное поддерево + поддерево events-stack (как config-<ts>.tar.gz)
+compose_fixed > "$W/ndrroot/backups/tpl/config/docker-compose.yaml"
+tar czf "$W/ndrroot/backups/config-main.tar.gz" -C "$W/ndrroot/backups/tpl" config
+out="$(PATH="$W/bin:$PATH" "$REPAIR" --scan-root "$W/ndrroot" --no-up --no-color 2>&1)"; rc=$?
+check_rc "$rc" 0 "A12: rc"
+[ -f "$EV/config/docker-compose.yaml" ] && ok "A12: events-инстанс найден сканом, compose из архива" || bad "A12: compose нет"
+[ -f "$W/ndrroot/config/docker-compose.yaml" ] && ok "A12: главный инстанс тоже восстановлен" || bad "A12: главный compose нет"
 
 # ============================================================================
 echo "== Часть B: clearndr-events-restore.sh =="
@@ -423,6 +473,25 @@ log_hasnt "$W" "kibana-reset" "B10: kibana_reset не вызывался (пат
 log_hasnt "$W" "volume-copy" "B10: тома не копировались"
 contains "$out" "уже есть — kibana_reset не требуется" "B10: лишних действий нет"
 contains "$out" "События поступают: 781 → 783" "B10: приток событий подтверждён"
+
+# --- B11: kibana_reset падает (400) → прямая загрузка дашбордов через REST ---
+W="$(new_work b11)"; setup_state "$W" "state=ok" "logstash-base=500" "flow=1" "kibana-fail=1"
+setup_events_fs "$W"
+out="$(PATH="$W/bin:$PATH" "$EVENTS" --instance-dir "$W/inst" --fix --yes --no-color 2>&1)"; rc=$?
+check_rc "$rc" 0 "B11: rc"
+log_has "$W" "kibana-reset" "B11: kibana_reset предпринят"
+log_has "$W" "docker-cp" "B11: дашборды скопированы из scirius"
+log_has "$W" "osd-pattern-created http://localhost:5601/api/saved_objects/index-pattern/logstash-*" "B11: паттерн создан через API"
+log_hasnt "$W" "docker-stop config-opensearch-dashboards-$SEED" "B11: .kibana не стирался (инжект помог)"
+contains "$out" "Индекс-паттерн logstash-* в Dashboards: ЕСТЬ" "B11: паттерн после прямой загрузки"
+
+# --- B12: kibana_reset и инжект падают → пересоздание .kibana → паттерн через API ---
+W="$(new_work b12)"; setup_state "$W" "state=ok" "logstash-base=500" "flow=1" "kibana-fail=1" "no-dashboards-dir=1"
+setup_events_fs "$W"
+out="$(PATH="$W/bin:$PATH" "$EVENTS" --instance-dir "$W/inst" --fix --yes --no-color 2>&1)"; rc=$?
+log_has "$W" "docker-stop config-opensearch-dashboards-$SEED" "B12: dashboards остановлен перед стиранием .kibana"
+log_has "$W" "docker-start config-opensearch-dashboards-$SEED" "B12: dashboards запущен обратно"
+log_has "$W" "osd-pattern-created" "B12: финальный фолбэк — паттерн через API"
 
 # ============================================================================
 echo
