@@ -8,7 +8,7 @@ import { TECH, TechItem } from './tech-logos'
 import { Rich } from './rich'
 import { useI18n, type Lang } from '@/lib/i18n'
 
-export const APP_VERSION = '1.11.0' // синхронно с релизом (package.json)
+export const APP_VERSION = '1.12.0' // синхронно с релизом (package.json)
 
 const REPO = 'https://github.com/NoIDXMV6/ndr-rules-hub'
 const AUTHOR_SITE = 'https://kozhevatov.ru'

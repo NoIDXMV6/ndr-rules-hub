@@ -512,3 +512,80 @@ never overwritten.
 The “Update Clear NDR” tab shows the configuration state in the preflight block
 (“Stack config (docker compose)”) and blocks the update when it is broken, hinting the
 repair script command.
+
+### 11.4. Empty OpenSearch Dashboards: diagnostics and recovery (v1.12.0)
+
+Symptom: the events-stack containers (opensearch, opensearch-dashboards, fluentd) are
+running, but OpenSearch Dashboards is **empty — no data sources (index patterns), no
+dashboards**.
+
+How the events stack works (stamusctl-templates 3.3.x):
+
+| Component | Role |
+|---|---|
+| fluentd | reads `/var/log/suricata/*.json` (Suricata eve.json) and writes events to `logstash-<event_type>-<date>` indices (`logstash-alert-2026.11.09`, …) |
+| opensearch | keeps indices in the `opensearch-data-<seed>` volume; Dashboards saved objects live in the `.kibana` index; fluentd position files — in `fluentd-pos-<seed>` |
+| opensearch-dashboards | web UI; **empty out of the box** — the `logstash-*` index pattern, dashboards and visualizations are created by Scirius |
+| scirius (main stack) | ships the built-in dashboard definitions (`/opt/selks/kibana7-dashboards` inside the image) and can recreate them |
+
+Typical causes of an “empty” Dashboards:
+
+1. the `opensearch-data-<seed>` volume was recreated (often after a failed update with a
+   new seed — the old volume with data may still exist);
+2. the `.kibana` migration to OpenSearch 3.x failed — patterns are gone, data is intact;
+3. fluentd is not writing (cannot read eve.json / cannot reach opensearch) — no data arrives.
+
+Recovery — `scripts/clearndr-events-restore.sh` (shipped in the hub image):
+
+```bash
+sudo ./clearndr-events-restore.sh                    # diagnostics only
+sudo ./clearndr-events-restore.sh --fix              # diagnostics + repairs
+sudo ./clearndr-events-restore.sh --fix --yes        # no questions asked
+sudo ./clearndr-events-restore.sh --fix --skip-volume-copy   # no cross-volume data copy
+```
+
+What `--fix` does, step by step:
+
+1. **Data from the previous volume** — if the attached `opensearch-data-<seed>` volume is
+   empty while other `opensearch-data-*` volumes exist, offers to stop the events-stack
+   containers, copy the data (`alpine cp -a`) from the old volume and start the containers again;
+2. **fluentd** — starts the container if it is stopped;
+3. **Index patterns and dashboards** — runs the built-in Scirius command
+   `python manage.py kibana_reset` inside the scirius container: it deletes every Dashboards
+   object whose name does NOT start with “SN” (including **custom dashboards** — the script
+   warns about this) and re-imports the built-in ones: the `logstash-*` index pattern,
+   dashboards, visualizations; data (indices) are not touched. If there is no scirius
+   container, it creates only the `logstash-*` index pattern via the Dashboards API
+   (Stamus dashboards will appear once scirius is running);
+4. **Verification** — the `logstash-*` pattern exists in Dashboards and events keep flowing
+   (document count in `logstash-*` grows within 10 seconds).
+
+The script also warns when the scirius container seed does not match the events-stack seed
+(stacks from different releases) and checks the freshness of the Suricata `eve.json`.
+
+### 11.5. Why containers run without a compose file, and how to call stamusctl
+
+Two facts that are often confused during troubleshooting (the 2026-11-09 incident):
+
+1. **Containers come up after a host reboot WITHOUT a compose file.** Every Clear NDR service
+   has `restart: unless-stopped` — the docker daemon starts them from its own container
+   database. The compose file is only needed by stamusctl/docker compose (down/up/update) —
+   so “containers are running” does not mean `config/` is intact.
+2. **stamusctl resolves `-c/--config` (default `config`) relative to the current directory.**
+   Running it outside the instance directory yields `stat <cwd>/config/docker-compose.yaml:
+   no such file or directory, Code: 14`. The events-stack instance is a separate directory:
+
+```bash
+# main stack:
+cd /opt/ClearNDR && stamusctl compose ps
+# events stack:
+cd /opt/ClearNDR/config/events-stack/opensearch_dashboards && stamusctl compose ps
+```
+
+`clearndr-update.sh` and `clearndr-repair-stack.sh` always run stamusctl/docker compose from
+the correct instance directory. To restore the events-stack configuration after losing its
+compose file:
+
+```bash
+sudo ./clearndr-repair-stack.sh --instance-dir /opt/ClearNDR/config/events-stack/opensearch_dashboards
+```

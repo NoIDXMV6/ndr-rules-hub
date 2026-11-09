@@ -91,8 +91,9 @@ COPY --from=builder /app/db-template ./db-template
 # в разделе «Обновление Clear NDR» (копируются на хост перед прогоном)
 COPY scripts/clearndr-update.sh /app/scripts/clearndr-update.sh
 COPY scripts/clearndr-repair-stack.sh /app/scripts/clearndr-repair-stack.sh
+COPY scripts/clearndr-events-restore.sh /app/scripts/clearndr-events-restore.sh
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/clearndr-update.sh /app/scripts/clearndr-repair-stack.sh && \
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/clearndr-update.sh /app/scripts/clearndr-repair-stack.sh /app/scripts/clearndr-events-restore.sh && \
     mkdir -p /app/data/exports /app/data/cache /app/data/archives /app/data/wireguard /app/data/clearndr-update/runs
 
 VOLUME ["/app/data"]

@@ -61,7 +61,15 @@ server.log
 /download
 /repos
 /skills
-/scripts
+# scripts/: каталог песочницы игнорируется, НО скрипты, поставляемые в образе
+# хаба и документации, обязаны версионироваться (в v1.11.0 repair-скрипт из-за
+# этого не попал в коммит и был утерян)
+/scripts/*
+!/scripts/clearndr-update.sh
+!/scripts/clearndr-repair-stack.sh
+!/scripts/clearndr-events-restore.sh
+!/scripts/test-clearndr-update-mock.sh
+!/scripts/test-clearndr-repair-mock.sh
 /mini-services
 dev.log
 server.log
