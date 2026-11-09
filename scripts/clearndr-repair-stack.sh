@@ -34,8 +34,14 @@
 #            ложатся в <инстанс>/config/, а не внутрь вложенного каталога)
 #        c) созданный вручную config/config/docker-compose.yaml — заодно
 #           уводится в карантин config.quarantine-<метка времени>/
-#   3. Дописывает секцию networks (external на фактическую docker-сеть стека,
-#      найденную по seed-суффиксу контейнеров) — фикс «Code: 15»;
+#        d) РЕКОНСТРУКЦИЯ из работающих контейнеров (events-stack): контейнеры
+#           с restart: unless-stopped несут фактическую конфигурацию (образы,
+#           env, монтирования, порты, healthcheck, сеть) — compose собирается
+#           из docker inspect; конфиг-файлы под инстансом, отсутствующие на
+#           хосте, восстанавливаются содержимым из контейнера
+#   3. Секция networks (external на фактическую docker-сеть стека, найденную
+#      по seed-суффиксу контейнеров) — фикс «Code: 15»; при реконструкции
+#      секция формируется сразу;
 #   4. Проверяет проект «docker compose config»;
 #   5. По флагу поднимает стек и ждёт health-check opensearch с разбором
 #      журнала при сбое.
@@ -369,6 +375,256 @@ restore_missing_from_dir() {  # $1 — config dir; $2 — каталог-ист�
   return 0
 }
 
+# ----------------------------- реконструкция из контейнеров ------------------
+have_python3() { command -v python3 >/dev/null 2>&1; }
+
+is_events_instance() {  # $1 — instance dir
+  [ "$(basename "$(dirname "$1")")" = "events-stack" ]
+}
+
+# Службы events-stack (допустимы для реконструкции из контейнеров)
+EVENTS_SERVICES=" opensearch opensearch-dashboards fluentd socat socat-readpcap "
+# Известные службы для разбора имён <base>-<svc>-<seed> (длинные раньше коротких)
+ALL_SERVICES="opensearch-dashboards socat-readpcap celery-worker celery-beat celery-flower suri-reloader opensearch fluentd socat scirius rabbitmq suricata nginx grafana victoriametrics utils cron scout evebox arkime otel ai-chat db"
+
+# Печатает строки «service name base» для контейнеров events-stack инстанса
+instance_containers() {  # $1 — seed
+  local seed="$1" name short svc base
+  docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r name; do
+    case "$name" in *-"$seed") ;; *) continue ;; esac
+    short="${name%-"$seed"}"
+    svc=""
+    for cand in $ALL_SERVICES; do
+      if [ "${short%-"$cand"}" != "$short" ]; then svc="$cand"; base="${short%-"$cand"}"; break; fi
+    done
+    [ -n "$svc" ] || continue
+    case "$EVENTS_SERVICES" in *" $svc "*) ;; *) continue ;; esac
+    printf '%s %s %s\n' "$svc" "$name" "${base:-}"
+  done
+}
+
+# Собирает compose YAML из собранных docker inspect (см. manifest.json в $1)
+render_compose_from_inspects() {  # $1 — tmpdir; печатает YAML
+  cat >"$1/render.py" <<'PYRENDER'
+import json, os, sys
+
+def yq(v):
+    return "'" + str(v).replace("'", "''") + "'"
+
+def ns_to_s(ns):
+    return "%gs" % (ns / 1e9) if ns else None
+
+tmpd = sys.argv[1]
+man = json.load(open(os.path.join(tmpd, "manifest.json")))
+services = []
+for row in man["services"]:
+    ins = json.load(open(os.path.join(tmpd, row["file"])))
+    if isinstance(ins, list):
+        ins = ins[0]
+    services.append({"service": row["service"], "name": row["name"], "inspect": ins})
+if not services:
+    sys.exit(3)
+
+DEPS = {
+    "opensearch-dashboards": {"opensearch": "service_healthy"},
+    "scirius": {"db": "service_healthy", "opensearch": "service_healthy",
+                "opensearch-dashboards": "service_healthy"},
+    "suri-reloader": {"scirius": "service_healthy", "suricata": "service_healthy"},
+    "celery-worker": {"rabbitmq": "service_healthy"},
+    "celery-beat": {"rabbitmq": "service_healthy"},
+    "nginx": {"scirius": "service_healthy"},
+}
+present = {s["service"] for s in services}
+binds = []
+L = []
+L.append("# Автоматически реконструировано clearndr-repair-stack.sh из работающих контейнеров (%s)." % man.get("ts", ""))
+L.append("# Эталонные шаблоны: https://github.com/StamusNetworks/stamusctl-templates (data/clearndr)")
+L.append("")
+L.append("services:")
+for s in services:
+    ins = s["inspect"]; c = ins.get("Config", {}); h = ins.get("HostConfig", {}); n = ins.get("NetworkSettings", {})
+    svc = s["service"]
+    L.append("    %s:" % svc)
+    L.append("        container_name: %s" % yq(s["name"]))
+    if c.get("Image"):
+        L.append("        image: %s" % yq(c["Image"]))
+    rp = (h.get("RestartPolicy") or {}).get("Name", "")
+    if rp and rp != "no":
+        L.append("        restart: %s" % yq(rp))
+    if c.get("User"):
+        L.append("        user: %s" % yq(c["User"]))
+    if c.get("WorkingDir"):
+        L.append("        working_dir: %s" % yq(c["WorkingDir"]))
+    ep = c.get("Entrypoint") or []
+    if ep:
+        L.append("        entrypoint: [%s]" % ", ".join(yq(x) for x in ep))
+    cmd = c.get("Cmd") or []
+    if cmd:
+        L.append("        command: [%s]" % ", ".join(yq(x) for x in cmd))
+    env = [e for e in (c.get("Env") or []) if not e.startswith("HOSTNAME=")]
+    if env:
+        L.append("        environment:")
+        for e in env:
+            L.append("            - %s" % yq(e))
+    ports = []
+    for pname, bl in (n.get("Ports") or {}).items():
+        for b in (bl or []):
+            ip = (b.get("HostIp") or "").strip(); hp = b.get("HostPort") or ""
+            if hp:
+                ports.append((ip + ":" if ip else "") + hp + ":" + pname)
+    if ports:
+        L.append("        ports:")
+        for p in ports:
+            L.append("            - %s" % yq(p))
+    vols = []
+    for m in (ins.get("Mounts") or []):
+        dst = m.get("Destination", "")
+        if m.get("Type") == "volume":
+            if m.get("Name"):
+                vols.append(m["Name"] + ":" + dst)
+        elif m.get("Source"):
+            vols.append(m["Source"] + ":" + dst + ("" if m.get("RW", True) else ":ro"))
+            binds.append({"name": s["name"], "src": m["Source"], "dst": dst})
+    if vols:
+        L.append("        volumes:")
+        for v in vols:
+            L.append("            - %s" % yq(v))
+    nets = n.get("Networks") or {}
+    aliases = []
+    if nets:
+        first = list(nets.values())[0] or {}
+        aliases = [a for a in (first.get("Aliases") or []) if a]
+    if not aliases:
+        aliases = [svc]
+    L.append("        networks:")
+    L.append("            network:")
+    L.append("                aliases:")
+    for a in aliases:
+        L.append("                    - %s" % yq(a))
+    hc = c.get("Healthcheck") or {}; t = hc.get("Test") or []
+    if t:
+        L.append("        healthcheck:")
+        if len(t) >= 2 and t[0] == "CMD-SHELL":
+            L.append("            test: [%s, %s]" % (yq("CMD-SHELL"), yq(t[1])))
+        else:
+            L.append("            test: [%s]" % ", ".join(yq(x) for x in t))
+    if hc.get("Interval"):
+        L.append("            interval: %s" % yq(ns_to_s(hc["Interval"])))
+    if hc.get("Timeout"):
+        L.append("            timeout: %s" % yq(ns_to_s(hc["Timeout"])))
+    if hc.get("Retries"):
+        L.append("            retries: %d" % hc["Retries"])
+    if hc.get("StartPeriod"):
+        L.append("            start_period: %s" % yq(ns_to_s(hc["StartPeriod"])))
+    labels = c.get("Labels") or {}
+    if labels:
+        L.append("        labels:")
+        for k in sorted(labels):
+            L.append("            %s: %s" % (yq(k), yq(labels[k])))
+    deps = DEPS.get(svc) or {}
+    dd = [d for d in deps if d in present]
+    if dd:
+        L.append("        depends_on:")
+        for d in dd:
+            dep_ok = False
+            for s2 in services:
+                if s2["service"] == d:
+                    dep_ok = bool((s2["inspect"].get("Config", {}).get("Healthcheck") or {}).get("Test"))
+            cond = deps[d] if dep_ok else "service_started"
+            L.append("            %s:" % d)
+            L.append("                condition: %s" % yq(cond))
+    L.append("")
+net_name = ""
+if services:
+    nets = (services[0]["inspect"].get("NetworkSettings", {}) or {}).get("Networks") or {}
+    if nets:
+        net_name = list(nets.keys())[0]
+L.append("networks:")
+L.append("    network:")
+if net_name:
+    L.append("        name: %s" % yq(net_name))
+    L.append("        external: true")
+with open(os.path.join(tmpd, "binds.json"), "w") as f:
+    json.dump(binds, f)
+print("\n".join(L))
+PYRENDER
+  python3 "$1/render.py" "$1"
+}
+
+# Восстанавливает содержимое bind-файлов под инстансом из контейнера
+ensure_instance_bind_files() {  # $1 — tmpdir; $2 — instance dir
+  local tmpd="$1" inst="${2%/}" name src dst
+  [ -f "$tmpd/binds.json" ] || return 0
+  while IFS=$'\t' read -r name src dst; do
+    [ -n "${name:-}" ] || continue
+    case "$src" in "$inst"/*|"$inst") ;; *) continue ;; esac
+    [ -e "$src" ] && continue
+    mkdir -p "$(dirname "$src")" || continue
+    if docker exec "$name" cat "$dst" > "$src" 2>/dev/null && [ -s "$src" ]; then
+      msg_ok "Файл конфигурации восстановлен из контейнера: $src"
+    else
+      rm -f "$src"
+      msg_warn "Не удалось восстановить содержимое $src из $name — создайте файл вручную"
+    fi
+  done < <(python3 -c '
+import json,sys
+for b in json.load(open(sys.argv[1])):
+    print("%s\t%s\t%s" % (b["name"], b["src"], b["dst"]))
+' "$tmpd/binds.json" 2>/dev/null)
+  return 0
+}
+
+# Источник (d): сборка compose из docker inspect контейнеров events-stack
+reconstruct_compose_from_containers() {  # $1 — config dir; $2 — instance dir
+  local cfg="$1" inst="$2" seed name first_base out tmpd r i sep rc
+  local -a rows rows2
+  have_python3 || { msg_warn "python3 недоступен — реконструкция compose невозможна"; return 1; }
+  if ! have_docker; then msg_warn "docker недоступен — реконструкция compose невозможна"; return 1; fi
+  if [ -f "$cfg/docker-compose.yaml" ] || [ -f "$cfg/docker-compose.yml" ]; then return 0; fi
+  if ! is_events_instance "$inst"; then
+    msg_warn "Реконструкция из контейнеров поддержана только для events-stack инстансов (этот: $inst)"
+    return 1
+  fi
+  seed="$(detect_seed)"
+  [ -n "$seed" ] || { msg_warn "Не удалось определить seed — реконструкция невозможна"; return 1; }
+  mapfile -t rows < <(instance_containers "$seed")
+  [ "${#rows[@]}" -gt 0 ] || { msg_warn "Контейнеры events-stack не найдены (seed=$seed) — реконструкция невозможна"; return 1; }
+  first_base="$(printf '%s' "${rows[0]}" | awk '{print $3}')"
+  rows2=()
+  for r in "${rows[@]}"; do
+    [ "$(printf '%s' "$r" | awk '{print $3}')" = "$first_base" ] && rows2+=("$r")
+  done
+  rows=("${rows2[@]}")
+  tmpd="$(mktemp -d)"
+  i=0; sep=""
+  printf '{"ts":"%s","services":[' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmpd/manifest.json"
+  for r in "${rows[@]}"; do
+    name="$(printf '%s' "$r" | awk '{print $2}')"
+    if ! docker inspect "$name" > "$tmpd/insp-$i.json" 2>/dev/null; then continue; fi
+    printf '%s{"service":"%s","name":"%s","file":"insp-%d.json"}' "$sep" "${r%% *}" "$name" "$i" >> "$tmpd/manifest.json"
+    sep=","; i=$((i + 1))
+  done
+  printf ']}\n' >> "$tmpd/manifest.json"
+  out="$(render_compose_from_inspects "$tmpd")" && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+    rm -rf "$tmpd"
+    msg_warn "Реконструкция compose не удалась (rc=$rc)"
+    return 1
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    local svcs
+    svcs="$(printf '%s\n' "$out" | grep -E '^    [A-Za-z0-9_-]+:$' | sed 's/[ :]//g' | tr '\n' ' ')"
+    msg_info "dry-run: compose был бы реконструирован из контейнеров: $svcs"
+    rm -rf "$tmpd"
+    return 0
+  fi
+  printf '%s\n' "$out" > "$cfg/docker-compose.yaml"
+  msg_ok "compose-файл реконструирован из работающих контейнеров: config/docker-compose.yaml"
+  ensure_instance_bind_files "$tmpd" "$inst"
+  rm -rf "$tmpd"
+  return 0
+}
+
 # ----------------------------- подъём и health -------------------------------
 wait_opensearch_health() {  # $1 — config dir; rc 0 — healthy
   local cfg="$1" f seed ct waited=0 st
@@ -467,15 +723,20 @@ repair_instance() {  # $1 — instance dir; $2 — config dir
           ;;
       esac
     else
-      msg_err "Источник не найден: нет config.failed-*/, архивов config-*.tar.gz и ручного config/config/."
-      msg_err "Восстановите каталог config/ из резервной копии вручную и повторите."
-      FAILED=$((FAILED + 1))
-      return 1
+      msg_info "Локальных источников нет (config.failed-*/, архивы, ручной config) — пробую реконструкцию compose из работающих контейнеров"
+      if ! reconstruct_compose_from_containers "$cfg" "$inst"; then
+        msg_err "Источник не найден: нет config.failed-*/, архивов config-*.tar.gz и ручного config/config/."
+        msg_err "Восстановите каталог config/ из резервной копии вручную и повторите."
+        FAILED=$((FAILED + 1))
+        return 1
+      fi
     fi
     if f="$(compose_file_name "$cfg")"; then
       msg_ok "compose-файл восстановлен: config/$f"
     elif [ "$DRY_RUN" -eq 1 ]; then
       msg_info "dry-run: compose-файл был бы восстановлен в $cfg"
+    elif reconstruct_compose_from_containers "$cfg" "$inst"; then
+      f="$(compose_file_name "$cfg")" && msg_ok "compose-файл восстановлен: config/$f (реконструкция)"
     else
       msg_err "Восстановление не удалось — compose-файла по-прежнему нет"
       FAILED=$((FAILED + 1))

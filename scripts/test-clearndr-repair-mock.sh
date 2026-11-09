@@ -15,6 +15,11 @@
 #   A8 нет источников → rc 1;
 #   A9 events-инстанс (глубина 4) чинится сканом и берёт архив из /opt/<root>/backups;
 #   A10 --instance-dir для events-инстанса.
+#   A11 config/ отсутствует целиком → создаётся, compose из архива корня.
+#   A12 скан находит events-инстанс с исчезнувшим config/.
+#   A13 events-инстанс без источников, контейнеры живы → РЕКОНСТРУКЦИЯ compose
+#       из docker inspect (образы, сеть external, ports, healthcheck, depends_on).
+#   A14 --dry-run при реконструкции — файл не создаётся.
 #
 # Часть B (events-restore):
 #   B1 здоровый стек — только диагностика, rc 0;
@@ -68,6 +73,28 @@ all_names() {
   local list="opensearch opensearch-dashboards fluentd scirius db suricata nginx"
   [ "\$STATE" = no-scirius ] && list="opensearch opensearch-dashboards fluentd db suricata nginx"
   local s; for s in \$list; do echo "config-\$s-\$SEED"; done
+}
+json_for() {  # docker inspect <name> — JSON по службе (для реконструкции compose)
+  local n="\$1" svc img ports mounts
+  case "\$n" in
+    *-opensearch-dashboards-*) svc="opensearch-dashboards"; img="opensearchproject/opensearch-dashboards:3.3.0";;
+    *-opensearch-*)            svc="opensearch";            img="opensearchproject/opensearch:3.3.1";;
+    *-fluentd-*)               svc="fluentd";               img="ghcr.io/stamusnetworks/stamus-images/fluentd:1.16";;
+    *-scirius-*)               svc="scirius";               img="ghcr.io/stamusnetworks/scirius:clear-ndr-1.1.2";;
+    *-db-*)                    svc="db";                    img="postgres:16";;
+    *-suricata-*)              svc="suricata";              img="ghcr.io/stamusnetworks/suricata:7";;
+    *-nginx-*)                 svc="nginx";                 img="nginx:alpine";;
+    *)                         svc="unknown";               img="test/\$n:latest";;
+  esac
+  ports="null"
+  [ "\$svc" = "opensearch-dashboards" ] && ports='{"5601/tcp":[{"HostIp":"0.0.0.0","HostPort":"5601"}]}'
+  mounts="[]"
+  case "\$svc" in
+    opensearch)            mounts='[{"Type":"volume","Name":"opensearch-data-'"$SEED"'","Destination":"/usr/share/opensearch/data","RW":true}]';;
+    opensearch-dashboards) mounts='[{"Type":"bind","Source":"/opt/ClearNDR/config/events-stack/opensearch_dashboards/opensearch_dashboards.yml","Destination":"/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml","RW":true}]';;
+    fluentd)               mounts='[{"Type":"volume","Name":"fluentd-pos-'"$SEED"'","Destination":"/fluentd/log/td-agent","RW":true},{"Type":"bind","Source":"/opt/ClearNDR/containers-data/suricata/logs","Destination":"/var/log/suricata","RW":false}]';;
+  esac
+  printf '[{"Name":"%s","Config":{"Image":"%s","Env":["PATH=/usr/bin","DISABLE_SECURITY_DASHBOARDS_PLUGIN=true"],"Labels":{"com.docker.compose.project":"config","com.docker.compose.service":"%s"},"WorkingDir":"","User":"","Healthcheck":{"Test":["CMD-SHELL","curl --silent --fail localhost:9200/_cluster/health || exit 1"],"Interval":10000000000,"Timeout":5000000000,"Retries":3,"StartPeriod":30000000000}},"HostConfig":{"RestartPolicy":{"Name":"unless-stopped"},"ExtraHosts":[]},"NetworkSettings":{"Networks":{"config_network":{"Aliases":["%s"]}},"Ports":%s},"Mounts":%s}]\n' "\$n" "\$img" "\$svc" "\$svc" "\$ports" "\$mounts"
 }
 case "\$1 \$2" in
   "ps "*)
@@ -187,6 +214,8 @@ fluentd-pos-\$SEED"
       *) echo '{}'; exit 0 ;;
     esac ;;
   "inspect "*)
+    hasfmt=0; for a in "\$@"; do [ "\$a" = "--format" ] && hasfmt=1; done
+    if [ "\$hasfmt" -eq 0 ]; then json_for "\${@: -1}"; exit 0; fi
     case "\$*" in
       *State.Health*) echo healthy ;;
       *NetworkSettings.Networks*) echo "config_network " ;;
@@ -373,6 +402,39 @@ out="$(PATH="$W/bin:$PATH" "$REPAIR" --scan-root "$W/ndrroot" --no-up --no-color
 check_rc "$rc" 0 "A12: rc"
 [ -f "$EV/config/docker-compose.yaml" ] && ok "A12: events-инстанс найден сканом, compose из архива" || bad "A12: compose нет"
 [ -f "$W/ndrroot/config/docker-compose.yaml" ] && ok "A12: главный инстанс тоже восстановлен" || bad "A12: главный compose нет"
+
+# --- A13: events-инстанс без источников, контейнеры живы → реконструкция compose ---
+W="$(new_work a13)"; setup_state "$W" "state=ok"
+EV="$W/ndrroot/config/events-stack/opensearch_dashboards"
+mkdir -p "$EV"
+out="$(PATH="$W/bin:$PATH" "$REPAIR" --instance-dir "$EV" --no-up --no-color 2>&1)"; rc=$?
+check_rc "$rc" 0 "A13: rc"
+[ -f "$EV/config/docker-compose.yaml" ] && ok "A13: compose реконструирован" || bad "A13: compose нет"
+CG="$EV/config/docker-compose.yaml"
+grep -q 'opensearchproject/opensearch:3.3.1' "$CG" && ok "A13: образ opensearch из inspect" || bad "A13: образа opensearch нет"
+grep -q 'opensearchproject/opensearch-dashboards:3.3.0' "$CG" && ok "A13: образ dashboards из inspect" || bad "A13: образа dashboards нет"
+grep -q 'ghcr.io/stamusnetworks/stamus-images/fluentd:1.16' "$CG" && ok "A13: образ fluentd из inspect" || bad "A13: образа fluentd нет"
+grep -q 'external: true' "$CG" && ok "A13: сеть external" || bad "A13: external нет"
+grep -q 'config_network' "$CG" && ok "A13: фактическая сеть (config_network)" || bad "A13: config_network нет"
+grep -q "condition: 'service_healthy'" "$CG" && ok "A13: depends_on с healthcheck" || bad "A13: depends_on нет"
+grep -q '5601' "$CG" && ok "A13: порт dashboards из inspect" || bad "A13: порта нет"
+grep -q 'unless-stopped' "$CG" && ok "A13: restart policy из inspect" || bad "A13: restart нет"
+not_contains "$(cat "$CG")" 'scirius' "A13: чужие службы (scirius) не попали в events-compose"
+contains "$out" "реконструирован из работающих контейнеров" "A13: сообщение о реконструкции"
+contains "$out" "Проект compose валиден" "A13: проект валиден"
+if python3 -c 'import yaml' 2>/dev/null; then
+  python3 -c 'import yaml,sys; yaml.safe_load(open(sys.argv[1]))' "$CG" \
+    && ok "A13: YAML валиден (pyyaml)" || bad "A13: YAML невалиден"
+fi
+
+# --- A14: --dry-run при реконструкции — файл не создаётся ---
+W="$(new_work a14)"; setup_state "$W" "state=ok"
+EV="$W/ndrroot/config/events-stack/opensearch_dashboards"
+mkdir -p "$EV"
+out="$(PATH="$W/bin:$PATH" "$REPAIR" --instance-dir "$EV" --no-up --no-color --dry-run 2>&1)"; rc=$?
+check_rc "$rc" 0 "A14: rc"
+[ ! -f "$EV/config/docker-compose.yaml" ] && ok "A14: dry-run не создавал compose" || bad "A14: compose создан при dry-run"
+contains "$out" "был бы реконструирован из контейнеров" "A14: план реконструкции показан"
 
 # ============================================================================
 echo "== Часть B: clearndr-events-restore.sh =="
