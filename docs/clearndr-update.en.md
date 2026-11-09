@@ -94,9 +94,15 @@ flowchart TB
    stamusctl version
    ```
 3. Running Docker Engine (`docker ps` works) and a running stack (needed for the DB dump).
-4. Enough space in the backup directory: ≥ 2 × size of `config/` + 2 GB (the script checks and
-   refuses to continue if there is not enough).
-5. Permissions: docker commands via the `docker` group or `sudo`.
+4. **Kernel: `vm.max_map_count` ≥ 262144** (OpenSearch requirement; check: `sysctl vm.max_map_count`).
+   If it is lower, the opensearch container will not start after the update. Set it and make it persistent:
+   ```bash
+   sudo sysctl -w vm.max_map_count=262144
+   echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-clearndr.conf
+   ```
+5. Enough space in the backup directory: ≥ 2 × size of `config/` + 2 GB, plus ≥ 5 GB on the docker
+   storage root (`/var/lib/docker`) — the script checks both and refuses to continue when short.
+6. Permissions: docker commands via the `docker` group or `sudo`.
 
 ---
 
@@ -164,13 +170,17 @@ Full flag reference:
    directory of the current one.
 9. **Stack update**: `stamusctl compose update --version VER` (Enter = defaults on prompts)
    → `compose pull` → `compose up -d`.
-10. **Health check** (up to `--health-timeout` seconds): `scirius`, `db`, `suricata`, `nginx`
-    containers in `Up` state; web UI returns 200/302; with a token set — `GET
+10. **Health check** (up to `--health-timeout` seconds): `scirius`, `db`, `suricata`, `nginx`,
+    `opensearch` containers in `Up` state (names look like `<base>-<service>-<seed>`);
+    web UI returns 200/302; with a token set — `GET
     /rest/rules/source/` (HTTP 200 + the number of sources proves rule settings are intact);
     fresh errors in the scirius log are shown.
 11. **Result**: report “version X → Y”, backup path, next steps. Exit code 0.
-12. **On failure — automatic rollback**: `compose down` → the current `config/` is moved to
-    `config.failed-<ts>` → the `config-<ts>.tar.gz` archive is unpacked → `compose up -d`.
+12. **On failure — diagnostics + automatic rollback**: before rolling back, the script saves the
+    status and logs of every stack container to `backups/fail-logs-<ts>/` (`compose down` would
+    destroy the logs), prints the likely cause based on the opensearch log; then `compose down` →
+    the current `config/` is moved to `config.failed-<ts>` → the `config-<ts>.tar.gz` archive is
+    unpacked → `compose up -d` → verification that the previous stack is really up.
     Exit code 2. DB data (volume) is not touched during rollback — the dump for a targeted
     restore is stored nearby (see §6).
 
@@ -252,6 +262,49 @@ curl -k -sI https://localhost/ | head -1
 ---
 
 ## 8. Troubleshooting
+
+### 8.1. `dependency failed to start: container …-opensearch-… is unhealthy`
+
+The most common update failure: compose waited for the opensearch health check
+(`curl localhost:9200/_cluster/health`, a ~60–90 s window: `start_period 30s` + 3 retries × 10 s),
+did not get a healthy state and refused to start the dependent services (scirius, dashboards,
+fluentd depend on opensearch via `depends_on: service_healthy`). To pin down the exact cause:
+
+```bash
+cd /opt/ClearNDR                                   # instance directory
+# 1) if the update was made with the script — the logs are already saved:
+ls backups/fail-logs-*/                            # container status + logs at the moment of failure
+grep -iE 'ERROR|Exception|Fatal' backups/fail-logs-*/config-opensearch-*.log | head
+
+# 2) reproduce with the preserved new config (auto-rollback moves it to config.failed-<ts>):
+stamusctl compose down
+mv config config.rollback-tmp && mv config.failed-<ts> config
+stamusctl compose up -d opensearch                 # start ONLY opensearch — no dependents
+docker logs -f "$(docker ps -q --filter name=opensearch)"   # watch until the first error
+# restore: stamusctl compose down && mv config config.failed-<ts> && mv config.rollback-tmp config
+```
+
+| What the opensearch log shows | Cause and solution |
+|---|---|
+| `The index [[…]] was created with version [1.x / 7.10] but the minimum compatible version is [2.0.0]` | OpenSearch 3.x (the current template ships 3.3.1) cannot read indices created by versions < 2.0.0. Options: (a) wipe the events volume and start with fresh indices — **rule settings in PostgreSQL are not lost** (below); (b) intermediate update to a template with OpenSearch 2.x + reindex |
+| `max virtual memory areas vm.max_map_count … is too low` | `sysctl -w vm.max_map_count=262144` + persist to `/etc/sysctl.d/99-clearndr.conf` |
+| `OutOfMemoryError` / `Cannot allocate memory` / exit code 137 | Not enough RAM for the 2 GB heap: `stamusctl config set opensearch.memory=1g`, then `stamusctl compose up -d` |
+| `flood-stage watermark` / `disk usage exceeded` | Out of disk: `df -h /var/lib/docker`; remove old images (`docker image prune -f`) and/or indices (ISM deletes them after 15 days) |
+| `failed to obtain node lock` | Data locked by another container/process: `docker ps -a \| grep opensearch`, remove duplicates |
+| Log looks normal but health did not pass within ~90 s | Just a slow start (index recovery): wait for `docker ps` → `(healthy)`, then `stamusctl compose up -d` — compose will build the rest of the stack |
+
+Wiping the events volume (event history is lost, settings are not; take a copy of the volume first
+if needed):
+
+```bash
+docker volume ls | grep opensearch-data            # name looks like opensearch-data-<seed>
+docker run --rm -v opensearch-data-<seed>:/src:ro -v /opt/ClearNDR/backups:/dst alpine \
+    tar czf /dst/opensearch-data-<seed>-backup.tar.gz -C /src .   # copy (can be large)
+docker volume rm opensearch-data-<seed>
+stamusctl compose up -d                            # opensearch will create fresh indices
+```
+
+### 8.2. Other situations
 
 | Symptom | Cause and solution |
 |---|---|

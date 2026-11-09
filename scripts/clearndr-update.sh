@@ -25,9 +25,11 @@
 #   3. Docker volume <project>_db-data (сырые файлы PostgreSQL) — по умолчанию
 #      включён, флаг --skip-volume отключает.
 #
-# При неудаче после обновления скрипт автоматически откатывает config/ из архива
-# и заново поднимает стек (данные БД при откате не трогаются; точечное
-# восстановление из дампа описано в docs/clearndr-update.md).
+# При неудаче после обновления скрипт СОХРАНЯЕТ диагностику (статус и журналы
+# контейнеров — до того, как их удалит откат), печатает вероятную причину,
+# автоматически откатывает config/ из архива и заново поднимает стек
+# (данные БД при откате не трогаются; точечное восстановление из дампа
+# описано в docs/clearndr-update.md). Диагностика: backups/fail-logs-<метка>/.
 #
 # Примеры:
 #   sudo ./clearndr-update.sh                              # до последней версии
@@ -59,7 +61,7 @@ ASSUME_YES=0                 # --yes
 NO_ROLLBACK=0                # --no-rollback
 DRY_RUN=0                    # --dry-run
 
-STACK_SERVICES=(scirius db suricata nginx)   # критичные сервисы стека
+STACK_SERVICES=(scirius db suricata nginx opensearch)   # критичные сервисы стека
 COMPOSE_STOP_TIMEOUT=90
 SURICATA_LOG_TAIL=40
 
@@ -176,34 +178,44 @@ stack_running() {  # запущен ли контейнер scirius (центр�
   docker ps --format '{{.Names}}' 2>/dev/null | grep -q -- '-scirius'
 }
 
-# project name docker compose (для поиска volume): берём из имени контейнера
-# вида "<project>-scirius-1"; иначе — имя каталога инстанса.
+# project name docker compose (для поиска volume): берём из имени контейнера.
+# Имена контейнеров Clear NDR: "<base-name>-<service>-<seed>", например
+# "config-scirius-FNISvONwp2TtteCD" (seed — случайный суффикс шаблона).
 detect_project() {
   local name
-  name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -- '-scirius' | head -1 || true)"
-  if [ -z "$name" ]; then
-    name="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -- '-scirius' | head -1 || true)"
-  fi
+  name="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E -- '-scirius-[A-Za-z0-9_]+$' | head -1 || true)"
   if [ -n "$name" ]; then
-    printf '%s' "${name%-scirius-1}"
+    printf '%s' "${name%%-scirius-*}"   # "config-scirius-<seed>" -> "config"
     return 0
   fi
   printf '%s' "$(basename "$INSTANCE_DIR")"
 }
 
-find_db_volume() {  # имя docker volume с данными PostgreSQL стека
-  local project cand
-  project="$(detect_project)"
+# seed инстанса (суффикс имён контейнеров/volumes); "" если не найден
+detect_seed() {
+  local ct
+  ct="$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E -- '-scirius-[A-Za-z0-9_]+$' | head -1 || true)"
+  printf '%s' "${ct##*-scirius-}"
+}
+
+find_db_volume() {  # имя docker volume с данными PostgreSQL стека (db-data-<seed>)
+  local seed cand
+  seed="$(detect_seed)"
+  if [ -n "$seed" ]; then
+    local exact
+    exact="$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -Fx -- "db-data-$seed" || true)"
+    if [ -n "$exact" ]; then echo "$exact"; return 0; fi
+  fi
   while IFS= read -r cand; do
     [ -n "$cand" ] || continue
     echo "$cand"
     return 0
-  done < <(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E "(^|[-_])${project}[-_]db-data$" || true)
+  done < <(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E -- '^db-data-[A-Za-z0-9_]+$' || true)
   # fallback: единственный db-data на хосте
   local only
-  only="$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep 'db-data$' || true)"
+  only="$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E -- 'db-data' || true)"
   if [ "$(echo "$only" | grep -c .)" -eq 1 ]; then
-    msg_warn "Volume стека по имени проекта не найден, использую единственный db-data: $only"
+    msg_warn "Volume стека по имени не найден, использую единственный db-data: $only"
     echo "$only"
     return 0
   fi
@@ -222,8 +234,34 @@ preflight() {
   docker ps >/dev/null 2>&1 || { msg_err "Docker недоступен (docker ps) — нужен запущенный Docker Engine."; exit 1; }
   msg_ok "Docker Engine доступен"
 
+  # хост-предусловия OpenSearch (bootstrap-проверки внутри контейнера)
+  local mm
+  mm="$(sysctl -n vm.max_map_count 2>/dev/null || echo 0)"
+  if [ "${mm:-0}" -lt 262144 ]; then
+    msg_err "vm.max_map_count = ${mm:-0}, а OpenSearch требует >= 262144 — контейнер opensearch не стартует."
+    msg_err "Исправить и сделать постоянным:"
+    msg_err "  sudo sysctl -w vm.max_map_count=262144"
+    msg_err "  echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-clearndr.conf"
+    exit 1
+  fi
+  msg_ok "vm.max_map_count = $mm (>= 262144)"
+
+  local avail_mb droot dfree
+  avail_mb="$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+  if [ "$avail_mb" -gt 0 ] && [ "$avail_mb" -lt 3072 ]; then
+    msg_warn "Доступно памяти ${avail_mb} МБ — OpenSearch по шаблону просит heap 2 ГБ, при нехватке контейнер будет OOM-kill."
+    msg_warn "Если обновление упадёт на opensearch: stamusctl config set opensearch.memory=1g && stamusctl compose up -d"
+  fi
+  droot="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
+  dfree="$(disk_free_kb "$droot")"
+  if [ "${dfree:-0}" -lt $((5 * 1024 * 1024)) ]; then
+    msg_err "Мало места на docker-хранилище ($droot): свободно $((dfree/1024)) МБ, нужно >= 5 ГБ (новые образы + работа OpenSearch)."
+    exit 1
+  fi
+  msg_ok "Docker root $droot: свободно $((dfree/1024)) МБ"
+
   # текущая версия конфигурации/шаблона
-  OLD_STACK_VERSION="$(stack config version 2>/dev/null | tail -1 | awk '{print $NF}' || true)"
+  OLD_STACK_VERSION="$(stack config version 2>/dev/null | grep -Eo '[0-9]+(\.[0-9]+){2}[^[:space:]]*' | tail -1 || true)"
   [ -n "$OLD_STACK_VERSION" ] || OLD_STACK_VERSION="неизвестна"
   msg_ok "Текущая версия стека (config version): $OLD_STACK_VERSION"
 
@@ -473,7 +511,10 @@ wait_healthy() {
     local s status names
     names="$(docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null || true)"
     for s in "${STACK_SERVICES[@]}"; do
-      status="$(echo "$names" | grep -E -- "-${s}(-1)?( |$)" | head -1 | awk '{print $2}')"
+      # имена контейнеров Clear NDR: "<base>-<service>-<seed>" (например
+      # "config-scirius-FNISvONwp2TtteCD"), строка docker ps: "<имя> Up ...".
+      # Якорим seed перед пробелом — иначе "opensearch" совпадёт с "opensearch-dashboards"
+      status="$(echo "$names" | grep -E -- "-${s}-[A-Za-z0-9_]+ " | head -1 | awk '{print $2}')"
       [ "$status" = "Up" ] || ok=0
     done
     http="$(curl -k -s -o /dev/null -w '%{http_code}' --max-time 10 "$HEALTH_URL" 2>/dev/null || echo 000)"
@@ -532,6 +573,55 @@ report() {
 EOF
 }
 
+# ----------------------------- диагностика сбоя ------------------------------
+# Сохраняет статус и журналы контейнеров стека ДО отката (compose down при откате
+# удаляет контейнеры вместе с логами). Печатает вероятную причину по логу opensearch.
+capture_failure_diagnostics() {
+  [ "$DRY_RUN" -eq 1 ] && return 0
+  step "Диагностика сбоя: сохранение состояния и журналов контейнеров"
+  local diag_dir="$BACKUP_DIR/fail-logs-$TS"
+  mkdir -p "$diag_dir"
+  {
+    docker ps -a --format '{{.Names}}\t{{.Status}}\t{{.Image}}' 2>/dev/null \
+      | grep -E -- '-(scirius|db|suricata|nginx|opensearch|fluentd|osd|evebox|arkime|rabbitmq|suri-reloader|socat|utils)-[A-Za-z0-9_]+[[:space:]]'
+  } > "$diag_dir/summary.txt" 2>/dev/null || true
+  while IFS=$'\t' read -r name status image; do
+    [ -n "$name" ] || continue
+    docker logs --tail 150 "$name" > "$diag_dir/$name.log" 2>&1 || true
+    if echo "$status" | grep -q 'health'; then
+      docker inspect --format '{{json .State.Health}}' "$name" > "$diag_dir/$name.health.json" 2>/dev/null || true
+    fi
+  done < "$diag_dir/summary.txt"
+  if [ -s "$diag_dir/summary.txt" ]; then
+    msg_info "Состояние контейнеров стека:"
+    sed 's/^/    /' "$diag_dir/summary.txt" || true
+  fi
+  # подсказка по типовым причинам — по журналу opensearch
+  local os_log hint=""
+  os_log="$(ls "$diag_dir"/*opensearch*.log 2>/dev/null | grep -v dashboards | head -1 || true)"
+  if [ -n "$os_log" ] && [ -s "$os_log" ]; then
+    if grep -q 'minimum compatible version\|was created with version' "$os_log"; then
+      hint="OpenSearch не принял данные: в volume есть индексы, созданные версией < 2.0.0 (старые данные событий).
+    Варианты: (а) повторить обновление с чистым volume opensearch-data-<seed> — история событий будет потеряна,
+    настройки правил в PostgreSQL сохраняются; (б) промежуточное обновление на шаблон с OpenSearch 2.x + переиндексация."
+    elif grep -q 'max_map_count' "$os_log"; then
+      hint="На хосте vm.max_map_count < 262144. Исправить: sudo sysctl -w vm.max_map_count=262144;
+    echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-clearndr.conf — затем stamusctl compose up -d"
+    elif grep -qiE 'OutOfMemory|Cannot allocate memory' "$os_log" || docker ps -a --format '{{.Status}}' 2>/dev/null | grep -q '137'; then
+      hint="OpenSearch убит по памяти (OOM). Уменьшить heap: stamusctl config set opensearch.memory=1g, затем stamusctl compose up -d"
+    elif grep -qiE 'flood-stage|disk usage exceeded|disk watermark' "$os_log"; then
+      hint="Не хватает места на диске (disk watermark). Освободите место и повторите stamusctl compose up -d"
+    elif grep -qiE 'failed to obtain node lock|NodeLock' "$os_log"; then
+      hint="Данные opensearch заняты другим контейнером/процессом. Проверьте docker ps -a на дубли opensearch"
+    else
+      hint="Причина по журналу opensearch не опознана — смотрите полный журнал в $diag_dir"
+    fi
+    msg_warn "Вероятная причина:
+    $hint"
+  fi
+  msg_ok "Диагностика сохранена: $diag_dir"
+}
+
 rollback() {
   local cause="$1"
   step "ОТКАТ: $cause"
@@ -548,7 +638,24 @@ rollback() {
   if tar xzf "$cfg_archive" -C "$INSTANCE_DIR"; then
     msg_ok "config/ восстановлен из архива"
     stack compose up -d || true
-    msg_ok "Стек поднят в прежней конфигурации ($OLD_STACK_VERSION)"
+    # проверяем, что прежний стек действительно поднялся (а не печатаем ОК вслепую)
+    local rb_wait=0 rb_all_up=0 s rb_st
+    while [ "$rb_wait" -lt 120 ]; do
+      rb_all_up=1
+      for s in "${STACK_SERVICES[@]}"; do
+        rb_st="$(docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null \
+          | grep -E -- "-${s}-[A-Za-z0-9_]+ " | head -1 | awk '{print $2}')"
+        [ "$rb_st" = "Up" ] || rb_all_up=0
+      done
+      [ "$rb_all_up" -eq 1 ] && break
+      sleep 10; rb_wait=$((rb_wait + 10))
+    done
+    if [ "$rb_all_up" -eq 1 ]; then
+      msg_ok "Стек поднят в прежней конфигурации ($OLD_STACK_VERSION): сервисы ${STACK_SERVICES[*]} — Up"
+    else
+      msg_warn "Стек поднят в прежней конфигурации ($OLD_STACK_VERSION), но не все сервисы Up за ${rb_wait}с."
+      capture_failure_diagnostics
+    fi
     cat <<EOF
   Важно: данные PostgreSQL (volume) НЕ откатывались. Если UI/правила работают некорректно,
   восстановите БД из дампа:
@@ -604,8 +711,10 @@ main() {
     exit 0
   else
     finalize_backups
+    capture_failure_diagnostics   # ДО отката: compose down удалит контейнеры и их журналы
     rollback "обновление не прошло проверки здоровья" || exit_code=$?
     msg_err "Обновление НЕ завершено. Подробности: ${LOG_FILE:-stdout}; бэкапы: $BACKUP_DIR"
+    msg_err "Журналы контейнеров на момент сбоя: $BACKUP_DIR/fail-logs-$TS/; сломанный config/: $INSTANCE_DIR/config.failed-$TS"
     exit 2
   fi
 }

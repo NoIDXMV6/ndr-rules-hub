@@ -94,9 +94,15 @@ flowchart TB
    stamusctl version
    ```
 3. Запущенный Docker Engine (`docker ps` работает) и работающий стек (для дампа БД).
-4. Достаточно места в каталоге бэкапов: ≥ 2 × размер `config/` + 2 ГБ (скрипт проверяет и
-   откажется продолжать при нехватке).
-5. Права: команды docker — из группы `docker` или через `sudo`.
+4. **Ядро: `vm.max_map_count` ≥ 262144** (требование OpenSearch; проверка: `sysctl vm.max_map_count`).
+   Если меньше — контейнер opensearch не стартует после обновления. Настроить и сделать постоянным:
+   ```bash
+   sudo sysctl -w vm.max_map_count=262144
+   echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-clearndr.conf
+   ```
+5. Достаточно места в каталоге бэкапов: ≥ 2 × размер `config/` + 2 ГБ и ≥ 5 ГБ на docker-хранилище
+   (`/var/lib/docker`) — скрипт проверяет и откажется продолжать при нехватке.
+6. Права: команды docker — из группы `docker` или через `sudo`.
 
 ---
 
@@ -164,14 +170,18 @@ sudo ./scripts/clearndr-update.sh --yes \
 9. **Обновление стека**: `stamusctl compose update --version VER` (Enter на промптах = дефолты)
    → `compose pull` → `compose up -d`.
 10. **Health-check** (до `--health-timeout` секунд): контейнеры `scirius`, `db`, `suricata`,
-    `nginx` в состоянии `Up`; веб-интерфейс отвечает 200/302; при заданном токене —
+    `nginx`, `opensearch` в состоянии `Up` (имена вида `<base>-<service>-<seed>`);
+    веб-интерфейс отвечает 200/302; при заданном токене —
     `GET /rest/rules/source/` (HTTP 200 + число источников = настройки правил на месте);
     просмотр свежих ошибок в журнале scirius.
 11. **Итог**: отчёт «версия X → Y», путь к бэкапам, next steps. Код выхода 0.
-12. **При неудаче — автооткат**: `compose down` → текущий `config/` переносится в
-    `config.failed-<ts>` → распаковка архива `config-<ts>.tar.gz` → `compose up -d`.
-    Код выхода 2. Данные БД (volume) при откате не трогаются — дамп для точечного
-    восстановления лежит рядом (см. §6).
+12. **При неудаче — диагностика + автооткат**: до отката скрипт сохраняет статус и журналы
+    всех контейнеров стека в `backups/fail-logs-<ts>/` (после `compose down` журналы были бы
+    потеряны), печатает вероятную причину по журналу opensearch; затем `compose down` →
+    текущий `config/` переносится в `config.failed-<ts>` → распаковка архива
+    `config-<ts>.tar.gz` → `compose up -d` → проверка, что прежний стек действительно
+    поднялся. Код выхода 2. Данные БД (volume) при откате не трогаются — дамп для
+    точечного восстановления лежит рядом (см. §6).
 
 Все сообщения дублируются в лог `<backup-dir>/update-<ts>.log` (права 600 — в бэкапах и логах
 есть потенциально секретные значения конфигурации).
@@ -251,6 +261,49 @@ curl -k -sI https://localhost/ | head -1
 ---
 
 ## 8. Диагностика типовых ситуаций
+
+### 8.1. `dependency failed to start: container …-opensearch-… is unhealthy`
+
+Самая частая причина неудачного обновления: compose дожидался health-check opensearch
+(`curl localhost:9200/_cluster/health`, окно ~60–90 с: `start_period 30s` + 3 попытки × 10 с),
+не дождался и не стал запускать зависимые сервисы (scirius, dashboards, fluentd зависят от
+opensearch через `depends_on: service_healthy`). Определить точную причину:
+
+```bash
+cd /opt/ClearNDR                                   # каталог инстанса
+# 1) если обновление делали скриптом — журналы уже сохранены:
+ls backups/fail-logs-*/                            # состояние + журналы контейнеров на момент сбоя
+grep -iE 'ERROR|Exception|Fatal' backups/fail-logs-*/config-opensearch-*.log | head
+
+# 2) воспроизведение с сохранённым новым конфигом (автооткат перемещает его в config.failed-<ts>):
+stamusctl compose down
+mv config config.rollback-tmp && mv config.failed-<ts> config
+stamusctl compose up -d opensearch                 # поднять ТОЛЬКО opensearch — без зависимых
+docker logs -f "$(docker ps -q --filter name=opensearch)"   # смотреть до первой ошибки
+# вернуть как было: stamusctl compose down && mv config config.failed-<ts> && mv config.rollback-tmp config
+```
+
+| Что в журнале opensearch | Причина и решение |
+|---|---|
+| `The index [[…]] was created with version [1.x / 7.10] but the minimum compatible version is [2.0.0]` | OpenSearch 3.x (актуальный шаблон ставит 3.3.1) не читает индексы, созданные версией < 2.0.0. Варианты: (а) очистить volume событий и начать с чистыми индексами — **настройки правил в PostgreSQL не теряются** (ниже); (б) промежуточное обновление на шаблон с OpenSearch 2.x + переиндексация |
+| `max virtual memory areas vm.max_map_count … is too low` | `sysctl -w vm.max_map_count=262144` + persist в `/etc/sysctl.d/99-clearndr.conf` |
+| `OutOfMemoryError` / `Cannot allocate memory` / код 137 | Мало RAM под heap 2 ГБ: `stamusctl config set opensearch.memory=1g`, затем `stamusctl compose up -d` |
+| `flood-stage watermark` / `disk usage exceeded` | Нет места: `df -h /var/lib/docker`; очистить старые образы (`docker image prune -f`) и/или индексы (ISM удаляет их с 15 дней) |
+| `failed to obtain node lock` | Данные заняты другим контейнером/процессом: `docker ps -a \| grep opensearch`, убрать дубли |
+| Журнал «нормальный», но health не успел за ~90 с | Просто медленный старт (восстановление индексов): подождать `docker ps` → `(healthy)`, затем `stamusctl compose up -d` — compose достроит остальное |
+
+Очистка volume событий (история событий теряется, настройки — нет; предварительно можно
+снять копию volume):
+
+```bash
+docker volume ls | grep opensearch-data            # имя вида opensearch-data-<seed>
+docker run --rm -v opensearch-data-<seed>:/src:ro -v /opt/ClearNDR/backups:/dst alpine \
+    tar czf /dst/opensearch-data-<seed>-backup.tar.gz -C /src .   # копия (может быть большой)
+docker volume rm opensearch-data-<seed>
+stamusctl compose up -d                            # opensearch создаст новые индексы
+```
+
+### 8.2. Прочие ситуации
 
 | Симптом | Причина и решение |
 |---|---|
