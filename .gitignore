@@ -71,6 +71,7 @@ server.log
 !/scripts/clearndr-osd3-workspaces-fix.sh
 !/scripts/test-clearndr-update-mock.sh
 !/scripts/test-clearndr-repair-mock.sh
+!/scripts/gh_release_backfill.sh
 /mini-services
 dev.log
 server.log
