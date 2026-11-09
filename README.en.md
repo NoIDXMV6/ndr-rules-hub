@@ -32,6 +32,7 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 | **Build** | A final `suricata.rules` file with a header, per-source statistics and SHA-256 |
 | **Clear NDR export** | 1) file for manual import; 2) **native integration via the Clear NDR (Scirius) REST API** — upload + `update_push_all` with a token; 3) pull scheme: Clear NDR fetches the file from the Hub (`/api/export`) and updates itself on its own schedule; 4) HTTP POST to any endpoint; 5) copying to a shared directory (volume). Step-by-step guide — [docs/clearndr-integration.en.md](docs/clearndr-integration.en.md) |
 | **WireGuard VPN** | Full setup: wg-quick config editor, syntax check, up/down, status (`wg show`), environment check (wg, wg-quick, /dev/net/tun, NET_ADMIN). Rule downloads through the tunnel |
+| **Clear NDR update** | A tab that detects the installed version → finds the latest stamusctl-templates release → when a newer one exists, lets you pick options (OpenSearch/PostgreSQL data, backups, stamusctl CLI) and start the update in one click. The `clearndr-update.sh` script runs on the host (SSH or local), the log streams in real time, failures trigger automatic rollback, and the result is verified (containers, web UI, REST API). Guide — [docs/clearndr-update.en.md](docs/clearndr-update.en.md) |
 | **Schedule** | cron (node-cron): source update → build → export. Controlled from the UI |
 | **Logs** | All fetch/build/export/VPN events with levels and filters |
 | **Bilingual UI** | Russian and English via localization files (`src/lib/i18n/`). Language detected from browser strings (`navigator.languages`), RU/EN switch in the header, choice persisted in `localStorage`. Favicon (`public/favicon.ico`, 16–256 px) and logo included |
@@ -318,6 +319,9 @@ an archive (download limit, a personal-cabinet link with the oinkcode in the que
 | `GET /api/rules?sid=&q=&sourceId=&page=` | browse the rule database |
 | `GET/PUT /api/settings` | settings (oinkcode, policies, cron, export) |
 | `GET/POST/PUT/DELETE /api/vpn` | WireGuard status/actions/profiles |
+| `GET /api/clearndr-update` | update section status: versions, host preflight, stack state, run history (`?log=<runId>` — run log) |
+| `POST /api/clearndr-update` | actions: `probe` (host check), `start` (begin update), `cancel`, `sync-script` |
+| `PUT /api/clearndr-update` | connection settings (SSH/local, instance dir, URL, token) |
 | `GET /api/logs` | log |
 
 ## Structure

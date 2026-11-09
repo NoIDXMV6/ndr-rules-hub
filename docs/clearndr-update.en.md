@@ -10,7 +10,7 @@ API tokens, Suricata/nginx configuration and certificates.
 > path), [stamusctl compose update](https://docs.clearndr.io/docs/stamusctl/compose/update) (the
 > template update command that preserves user values) and
 > [github.com/StamusNetworks/stamusctl](https://github.com/StamusNetworks/stamusctl).
-> Script: `scripts/clearndr-update.sh`. Verified against a mock stand (37/37: dry-run, full cycle,
+> Script: `scripts/clearndr-update.sh`. Verified against a mock stand (54/54: dry-run, full cycle,
 > automatic rollback on failure, non-interactive runs).
 
 ---
@@ -364,3 +364,89 @@ stamusctl compose up -d                            # opensearch will create fres
 6. ☐ The manual checklist §5 is done (Sources/Rulesets/Suricata → Update/automatic delivery).
 7. ☐ After a day: `docker image prune -f`, old `backups/config.failed-*` removed,
    the fresh `backups/` moved to long-term storage.
+
+---
+
+## 10. Updating from the NDR Rules Hub web UI
+
+The **“Clear NDR Update”** tab wraps this script in the hub UI: version → release → options →
+run → live log → result checks. The update itself is still performed by `clearndr-update.sh` —
+**on the Clear NDR host**, from the hub container over SSH (recommended) or directly
+(`local` mode).
+
+### 10.1. How it works
+
+```mermaid
+flowchart LR
+    U["“Clear NDR Update” tab"] --> A["GET /api/clearndr-update"]
+    A --> P["host probe:<br/>stamusctl config version,<br/>image tags, containers,<br/>vm.max_map_count, disk"]
+    A --> G["GitHub API:<br/>latest stamusctl-templates<br/>release"]
+    U -- "newer release" --> O["options: version,<br/>OpenSearch/PG data,<br/>backups, CLI"]
+    O --> S["POST start:<br/>sync script →<br/>runner on host (nohup setsid)"]
+    S --> L["log polling (3 s)<br/>GET ?log=runId"]
+    L --> R{"rc"}
+    R -- "0" --> OK["checks: containers Up,<br/>web UI HTTP 200, REST API"]
+    R -- "1/2" --> F["reason in the log:<br/>preflight / fail-logs<br/>+ auto rollback"]
+```
+
+- **Version detection** — `stamusctl config version` on the host (probe) plus the
+  OpenSearch/PostgreSQL image tags from `config/`.
+- **Latest release** — GitHub API `StamusNetworks/stamusctl-templates/releases/latest`
+  (requested by the hub itself, no host access needed; offline option — the
+  `CLEARNDR_RELEASES_JSON` env var pointing to a local JSON file).
+- **Start** — the hub syncs the fresh script to the host (“Sync script” button and
+  automatically before every run), creates a runner
+  `<instance>/.hub-update-runs/<runId>/runner.sh` and launches it in the background
+  (`nohup setsid`); the log and exit code live in that directory.
+- **Progress** — the log tail is polled every 3 seconds; cancel sends SIGTERM to the
+  runner process group.
+- **Result** — rc 0/1/2 with an explanation (0 — success; 1 — preflight, stack untouched;
+  2 — update failed, configuration rolled back) and stack state cards: containers,
+  web UI (HTTP code), REST API with the token (number of rule sources in the DB).
+
+### 10.2. One-time SSH setup (5 minutes)
+
+1. Generate a key pair (if you don't have one) and add the public key on the Clear NDR host:
+   ```bash
+   # on the machine where the hub container runs (or anywhere):
+   ssh-keygen -t ed25519 -f hub-update-key -N ''
+   ssh-copy-id -i hub-update-key.pub root@clearndr-host
+   ```
+   For a non-root user, NOPASSWD sudo is required (docker/stamusctl need root):
+   ```bash
+   echo 'hub ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/hub-update
+   ```
+2. In the hub: **“Clear NDR Update”** tab → “Clear NDR host connection” → `SSH` mode,
+   host/port/user, private key (PEM) → **Save**.
+3. **Test connection** — runs the probe (version, preflight, containers).
+4. **Sync script** — places `clearndr-update.sh` on the host
+   (`/opt/ClearNDR/clearndr-update.sh` by default).
+
+### 10.3. Tab layout
+
+| Block | What it shows |
+|---|---|
+| Version | installed (`stamusctl config version`), latest release, OpenSearch/PostgreSQL tags, stamusctl version; “update available” / “up to date” badge |
+| Host preflight | `vm.max_map_count` (≥ 262144), free memory (≥ 3 GB), docker disk space (≥ 5 GB), mikrocata2selks integration |
+| Stack state | containers (`docker ps`), web UI, REST API — the same data the script verifies after an update |
+| Options | target version (empty = latest), OpenSearch data (`keep`/`wipe`), PostgreSQL strategy (`restore`), `--update-cli`, `--skip-db-dump`, `--skip-volume`, `--full-config`, `--skip-mikrocata-check`, health wait limit |
+| Log | live run log with duration and an “Abort” button; after completion — rc explanation |
+| History | UI-started runs: mode, time, rc, log |
+
+> The “Start update” button is enabled only when a newer release is found and the host probe
+> passes. A confirmation dialog with the plan precedes the run (downtime 2–10 minutes).
+
+### 10.4. Local mode
+
+Runs the script directly from the hub container (`spawn` detached, log under
+`/app/data/clearndr-update/runs/`). It works only when the hub container can access Docker
+(socket + CLI + stamusctl) and the instance directory, and the Clear NDR URL is reachable
+from the container (e.g. `https://172.17.0.1/`). Use SSH for a typical install — it requires
+no changes to the hub's docker-compose.
+
+### 10.5. Hub environment variables
+
+| Variable | Purpose |
+|---|---|
+| `CLEARNDR_UPDATE_SCRIPT` | path to the script inside the hub container (default `/app/scripts/clearndr-update.sh` — already in the image) |
+| `CLEARNDR_RELEASES_JSON` | path to a local JSON `{ "tag_name": "v1.2.3", … }` instead of the GitHub API call (offline / closed perimeter) |

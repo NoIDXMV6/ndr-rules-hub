@@ -36,6 +36,7 @@ WORKDIR /app
 # openresolv обязателен: wg-quick вызывает resolvconf для строк «DNS =» в конфиге,
 # без него wg-quick up падает с «resolvconf: command not found»
 # procps (sysctl) обязателен для full-tunnel конфигов (AllowedIPs 0.0.0.0/0)
+# openssh-client — режим SSH раздела «Обновление Clear NDR» (скрипт запускается на хосте)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       wireguard-tools \
       iptables \
@@ -44,6 +45,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       procps \
       tar \
       gzip \
+      curl \
+      openssh-client \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     # Патчим wg-quick как в upstream wireguard-tools (коммит ac74ed6):
@@ -68,9 +71,12 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/db-template ./db-template
+# скрипт обновления Clear NDR — источник для «Синхронизировать скрипт»
+# в разделе «Обновление Clear NDR» (копируется на хост перед каждым прогоном)
+COPY scripts/clearndr-update.sh /app/scripts/clearndr-update.sh
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh && \
-    mkdir -p /app/data/exports /app/data/cache /app/data/archives /app/data/wireguard
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/clearndr-update.sh && \
+    mkdir -p /app/data/exports /app/data/cache /app/data/archives /app/data/wireguard /app/data/clearndr-update/runs
 
 VOLUME ["/app/data"]
 EXPOSE 3000

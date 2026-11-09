@@ -10,7 +10,7 @@ API-токены, конфигурацию Suricata/nginx и сертифика�
 > [stamusctl compose update](https://docs.clearndr.io/docs/stamusctl/compose/update) (команда
 > обновления шаблона с сохранением пользовательских значений) и
 > [github.com/StamusNetworks/stamusctl](https://github.com/StamusNetworks/stamusctl).
-> Скрипт: `scripts/clearndr-update.sh`. Проверен на мок-стенде (37/37: dry-run, полный цикл,
+> Скрипт: `scripts/clearndr-update.sh`. Проверен на мок-стенде (54/54: dry-run, полный цикл,
 > автооткат при сбое, работа без терминала).
 
 ---
@@ -364,3 +364,88 @@ stamusctl compose up -d                            # opensearch создаст �
 6. ☐ Ручной чек-лист §5 пройден (Sources/Rulesets/Suricata → Update/автопоставка).
 7. ☐ Через сутки: `docker image prune -f`, старые `backups/config.failed-*` удалены,
    свежий `backups/` перенесён на долговременное хранение.
+
+---
+
+## 10. Обновление из web-интерфейса NDR Rules Hub
+
+Вкладка **«Обновление Clear NDR»** оборачивает этот скрипт в UI хаба: версия → релиз →
+опции → запуск → живой лог → проверки результата. Само обновление по-прежнему выполняет
+`clearndr-update.sh` — **на хосте Clear NDR**, из контейнера хаба по SSH (рекомендуется)
+или напрямую (режим `local`).
+
+### 10.1. Как это работает
+
+```mermaid
+flowchart LR
+    U["Вкладка «Обновление Clear NDR»"] --> A["GET /api/clearndr-update"]
+    A --> P["probe на хосте:<br/>stamusctl config version,<br/>теги образов, контейнеры,<br/>vm.max_map_count, диск"]
+    A --> G["GitHub API:<br/>последний релиз<br/>stamusctl-templates"]
+    U -- "релиз новее" --> O["опции: версия,<br/>данные OpenSearch/PG,<br/>бэкапы, CLI"]
+    O --> S["POST start:<br/>синхронизация скрипта →<br/>раннер на хосте (nohup setsid)"]
+    S --> L["поллинг лога (3 с)<br/>GET ?log=runId"]
+    L --> R{"rc"}
+    R -- "0" --> OK["проверки: контейнеры Up,<br/>web UI HTTP 200, REST API"]
+    R -- "1/2" --> F["причина в логе:<br/>preflight / fail-logs<br/>+ автооткат"]
+```
+
+- **Определение версии** — `stamusctl config version` на хосте (probe) + теги образов
+  OpenSearch/PostgreSQL из `config/`.
+- **Последний релиз** — GitHub API `StamusNetworks/stamusctl-templates/releases/latest`
+  (запрос идёт из хаба, хост не нужен; offline-вариант — переменная `CLEARNDR_RELEASES_JSON`
+  с путём к локальному JSON).
+- **Запуск** — хаб синхронизирует свежий скрипт на хост (кнопка «Синхронизировать скрипт»
+  и автоматически перед каждым прогоном), создаёт раннер
+  `<instance>/.hub-update-runs/<runId>/runner.sh` и запускает его в фоне
+  (`nohup setsid`); лог и код выхода — в файлах этого каталога.
+- **Прогресс** — хвост лога поллится каждые 3 секунды; отмена — SIGTERM группе процессов раннера.
+- **Результат** — rc 0/1/2 с расшифровкой (0 — успех; 1 — preflight, стек не тронут;
+  2 — неудача обновления, конфигурация откатена) и карточки состояния стека: контейнеры,
+  web UI (HTTP-код), REST API по токену (число источников в базе).
+
+### 10.2. Настройка SSH (5 минут, один раз)
+
+1. Сгенерируйте пару ключей (если ещё нет) и добавьте публичный ключ на хосте Clear NDR:
+   ```bash
+   # на машине, где работает контейнер хаба (или где угодно):
+   ssh-keygen -t ed25519 -f hub-update-key -N ''
+   ssh-copy-id -i hub-update-key.pub root@clearndr-host
+   ```
+   Для не-root пользователя нужен NOPASSWD sudo (docker/stamusctl требуют root):
+   ```bash
+   echo 'hub ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/hub-update
+   ```
+2. В хабе: вкладка **«Обновление Clear NDR»** → «Подключение к хосту» → режим `SSH`,
+   хост/порт/пользователь, приватный ключ (PEM) → **Сохранить**.
+3. **Проверить подключение** — выполнит probe (версия, предпроверки, контейнеры).
+4. **Синхронизировать скрипт** — положит `clearndr-update.sh` на хост
+   (`/opt/ClearNDR/clearndr-update.sh` по умолчанию).
+
+### 10.3. Экран вкладки
+
+| Блок | Что показывает |
+|---|---|
+| Версия | установленная (`stamusctl config version`), последний релиз, теги OpenSearch/PostgreSQL, версия stamusctl; бейдж «доступно обновление» / «актуально» |
+| Предпроверки хоста | `vm.max_map_count` (≥ 262144), свободная память (≥ 3 ГБ), место под docker (≥ 5 ГБ), интеграция mikrocata2selks |
+| Состояние стека | контейнеры (`docker ps`), web UI, REST API — те же данные, что проверяет скрипт после обновления |
+| Параметры | целевая версия (пусто = latest), данные OpenSearch (`keep`/`wipe`), стратегия PostgreSQL (`restore`), `--update-cli`, `--skip-db-dump`, `--skip-volume`, `--full-config`, `--skip-mikrocata-check`, лимит ожидания здоровья |
+| Журнал | живой лог прогона с длительностью и кнопкой «Прервать»; после завершения — расшифровка rc |
+| История | прогоны из UI: режим, время, rc, лог |
+
+> Кнопка «Запустить обновление» активна, только когда найден более новый релиз и probe хоста
+> прошёл. Перед запуском — диалог-подтверждение с планом (даунтайм 2–10 минут).
+
+### 10.4. Режим local
+
+Запускает скрипт прямо из контейнера хаба (`spawn` detached, лог в
+`/app/data/clearndr-update/runs/`). Работает только если контейнеру хаба доступны
+docker (сокет + CLI + stamusctl) и каталог инстанса, а URL Clear NDR доступен из контейнера
+(например `https://172.17.0.1/`). Для типовой установки используйте SSH — он не требует
+никаких изменений в docker-compose хаба.
+
+### 10.5. Переменные окружения хаба
+
+| Переменная | Назначение |
+|---|---|
+| `CLEARNDR_UPDATE_SCRIPT` | путь к скрипту внутри контейнера хаба (по умолчанию `/app/scripts/clearndr-update.sh` — уже в образе) |
+| `CLEARNDR_RELEASES_JSON` | путь к локальному JSON `{ "tag_name": "v1.2.3", … }` вместо запроса к GitHub API (offline/закрытый контур) |

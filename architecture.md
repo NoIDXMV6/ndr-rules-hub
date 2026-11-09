@@ -442,6 +442,7 @@ index.tsx    I18nProvider (useSyncExternalStore поверх localStorage) + use
 | `GET /api/rules` | база правил (sid, q, sourceId, page) |
 | `GET/PUT /api/settings` | настройки |
 | `GET/POST/PUT/DELETE /api/vpn` | WireGuard: статус, действия, профили |
+| `GET/POST/PUT /api/clearndr-update` | обновление Clear NDR: статус/действия (probe, start, cancel, sync-script)/настройки; `?log=<runId>` — лог прогона |
 | `GET /api/logs` | журнал |
 
 Ошибки API возвращаются как `{"error": "…"}` с реальной причиной (не безликий HTTP 500) и
@@ -624,8 +625,9 @@ DRF-пагинация, multipart-upload, гейт «conflicting SID»). Скв�
 ## 13. Поставка и эксплуатация
 
 - **Dockerfile** — многоэтапная сборка: builder (`oven/bun`) → standalone runtime
-  (`node:22-bookworm-slim`) + `wireguard-tools`, `iptables`, `iproute2`, `openresolv`, `procps`.
-  `outputFileTracingIncludes` гарантирует попадание Prisma-движков в standalone.
+  (`node:22-bookworm-slim`) + `wireguard-tools`, `iptables`, `iproute2`, `openresolv`, `procps`,
+  `openssh-client` (режим SSH раздела обновления). `outputFileTracingIncludes` гарантирует
+  попадание Prisma-движков в standalone.
 - **docker-compose.yml** — `cap_add: NET_ADMIN`, устройство `/dev/net/tun`, sysctls
   (`ip_forward`, `src_valid_mark`), volume `./data:/app/data`, порт 3080→3000.
 - **Оркестрация** — `service.ts`: cron (node-cron, `TZ`) выполняет «обновление источников →
@@ -638,5 +640,12 @@ DRF-пагинация, multipart-upload, гейт «conflicting SID»). Скв�
   (`pg_dumpall`), архив `config/` и volume `<project>_db-data`, затем штатный
   `stamusctl compose update` → `pull` → `up -d`, health-checks (контейнеры, веб-интерфейс,
   REST API по токену) и автооткат `config/` при неудаче. Инструкция — `docs/clearndr-update.md`.
-- **Тесты** — vitest, 84 теста: парсер, конвертеры, дедупликация, загрузчик (включая
-  magic-байты и кэш), wg-quick, i18n.
+  Из UI — вкладка «Обновление Clear NDR» (`lib/engine/clearndr-update.ts`): probe хоста (версия
+  стека, предпроверки, контейнеры) + GitHub API для последнего релиза → запуск скрипта на хосте
+  по SSH (base64-обёртка, раннер `nohup setsid`, лог/rc в `<instance>/.hub-update-runs/<runId>`)
+  или локально (spawn detached) → поллинг лога → проверки результата; отмена — SIGTERM группе
+  процессов раннера.
+- **Тесты** — vitest, 105 тестов: парсер, конвертеры, дедупликация, загрузчик (включая
+  magic-байты и кэш), wg-quick, i18n, логика обновления Clear NDR (версии, сборка CLI-аргументов,
+  разбор probe, раннер); плюс bash-мок-стенд скрипта обновления (54 проверки) и e2e-стенд
+  раздела обновления со standalone-сервером (`scripts/e2e-hub-update.sh`, 15 проверок).

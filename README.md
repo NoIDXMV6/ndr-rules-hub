@@ -32,6 +32,7 @@
 | **Сборка** | Итоговый `suricata.rules`-файл с заголовком, статистикой по каждому источнику и SHA-256 |
 | **Экспорт в Clear NDR** | 1) файл для ручного импорта; 2) **нативная интеграция через REST API Clear NDR (Scirius)** — upload + `update_push_all` по токену; 3) pull-схема: Clear NDR сам забирает файл с Hub (`/api/export`) и обновляется по своему расписанию; 4) HTTP POST на произвольный эндпоинт; 5) копирование в общий каталог (volume). Пошаговая инструкция — [docs/clearndr-integration.md](docs/clearndr-integration.md) |
 | **WireGuard VPN** | Полноценная настройка: редактор wg-quick конфига, проверка синтаксиса, up/down, статус (`wg show`), проверка окружения (wg, wg-quick, /dev/net/tun, NET_ADMIN). Загрузка правил через туннель |
+| **Обновление Clear NDR** | Вкладка: определить установленную версию → найти последний релиз stamusctl-templates → при наличии более нового — выбрать опции (данные OpenSearch/PostgreSQL, бэкапы, CLI stamusctl) и запустить обновление одним кликом. Скрипт `clearndr-update.sh` выполняется на хосте (SSH или local), лог — в реальном времени, при сбое — автооткат, после — проверки: контейнеры, web UI, REST API. Инструкция — [docs/clearndr-update.md](docs/clearndr-update.md) |
 | **Расписание** | cron (node-cron): обновление источников → сборка → экспорт. Управление из UI |
 | **Журнал** | Все события загрузок/сборок/экспорта/VPN с уровнями и фильтрами |
 | **Двуязычный интерфейс** | Русский и английский через файлы локализации (`src/lib/i18n/`). Язык определяется по строкам браузера (`navigator.languages`), переключатель RU/EN в шапке, выбор запоминается в `localStorage`. Favicon (`public/favicon.ico`, 16–256 px) и логотип — в комплекте |
@@ -318,6 +319,9 @@ HTML-страницу (лимит загрузок, ссылка из лично
 | `GET /api/rules?sid=&q=&sourceId=&page=` | просмотр базы правил |
 | `GET/PUT /api/settings` | настройки (oinkcode, политики, cron, экспорт) |
 | `GET/POST/PUT/DELETE /api/vpn` | статус/действия/сохранение профилей WireGuard |
+| `GET /api/clearndr-update` | статус раздела обновления: версии, предпроверки хоста, состояние стека, история прогонов (`?log=<runId>` — лог прогона) |
+| `POST /api/clearndr-update` | действия: `probe` (проверка хоста), `start` (запуск обновления), `cancel`, `sync-script` |
+| `PUT /api/clearndr-update` | настройки подключения (SSH/local, каталог инстанса, URL, токен) |
 | `GET /api/logs` | журнал |
 
 ## Структура

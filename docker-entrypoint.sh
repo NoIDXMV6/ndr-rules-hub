@@ -3,6 +3,8 @@ set -e
 
 # ── Инициализация каталога данных ────────────────────────────────────────────
 mkdir -p /app/data/exports /app/data/cache /app/data/archives /app/data/wireguard
+# метаданные прогонов обновления Clear NDR (раздел «Обновление Clear NDR»)
+mkdir -p /app/data/clearndr-update/runs
 
 # ── БД: самовосстановление схемы ─────────────────────────────────────────────
 # Шаблон создаётся при сборке образа (prisma db push) и помечается версией

@@ -12,6 +12,8 @@ download
 repos
 skills
 scripts
+# скрипт обновления нужен в образе (раздел «Обновление Clear NDR» копирует его на хост)
+!scripts/clearndr-update.sh
 tests
 docs
 *.log

@@ -130,6 +130,118 @@ export const api = {
     fetch('/api/vpn', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, config }) }).then((r) => j<{ profile: { id: string } }>(r)),
   vpnDelete: (id: string) => fetch(`/api/vpn?id=${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   logs: (take = 200) => fetch(`/api/logs?take=${take}`, { cache: 'no-store' }).then((r) => j<{ logs: Dashboard['logs'] }>(r)),
+  // обновление Clear NDR
+  updateStatus: () => fetch('/api/clearndr-update', { cache: 'no-store' }).then((r) => j<UpdateStatus>(r)),
+  updateRun: (runId: string, tail = 24000) => fetch(`/api/clearndr-update?log=${encodeURIComponent(runId)}&tail=${tail}`, { cache: 'no-store' }).then((r) => j<UpdateRunStatus>(r)),
+  updateAction: (body: Record<string, unknown>) =>
+    fetch('/api/clearndr-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
+  updateSaveSettings: (data: UpdateSettingsUi) =>
+    fetch('/api/clearndr-update', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; settings: UpdateStatus['settings'] }>(r)),
+}
+
+// ── Раздел «Обновление Clear NDR» ────────────────────────────────────────────
+
+export interface StackContainerRow {
+  name: string
+  status: string
+  up: boolean
+  service?: string
+}
+
+export interface HostProbe {
+  ok: boolean
+  mode: 'ssh' | 'local'
+  error?: string
+  stamusctl?: string
+  stackVersion?: string
+  osTag?: string
+  pgTag?: string
+  suricataInterfaces?: string
+  mikrocata?: boolean
+  maxMapCount?: number
+  memAvailMb?: number
+  dockerRoot?: string
+  diskFreeMb?: number
+  webHttp?: string
+  apiHttp?: string
+  apiSources?: string
+  containers: StackContainerRow[]
+  ranAt: string
+}
+
+export interface LatestRelease {
+  tag: string
+  name?: string
+  publishedAt?: string
+  url?: string
+  error?: string
+}
+
+export interface UpdateOptionsUi {
+  version: string
+  opensearchData: 'keep' | 'wipe'
+  pgStrategy: 'restore'
+  updateCli: boolean
+  skipDbDump: boolean
+  skipVolume: boolean
+  fullConfig: boolean
+  skipMikrocataCheck: boolean
+  healthTimeout: number
+}
+
+export interface UpdateRunMeta {
+  runId: string
+  mode: 'ssh' | 'local'
+  startedAt: string
+  finishedAt?: string
+  exitCode?: number
+  options: UpdateOptionsUi
+  args: string[]
+  remoteDir?: string
+  logPath?: string
+}
+
+export interface UpdateStatus {
+  settings: {
+    updateMode: 'ssh' | 'local'
+    sshHost: string
+    sshPort: string
+    sshUser: string
+    sshKey: string
+    sudoMode: 'auto' | 'sudo' | 'plain'
+    instanceDir: string
+    scriptPath: string
+    healthUrl: string
+    apiToken: string
+    sshKeySet: boolean
+  }
+  latest: LatestRelease
+  host: HostProbe
+  updateAvailable: boolean | null
+  activeRun: { runId: string; active: boolean; exitCode?: number; startedAt?: string } | null
+  runs: UpdateRunMeta[]
+}
+
+export interface UpdateRunStatus {
+  runId: string
+  active: boolean
+  exitCode?: number
+  log: string
+  startedAt?: string
+  finishedAt?: string
+}
+
+export interface UpdateSettingsUi {
+  updateMode: string
+  sshHost: string
+  sshPort: string
+  sshUser: string
+  sshKey: string
+  sudoMode: string
+  instanceDir: string
+  scriptPath: string
+  healthUrl: string
+  apiToken: string
 }
 
 export interface RuleRow {

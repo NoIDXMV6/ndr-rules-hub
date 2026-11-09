@@ -21,10 +21,19 @@ services:
       - WG_CONFIG_DIR=/app/data/wireguard
       - TZ=${TZ:-Europe/Moscow}
     volumes:
-      # данные сервиса: БД, кэш архивов, итоговые файлы, WireGuard-конфиги
+      # данные сервиса: БД, кэш архивов, итоговые файлы, WireGuard-конфиги,
+      # метаданные прогонов обновления Clear NDR
       - ./data:/app/data
       # при экспорте режиме local-path можно указать каталог самого Clear NDR:
       # - /srv/clearndr/rules-import:/mnt/clearndr
+      # Раздел «Обновление Clear NDR» (вкладка «Обновление Clear NDR») по умолчанию
+      # запускает скрипт обновления НА ХОСТЕ по SSH — ничего докручивать не нужно
+      # (укажите хост/ключ на вкладке). Режим «local» (прямо из контейнера) требует:
+      #   - /var/run/docker.sock:/var/run/docker.sock
+      #   - установленного docker CLI + stamusctl внутри образа
+      #   - каталога инстанса: - /opt/ClearNDR:/opt/ClearNDR
+      #   - URL Clear NDR должен быть доступен из контейнера (не https://localhost/,
+      #     а адрес хоста, например https://172.17.0.1/)
     # WireGuard: нужны права NET_ADMIN и TUN-устройство
     cap_add:
       - NET_ADMIN

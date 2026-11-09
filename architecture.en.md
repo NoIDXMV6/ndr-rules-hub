@@ -444,6 +444,7 @@ Mechanics:
 | `GET /api/rules` | rule database (sid, q, sourceId, page) |
 | `GET/PUT /api/settings` | settings |
 | `GET/POST/PUT/DELETE /api/vpn` | WireGuard: status, actions, profiles |
+| `GET/POST/PUT /api/clearndr-update` | Clear NDR update: status/actions (probe, start, cancel, sync-script)/settings; `?log=<runId>` — run log |
 | `GET /api/logs` | log |
 
 API errors are returned as `{"error": "…"}` with the real cause (not an opaque HTTP 500) and
@@ -627,7 +628,8 @@ of the guide.
 ## 13. Delivery and operations
 
 - **Dockerfile** — multi-stage build: builder (`oven/bun`) → standalone runtime
-  (`node:22-bookworm-slim`) + `wireguard-tools`, `iptables`, `iproute2`, `openresolv`, `procps`.
+  (`node:22-bookworm-slim`) + `wireguard-tools`, `iptables`, `iproute2`, `openresolv`, `procps`,
+  `openssh-client` (SSH mode of the update section).
   `outputFileTracingIncludes` guarantees Prisma engines land in the standalone bundle.
 - **docker-compose.yml** — `cap_add: NET_ADMIN`, the `/dev/net/tun` device, sysctls
   (`ip_forward`, `src_valid_mark`), volume `./data:/app/data`, port 3080→3000.
@@ -642,5 +644,13 @@ of the guide.
   standard `stamusctl compose update` → `pull` → `up -d`, health checks (containers, web UI,
   REST API with a token) and automatic `config/` rollback on failure. Guide —
   `docs/clearndr-update.en.md`.
-- **Tests** — vitest, 84 tests: parser, converters, deduplication, fetcher (including
-  magic bytes and cache), wg-quick, i18n.
+  From the UI — the “Clear NDR Update” tab (`lib/engine/clearndr-update.ts`): host probe (stack
+  version, preflight, containers) + GitHub API for the latest release → running the script on
+  the host over SSH (base64 wrapper, `nohup setsid` runner, log/rc under
+  `<instance>/.hub-update-runs/<runId>`) or locally (spawn detached) → log polling → result
+  checks; cancel sends SIGTERM to the runner process group.
+- **Tests** — vitest, 105 tests: parser, converters, deduplication, fetcher (including
+  magic bytes and cache), wg-quick, i18n, Clear NDR update logic (versions, CLI-args builder,
+  probe parsing, runner); plus the bash mock bench for the update script (54 checks) and an
+  e2e bench for the update section with the standalone server (`scripts/e2e-hub-update.sh`,
+  15 checks).
