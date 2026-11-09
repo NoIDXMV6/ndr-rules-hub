@@ -24,6 +24,25 @@ The update consists of two independent parts:
 | `stamusctl` CLI | download a fresh binary from `dl.clearndr.io` | the stack management tool (optional, `--update-cli` flag) |
 | Clear NDR stack | `stamusctl compose update --version VER` → `compose pull` → `compose up -d` | new template + fresh images; **stamusctl preserves your configuration values automatically** |
 
+Key properties of the script (v3):
+
+- **Status for every long step**: “⏳ label (sec)” overwrites a single terminal line;
+  in non-interactive mode (cron) — `[WAIT] … (sec)` lines once a minute. Every step ends with
+  “done (in Ns)”. No more “is it hanging?”.
+- **Clean output and a compact log**: docker progress frames (Downloading/Extracting/Waiting)
+  overwrite a single line on screen and **never reach the log** — the log contains only step
+  start/finish, statuses, warnings and errors.
+- **Data-compatibility analysis BEFORE stopping the stack**: if a component changes its major
+  version (OpenSearch 2.x → 3.x, PostgreSQL 16 → 17), the script asks what to do: keep the data
+  (with auto-rollback as the safety net), show manual conversion steps (OpenSearch events), or
+  upgrade with clean data (for PostgreSQL — automatic volume recreation + dump restore).
+  Cancelling at this point causes zero downtime.
+- **mikrocata2selks (MikroTik) integration**: detection, snapshot of its files
+  (`/usr/local/bin/mikrocata*.py`, systemd units, `tzsp*.netdev`), verification/restore of
+  `suricata.interfaces` (tzsp0 etc.), post-update check of services/interfaces/suricata.
+- **Universal customization preservation**: user files of `config/` that disappear during the
+  template update are automatically restored from the archive.
+
 The `compose update` command is officially documented as “merge existing configuration with new
 template → preserves custom configuration values → maintains compatibility with existing data” —
 settings configured via `stamusctl config set` (interfaces, HOME_NET, etc.) are carried over to
@@ -144,6 +163,10 @@ Full flag reference:
 | `--yes` | off | do not ask for confirmation (accept `compose update` defaults) |
 | `--no-rollback` | off | disable automatic rollback on failure |
 | `--dry-run` | off | only show the plan and commands |
+| `--opensearch-data keep\|wipe\|guide\|ask` | `ask` | what to do with event data on an OpenSearch major-version change: keep / wipe (volume saved to tar) / show conversion guide / ask |
+| `--pg-strategy restore\|cancel\|ask` | `ask` | policy on a PostgreSQL major-version change: recreate the volume and restore the dump / cancel / ask |
+| `--no-color` | off | disable colors (for cron/pipelines) |
+| `--skip-mikrocata-check` | off | skip the mikrocata2selks post-update check |
 
 > In interactive mode `stamusctl compose update` may ask for configuration values — Enter accepts
 > the current/default values (as the documentation recommends). With `--yes` the script presses
@@ -169,18 +192,29 @@ Full flag reference:
 8. **[optional] stamusctl update** — binary from `dl.clearndr.io` (amd64/arm64), replaced in the
    directory of the current one.
 9. **Stack update**: `stamusctl compose update --version VER` (Enter = defaults on prompts)
-   → `compose pull` → `compose up -d`.
-10. **Health check** (up to `--health-timeout` seconds): `scirius`, `db`, `suricata`, `nginx`,
-    `opensearch` containers in `Up` state (names look like `<base>-<service>-<seed>`);
-    web UI returns 200/302; with a token set — `GET
+   → `compose pull` (both run under a live status ticker; docker progress frames are filtered out).
+10. **Stack start**:
+    - re-analysis of compatibility from the actual new configuration (if target versions could
+      not be determined in advance);
+    - verification/restore of `suricata.interfaces` (critical for tzsp integrations);
+    - with `--opensearch-data wipe`: the events volume is copied to tar, then removed;
+    - **restoration of user `config/` files** that disappeared during the template update;
+    - on a PostgreSQL major change: DB volume removal → db start → wait → dump restore;
+    - `stamusctl compose up -d`.
+11. **Health check** (up to `--health-timeout` seconds, live single-line status):
+    `scirius`, `db`, `suricata`, `nginx`, `opensearch` containers in `Up` state (names look like
+    `<base>-<service>-<seed>`); web UI returns 200/302; with a token set — `GET
     /rest/rules/source/` (HTTP 200 + the number of sources proves rule settings are intact);
     fresh errors in the scirius log are shown.
-11. **Result**: report “version X → Y”, backup path, next steps. Exit code 0.
-12. **On failure — diagnostics + automatic rollback**: before rolling back, the script saves the
+12. **mikrocata2selks post-check** (if detected): `mikrocataTZSP*.service` units, `tzsp*`
+    interfaces, tzsp mentions in the suricata log.
+13. **Result**: report “version X → Y”, backup path, next steps. Exit code 0.
+14. **On failure — diagnostics + automatic rollback**: before rolling back, the script saves the
     status and logs of every stack container to `backups/fail-logs-<ts>/` (`compose down` would
     destroy the logs), prints the likely cause based on the opensearch log; then `compose down` →
     the current `config/` is moved to `config.failed-<ts>` → the `config-<ts>.tar.gz` archive is
-    unpacked → `compose up -d` → verification that the previous stack is really up.
+    unpacked → `compose up -d` → verification that the previous stack is really up (on failure —
+    an emergency recovery block is printed).
     Exit code 2. DB data (volume) is not touched during rollback — the dump for a targeted
     restore is stored nearby (see §6).
 
