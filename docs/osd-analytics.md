@@ -71,7 +71,11 @@ Analytics → Rules.
   `--remove-managed`; опции `--yes`, `--dry-run`, `--instance-dir`,
   `--es-url`, `--seed`, `--webhook`.
 - `scripts/clearndr-osd-dashboard-import.sh` — `--list`, `--pack <key|all>`,
-  `--remove <key|all>`; те же опции соединения.
+  `--remove <key|all>`; те же опции соединения. Объекты пишутся в `.kibana`
+  сырым форматом SavedObjects (`type`, атрибуты под именем типа,
+  `references`, `migrationVersion` — версия берётся с существующих объектов
+  кластера); bulk-тело уходит файлом/потоком с сохранением завершающего
+  `\n` (bulk API OpenSearch отвергает тело без него) и `refresh=wait_for`.
 - `scripts/osd-pack-generator.py` — генератор пакетов (пересоздаёт
   `scripts/osd-packs/*.json`).
 
@@ -173,10 +177,11 @@ docker run … \
 ## Тесты
 
 - `scripts/test-clearndr-osd-mock.sh` — mock-стенд (фейковый docker + fake
-  OpenSearch API): 53 проверки (статус, upsert-идемпотентность, подстановка
-  полей, вырезание отсутствующих, bulk-импорт, удаление, автоопределение
-  канала, `--es-url`, маскирование учётных данных). Прогон:
-  `bash scripts/test-clearndr-osd-mock.sh`.
+  OpenSearch API): 58 проверок (статус, upsert-идемпотентность, подстановка
+  полей, вырезание отсутствующих, bulk-импорт с обязательным завершающим
+  `\n` и сырым форматом `.kibana`, видимость после `refresh=wait_for`,
+  удаление, автоопределение канала, `--es-url`, маскирование учётных
+  данных). Прогон: `bash scripts/test-clearndr-osd-mock.sh`.
 - `scripts/test-osd-stale-run.ts` — реанимация/отмена прогонов на реальном
   коде движка (bun): зависший pid, отсутствие pid-файла, остановка живого
   процесса, свежий живой прогон, переиспользованный pid (прогон реанимируется,

@@ -14,6 +14,12 @@
 # (EVE raw или ECS-маппинг), находит/создаёт index-pattern logstash-* и
 # вырезает визуализации по отсутствующим в кластере полям (с WARN).
 #
+# Объекты пишутся в .kibana сырым форматом SavedObjects (type, <type>:
+# attributes, references, migrationVersion — версия миграций берётся с
+# существующих объектов кластера). Bulk-запрос уходит файлом через
+# --data-binary (stdin в exec-режиме) с сохранением завершающего \n —
+# требование bulk API — и refresh=wait_for для немедленной видимости.
+#
 # Использование:
 #   clearndr-osd-dashboard-import.sh --list
 #   clearndr-osd-dashboard-import.sh --pack traffic --pack alerts [--yes] [--dry-run]
@@ -85,6 +91,27 @@ try: d=json.load(sys.stdin)
 except Exception: print(''); raise SystemExit
 print($1)" 2>/dev/null
 }
+es_bulk() { # es_bulk FILE — NDJSON-файл → POST /_bulk
+  # тело передаётся файлом/потоком: command substitution съедает завершающий
+  # \n, а bulk API OpenSearch требует тело с \n на конце (иначе 400 «must be
+  # terminated by a newline»); Content-Type — application/x-ndjson.
+  local file="$1" out rc=1
+  case "$ES_MODE" in
+    host)
+      out="$(curl -sk --noproxy '*' --max-time 90 -X POST \
+        -H 'Content-Type: application/x-ndjson' --data-binary @"$file" \
+        "$ES_BASE/_bulk?refresh=wait_for" 2>/dev/null)" && rc=0 ;;
+    exec)
+      out="$(cat "$file" | docker exec -i "$OS_CT" curl -sk --noproxy '*' --max-time 90 -X POST \
+        -H 'Content-Type: application/x-ndjson' --data-binary @- \
+        "$ES_BASE/_bulk?refresh=wait_for" 2>/dev/null)" && rc=0 ;;
+  esac
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+    printf '%s' '{"error":{"reason":"bulk: нет ответа от OpenSearch (канал '"$ES_MODE"')"}}'
+  else
+    printf '%s' "$out"
+  fi
+}
 have_docker() { docker info >/dev/null 2>&1; }
 find_os_container() {
   have_docker || return 1
@@ -145,6 +172,26 @@ detect_es() {
 backup_obj() { # $1=file-slug $2=json
   if [ -z "$BACKUP_DIR" ]; then mkdir -p "$BACKUP_ROOT" 2>/dev/null && BACKUP_DIR="$BACKUP_ROOT"; fi
   [ -n "$BACKUP_DIR" ] && printf '%s' "$2" > "$BACKUP_DIR/$1.json" 2>/dev/null || true
+}
+
+sample_migration_versions() { # {"dashboard":"7.9.3",...} — версии миграций
+  # существующих объектов .kibana (сырой формат требует migrationVersion,
+  # иначе OSD при чтении прогонит объект через цепочку миграций)
+  es GET '/.kibana/_search?q=type:dashboard%20OR%20type:visualization%20OR%20type:index-pattern&size=200' \
+    | python3 -c '
+import json, sys, collections
+mv = collections.defaultdict(collections.Counter)
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+for h in ((d.get("hits") or {}).get("hits") or []):
+    s = h.get("_source") or {}
+    t, m = s.get("type"), (s.get("migrationVersion") or {})
+    if t and isinstance(m, dict) and m.get(t):
+        mv[t][str(m[t])] += 1
+print(json.dumps({t: c.most_common(1)[0][0] for t, c in mv.items()}))
+' 2>/dev/null
 }
 
 # ── поля событий (кандидаты EVE и ECS) ───────────────────────────────────────
@@ -228,7 +275,13 @@ for h in ((d.get("hits") or {}).get("hits") or []):
   fi
   resp="$(es POST "/.kibana/_doc/index-pattern:$ip" "$(python3 -c "
 import json,sys
-print(json.dumps({'index-pattern':{'title':'logstash-*','timeFieldName':sys.argv[1]}}))" "$ts_field")")"
+src={'type':'index-pattern','index-pattern':{'title':'logstash-*','timeFieldName':sys.argv[1]}}
+try:
+    mv=(json.loads(sys.argv[2]) or {}).get('index-pattern')
+except Exception:
+    mv=None
+if mv: src['migrationVersion']={'index-pattern': mv}
+print(json.dumps(src))" "$ts_field" "${MV_JSON:-}")")"
   id="$(printf '%s' "$resp" | es_jq_get "str(d.get('_id','').split(':',1)[-1])")"
   if [ -n "$id" ]; then
     ok "index-pattern создан: $id (logstash-*, time=$ts_field)" >&2
@@ -238,10 +291,14 @@ print(json.dumps({'index-pattern':{'title':'logstash-*','timeFieldName':sys.argv
 }
 
 # ── рендер пакета: подстановка полей, вырезание отсутствующих визов ──────────
-render_pack() { # $1=pack-file $2=index-pattern-id $3=fields-file; NDJSON на stdout
-  python3 - "$1" "$2" "$3" <<'PYRENDER'
+render_pack() { # $1=pack-file $2=index-pattern-id $3=fields-file $4=mv-json; NDJSON на stdout
+  python3 - "$1" "$2" "$3" "$4" <<'PYRENDER'
 import json, sys, re
 pack_path, ip_id, fields_file = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    mv_map = json.loads(sys.argv[4]) if sys.argv[4] else {}
+except Exception:
+    mv_map = {}
 fields = {}
 for line in open(fields_file, encoding="utf-8"):
     parts = line.rstrip("\n").split("\t")
@@ -308,10 +365,14 @@ for o in keep:
     s = subst(s)  # повтор: поля внутри подставленных значений
     doc = {"_index": ".kibana", "_id": "%s:%s" % (o["type"], o["id"])}
     attrs = json.loads(s)
+    # сырой формат .kibana: type + атрибуты под именем типа + references
+    # (envelope «attributes» — только у SavedObjects HTTP API, не в индексе)
+    src = {"type": o["type"], o["type"]: attrs["attributes"],
+           "references": attrs.get("references", [])}
+    if o["type"] in mv_map:
+        src["migrationVersion"] = {o["type"]: mv_map[o["type"]]}
     out.append(json.dumps({"index": doc}, ensure_ascii=False))
-    out.append(json.dumps({"type": o["type"], "id": o["id"], "version": 1,
-                           "attributes": attrs["attributes"],
-                           "references": attrs.get("references", [])}, ensure_ascii=False))
+    out.append(json.dumps(src, ensure_ascii=False))
 sys.stderr.write(json.dumps({"missing": sorted(missing_all), "count": len(keep)}, ensure_ascii=False) + "\n")
 print("\n".join(out))
 PYRENDER
@@ -360,6 +421,8 @@ do_import() {
   local nf; nf="$(wc -l < "$PROG_FILE.fields" | tr -d ' ')"
   [ "$nf" -gt 0 ] || { err "поля не определены — есть ли данные logstash-*?"; return 1; }
   ok "определено полей: $nf"
+  # версии миграций существующих объектов — для сырого формата .kibana
+  MV_JSON="$(sample_migration_versions)"
 
   step "Index-pattern"
   local ip; ip="$(resolve_index_pattern "$PROG_FILE.fields")" || return 1
@@ -369,7 +432,7 @@ do_import() {
     local f="$PACKS_DIR/$p.json"
     [ -f "$f" ] || { err "файл пакета не найден: $f"; return 2; }
     step "Импорт пакета: $p"
-    render_pack "$f" "$ip" "$PROG_FILE.fields" > "$PROG_FILE.bulk"
+    render_pack "$f" "$ip" "$PROG_FILE.fields" "${MV_JSON:-}" > "$PROG_FILE.bulk"
     local info; info="$(tail -1 "$PROG_FILE.bulk" 2>/dev/null)"
     # render_pack печатает метаданные в stderr — перечитаем их из stderr нельзя,
     # поэтому просто считаем строки NDJSON
@@ -389,7 +452,7 @@ for line in sys.stdin:
       backup_obj "$(printf '%s' "$doc_id" | tr -c 'A-Za-z0-9._-' '_')" "$(es GET "/.kibana/_doc/$doc_id")"
     done
     local resp rc
-    resp="$(es POST '/_bulk?refresh=false' "$(cat "$PROG_FILE.bulk")")"
+    resp="$(es_bulk "$PROG_FILE.bulk")"
     rc="$(printf '%s' "$resp" | es_jq_get "str(d.get('errors'))")"
     if [ "$rc" = "False" ]; then
       ok "пакет $p импортирован: $((lines / 2)) объектов"
@@ -399,6 +462,9 @@ for line in sys.stdin:
 import json,sys
 try: d=json.load(sys.stdin)
 except Exception: print("ответ не разобран"); raise SystemExit
+e=d.get("error")
+if e and not d.get("items"):
+    print("bulk не принят — %s" % str(e)[:200]); raise SystemExit
 n=0
 for it in d.get("items", []):
     r=it.get("index") or it.get("create") or {}

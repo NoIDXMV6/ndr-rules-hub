@@ -114,6 +114,14 @@ class H(BaseHTTPRequestHandler):
             ST["sdets"].append({"id": _id, "name": json.loads(body).get("name", "?")})
             return self._send({"_id": _id, "_version": 1})
         if p == "/_bulk":
+            # как настоящий OpenSearch: тело bulk должно заканчиваться \n
+            if not body.endswith("\n"):
+                return self._send({
+                    "error": {"root_cause": [{"type": "illegal_argument_exception",
+                                "reason": "The bulk request must be terminated by a newline [\\n]"}],
+                               "type": "illegal_argument_exception",
+                               "reason": "The bulk request must be terminated by a newline [\\n]"},
+                    "status": 400}, code=400)
             ST["bulk"].append(body)
             log("BULK_RAW_START")
             with open(REQ_LOG, "a", encoding="utf-8") as f:
@@ -179,6 +187,7 @@ if [ "\$1" = "ps" ]; then
 fi
 if [ "\$1" = "exec" ]; then
   CT="\$2"; shift 2
+  while [ "\${1:-}" = "-i" ] || [ "\${1:-}" = "-t" ] || [ "\${1:-}" = "--interactive" ]; do shift; done
   [ "\${1:-}" = curl ] && shift
   # curl -s -X M -H ... -d BODY http://127.0.0.1:9200/PATH → curl ... \$MOCK_URL/PATH
   ARGS=()
@@ -252,12 +261,17 @@ for k in traffic http dns tls alerts files; do grepq "$k" "$out"; done; check "B
 
 out="$(run_import --pack traffic --yes 2>&1)"; rc=$?
 check "B2: import traffic rc=$rc" $([ $rc -eq 0 ]; echo $?)
+grepq 'импортирован: 7 объектов' "$out"; check "B2: traffic — 7 объектов импортировано" $?
 grepq 'index-pattern найден' "$out" || grepq 'index-pattern создан' "$out"; check "B2: index-pattern найден/создан" $?
 bulk="$(sed -n '/BULK_RAW_START/,/BULK_RAW_END/p' "$T/requests.log" | grep 'dashboard:ndr-pack-traffic' | head -1)"
 printf '%s' "$bulk" | grep -q .; check "B2: дашборд traffic в bulk" $?
 bulkall="$(sed -n '/BULK_RAW_START/,/BULK_RAW_END/p' "$T/requests.log")"
 printf '%s' "$bulkall" | grep -q 'src_ip'; check "B2: поле src_ip подставлено" $?
 printf '%s' "$bulk" | grep -q '__F:'; check "B2: плейсхолдеров не осталось" $([ $? -ne 0 ]; echo $?)
+printf '%s' "$bulkall" | grep -q '"type": "dashboard"'; check "B2: сырой формат .kibana — поле type" $?
+printf '%s' "$bulkall" | grep -q '"dashboard": {'; check "B2: атрибуты вложены под именем типа" $?
+printf '%s' "$bulkall" | grep -q '"attributes"'; check "B2: envelope-поля attributes нет" $([ $? -ne 0 ]; echo $?)
+printf '%s' "$out" | grepq 'в .kibana: [1-9]'; check "B2: объекты видны в проверке после refresh=wait_for" $?
 requests | grep 'POST /.kibana/_doc/index-pattern' | grep -q 'logstash-\*'; check "B2: title index-pattern записан" $?
 
 out="$(run_import --pack alerts --pack dns --yes 2>&1)"; rc=$?
