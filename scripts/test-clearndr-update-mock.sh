@@ -425,10 +425,32 @@ echo on > "$WORK/bin/compose-validate"
 rc="$(run_update ok s8 --yes --skip-volume)"
 out="$(cat "$WORK/out-s8.txt")"
 check_rc "$rc" 0 "цикл после авто-восстановления завершился успехом"
-contains "$out" "нет docker-compose.yaml" "пропажа compose-файла обнаружена в preflight"
+contains "$out" "нет compose-файла" "пропажа compose-файла обнаружена в preflight"
 contains "$out" "compose-файл на месте — конфигурация восстановлена" "compose-файл восстановлен из архива"
 contains "$out" "Конфигурация стека проходит проверку docker compose" "preflight-валидация пройдена"
 [ -f "$WORK/instance/config/docker-compose.yml" ] && ok "docker-compose.yml вернулся в config/" || bad "compose-файл не восстановлен"
+
+echo "== 8b. compose.yml (Compose Spec v2) распознаётся как валидный compose-файл =="
+fresh_config_v4
+if ! mv "$WORK/instance/config/docker-compose.yml" "$WORK/instance/config/compose.yml" 2>/dev/null; then
+  # docker-compose.yml отсутствовал — создадим compose.yml вручную
+  cat > "$WORK/instance/config/compose.yml" <<'EOF'
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.5.0
+  db:
+    image: postgres:16
+networks:
+  network:
+    name: config_network
+    external: true
+EOF
+fi
+rc="$(run_update ok s8b --yes --skip-volume)"
+out="$(cat "$WORK/out-s8b.txt")"
+check_rc "$rc" 0 "цикл с compose.yml завершился успехом"
+not_contains "$out" "нет compose-файла" "compose.yml не считается пропажей compose-файла"
+not_contains "$out" "стек неуправляем" "compose.yml не считается повреждением конфигурации"
 
 echo "== 9. Автопатч сетей после compose update (шаблон не определяет сеть) =="
 fresh_config_v4

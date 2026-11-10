@@ -105,10 +105,12 @@ parse_args() {
 # ----------------------------- docker-помощники ------------------------------
 have_docker() { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
 
-compose_file_name() {  # $1 — config dir; печатает имя compose-файла либо rc=1
+compose_file_name() {  # $1 — config dir; печатает имя compose-файла (docker-compose.yaml|yml либо compose.yaml|yml — Compose Spec v2) либо rc=1
   local d="$1"
   if [ -f "$d/docker-compose.yaml" ]; then echo docker-compose.yaml
   elif [ -f "$d/docker-compose.yml" ]; then echo docker-compose.yml
+  elif [ -f "$d/compose.yaml" ]; then echo compose.yaml
+  elif [ -f "$d/compose.yml" ]; then echo compose.yml
   else return 1; fi
 }
 
@@ -208,7 +210,7 @@ find_good_config_source() {  # $1 — instance dir; $2 — config dir; печа�
   local inst="$1" cfg="$2" cand f
   while IFS= read -r cand; do
     [ -n "$cand" ] || continue
-    for f in docker-compose.yaml docker-compose.yml; do
+    for f in docker-compose.yaml docker-compose.yml compose.yaml compose.yml; do
       [ -f "$cand/config/$f" ] && { echo "$cand/config/$f"; return 0; }
     done
   done < <(ls -1dt "$inst"/config.failed-*/ 2>/dev/null || true)
@@ -223,7 +225,7 @@ find_good_config_source() {  # $1 — instance dir; $2 — config dir; печа�
              "$inst"/../../../backups/config-*.tar.gz 2>/dev/null \
            | awk '!seen[$0]++' || true)
   # созданный вручную файл НЕ В ТОМ каталоге (config/config/…)
-  for f in docker-compose.yaml docker-compose.yml; do
+  for f in docker-compose.yaml docker-compose.yml compose.yaml compose.yml; do
     [ -f "$cfg/config/$f" ] && { echo "$cfg/config/$f"; return 0; }
   done
   return 1
@@ -280,7 +282,7 @@ restore_missing_from_archive() {  # $1 — instance dir; $2 — архив; rc: 
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in
-      */docker-compose.yaml|*/docker-compose.yml) had_compose=1 ;;
+      */docker-compose.yaml|*/docker-compose.yml|*/compose.yaml|*/compose.yml) had_compose=1 ;;
     esac
   done < <(tar tzf "$arch" 2>/dev/null || true)
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -313,7 +315,7 @@ archive_member_for() {  # $1 — instance dir; $2 — архив; печатае
   if [ -n "$p" ] && [ "$p" != "$inst" ]; then
     p="${p#/}"
     if [ "$(basename "$inst")" = "config" ]; then cand="$p"; else cand="$p/config"; fi
-    if tar tzf "$arch" 2>/dev/null | grep -qE "^${cand}/docker-compose\.(yaml|yml)$"; then
+    if tar tzf "$arch" 2>/dev/null | grep -qE "^${cand}/(docker-)?compose\.(yaml|yml)$"; then
       echo "$cand"; return 0
     fi
   fi
@@ -322,13 +324,13 @@ archive_member_for() {  # $1 — instance dir; $2 — архив; печатае
   if [ -n "$suffix" ]; then
     suffix="${suffix#/}"
     if [ "$(basename "$inst")" = "config" ]; then cand="$suffix"; else cand="$suffix/config"; fi
-    if tar tzf "$arch" 2>/dev/null | grep -qE "^${cand}/docker-compose\.(yaml|yml)$"; then
+    if tar tzf "$arch" 2>/dev/null | grep -qE "^${cand}/(docker-)?compose\.(yaml|yml)$"; then
       echo "$cand"; return 0
     fi
   fi
   # 3) плоский архив всего config/ — ТОЛЬКО для самого корня установки
   if [ "$inst" = "$root" ] || [ "$inst" = "/opt/ClearNDR" ]; then
-    if tar tzf "$arch" 2>/dev/null | grep -qE "^config/docker-compose\.(yaml|yml)$"; then
+    if tar tzf "$arch" 2>/dev/null | grep -qE "^config/(docker-)?compose\.(yaml|yml)$"; then
       echo "config"; return 0
     fi
   fi
@@ -580,7 +582,7 @@ reconstruct_compose_from_containers() {  # $1 — config dir; $2 — instance di
   local -a rows rows2
   have_python3 || { msg_warn "python3 недоступен — реконструкция compose невозможна"; return 1; }
   if ! have_docker; then msg_warn "docker недоступен — реконструкция compose невозможна"; return 1; fi
-  if [ -f "$cfg/docker-compose.yaml" ] || [ -f "$cfg/docker-compose.yml" ]; then return 0; fi
+  if [ -f "$cfg/docker-compose.yaml" ] || [ -f "$cfg/docker-compose.yml" ] || [ -f "$cfg/compose.yaml" ] || [ -f "$cfg/compose.yml" ]; then return 0; fi
   if ! is_events_instance "$inst"; then
     msg_warn "Реконструкция из контейнеров поддержана только для events-stack инстансов (этот: $inst)"
     return 1

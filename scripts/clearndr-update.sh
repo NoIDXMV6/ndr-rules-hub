@@ -295,9 +295,11 @@ stack() {  # любая команда stamusctl compose/config — из кат�
 }
 
 # ------------------------- целостность конфигурации (v4) ---------------------
-compose_file_name() {  # docker-compose.yaml|yml либо код 1, если файла нет
+compose_file_name() {  # docker-compose.yaml|yml либо compose.yaml|yml (Compose Spec v2) либо код 1, если файла нет
   if [ -f "$CONFIG_DIR/docker-compose.yaml" ]; then echo docker-compose.yaml
   elif [ -f "$CONFIG_DIR/docker-compose.yml" ]; then echo docker-compose.yml
+  elif [ -f "$CONFIG_DIR/compose.yaml" ]; then echo compose.yaml
+  elif [ -f "$CONFIG_DIR/compose.yml" ]; then echo compose.yml
   else return 1; fi
 }
 
@@ -308,14 +310,14 @@ find_good_config_source() {
   # 1) сохранённые «сломанные» конфиги (свежие сверху) — там может быть compose-файл
   while IFS= read -r cand; do
     [ -n "$cand" ] || continue
-    for f in docker-compose.yaml docker-compose.yml; do
+    for f in docker-compose.yaml docker-compose.yml compose.yaml compose.yml; do
       [ -f "$cand/config/$f" ] && { echo "$cand/config/$f"; return 0; }
     done
   done < <(ls -1dt "$INSTANCE_DIR"/config.failed-*/ 2>/dev/null || true)
   # 2) архивы config-*.tar.gz (свежие сверху), содержащие compose-файл
   while IFS= read -r cand; do
     [ -n "$cand" ] || continue
-    if [ -s "$cand" ] && tar tzf "$cand" 2>/dev/null | grep -q 'docker-compose\.'; then
+    if [ -s "$cand" ] && tar tzf "$cand" 2>/dev/null | grep -Eq '(docker-)?compose\.(ya?ml)$'; then
       echo "$cand"; return 0
     fi
   done < <(ls -1t "${BACKUP_DIR_OPT:-}"/config-*.tar.gz "${BACKUP_DIR:-}"/config-*.tar.gz "$INSTANCE_DIR"/backups/config-*.tar.gz \
@@ -335,7 +337,7 @@ restore_missing_from_archive() {
       if tar xzf "$arch" -C "$INSTANCE_DIR" "config/$f" 2>/dev/null; then
         msg_warn "Восстановлен отсутствующий файл: config/$f"
         restored=$((restored + 1))
-        case "$f" in docker-compose.yaml|docker-compose.yml) RESTORED_COMPOSE=1 ;; esac
+        case "$f" in docker-compose.yaml|docker-compose.yml|compose.yaml|compose.yml) RESTORED_COMPOSE=1 ;; esac
       fi
     fi
   done < <(tar tzf "$arch" 2>/dev/null | grep -v '/$' || true)
@@ -345,7 +347,7 @@ restore_missing_from_archive() {
 
 ensure_compose_file() {  # без compose-файла стек неуправляем (stat … no such file)
   compose_file_name >/dev/null 2>&1 && return 0
-  msg_warn "В $CONFIG_DIR нет docker-compose.yaml — stamusctl compose down/up упадёт с «no such file or directory»."
+  msg_warn "В $CONFIG_DIR нет compose-файла (docker-compose.yaml|yml, compose.yaml|yml) — stamusctl compose down/up упадёт с «no such file or directory»."
   if [ "$DRY_RUN" -eq 1 ]; then
     msg_err "dry-run: сначала восстановите конфигурацию (clearndr-repair-stack.sh --instance-dir $INSTANCE_DIR)."
     exit 1
@@ -448,7 +450,7 @@ validate_compose_project() {  # 0 — проект валиден; 1 — печ�
 # Архив для отката: основной либо другой источник, содержащий compose-файл
 select_rollback_archive() {
   local a="$1" alt
-  if [ -s "$a" ] && tar tzf "$a" 2>/dev/null | grep -q 'docker-compose\.'; then
+  if [ -s "$a" ] && tar tzf "$a" 2>/dev/null | grep -Eq '(docker-)?compose\.(ya?ml)$'; then
     echo "$a"; return 0
   fi
   [ -s "$a" ] && msg_warn "Архив $a не содержит compose-файл (снят с уже повреждённого config/)"
@@ -1042,8 +1044,8 @@ backup_config() {  # уровень 2: каталог config/
   chmod 600 "$out"
   [ -s "$out" ] || { msg_err "Архив config/ пуст — продолжение опасно."; exit 1; }
   # v4: архив без compose-файла бесполезен для отката — прерываем ДО деструктивных шагов
-  if ! tar tzf "$out" 2>/dev/null | grep -q 'docker-compose\.'; then
-    msg_err "Архив $out НЕ содержит compose-файл — config/ повреждён (нет docker-compose.yaml/yml)."
+  if ! tar tzf "$out" 2>/dev/null | grep -Eq '(docker-)?compose\.(ya?ml)$'; then
+    msg_err "Архив $out НЕ содержит compose-файл — config/ повреждён (нет docker-compose.yaml/yml, compose.yaml/yml)."
     msg_err "Откат из такого архива оставит стек неуправляемым."
     msg_err "Восстановите конфигурацию: clearndr-repair-stack.sh --instance-dir $INSTANCE_DIR"
     exit 1
@@ -1207,7 +1209,7 @@ restore_custom_files() {
       if tar xzf "$arch" -C "$INSTANCE_DIR" "config/$f" 2>/dev/null; then
         msg_warn "Восстановлен пользовательский файл, отсутствующий в новой конфигурации: config/$f"
         restored=$((restored + 1))
-        case "$f" in docker-compose.yaml|docker-compose.yml) RESTORED_COMPOSE=1 ;; esac
+        case "$f" in docker-compose.yaml|docker-compose.yml|compose.yaml|compose.yml) RESTORED_COMPOSE=1 ;; esac
       fi
     fi
   done <<< "$old_files"

@@ -491,10 +491,10 @@ export function UpdateTab({ onChange }: { data: unknown; onChange: () => void })
           </CardHeader>
           <CardContent className="space-y-2">
             {!runActive && run.exitCode !== undefined && (
-              <div className={`rounded-lg border p-3 text-sm ${run.exitCode === 0 ? 'border-emerald-300/60 bg-emerald-50 text-emerald-800' : 'border-red-300/60 bg-red-50 text-red-700'}`}>
-                {run.exitCode === 0 ? t.update.finishedOk : tr(t.update.finishedFail, { code: run.exitCode })}
+              <div className={`rounded-lg border p-3 text-sm ${run.exitCode === 0 ? 'border-emerald-300/60 bg-emerald-50 text-emerald-800' : run.exitCode === 143 || run.cancelled ? 'border-amber-300/60 bg-amber-50 text-amber-800' : 'border-red-300/60 bg-red-50 text-red-700'}`}>
+                {run.exitCode === 0 ? t.update.finishedOk : run.exitCode === 143 || run.cancelled ? t.update.stoppedNote : tr(t.update.finishedFail, { code: run.exitCode })}
                 <p className="text-xs mt-1 text-muted-foreground">
-                  {run.exitCode === 0 ? t.update.rcHint0 : run.exitCode === 1 ? t.update.rcHint1 : run.exitCode === 90 ? t.update.rcHint90 : t.update.rcHint2}
+                  {run.exitCode === 0 ? t.update.rcHint0 : run.exitCode === 143 || run.cancelled ? t.update.rcHint143 : run.exitCode === 1 ? t.update.rcHint1 : run.exitCode === 90 ? t.update.rcHint90 : t.update.rcHint2}
                 </p>
               </div>
             )}
@@ -554,9 +554,9 @@ export function UpdateTab({ onChange }: { data: unknown; onChange: () => void })
           {st?.runs.map((r) => (
             <div key={r.runId} className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
               <Badge variant="outline" className={
-                r.finishedAt ? (r.exitCode === 0 ? 'border-emerald-300 text-emerald-700' : 'border-red-300 text-red-600') : 'border-amber-300 text-amber-700'
+                r.finishedAt ? (r.exitCode === 0 ? 'border-emerald-300 text-emerald-700' : r.exitCode === 143 || r.cancelled ? 'border-amber-300 text-amber-700' : 'border-red-300 text-red-600') : 'border-amber-300 text-amber-700'
               }>
-                {r.finishedAt ? (r.exitCode === 0 ? 'OK' : `rc=${r.exitCode}`) : '…'}
+                {r.finishedAt ? (r.exitCode === 0 ? 'OK' : r.exitCode === 143 || r.cancelled ? t.update.stoppedShort : `rc=${r.exitCode}`) : '…'}
               </Badge>
               <code className="text-xs text-foreground">{r.runId}</code>
               <span className="text-xs text-muted-foreground">{tr(t.update.started, { t: fmtTime(r.startedAt, lang) })}</span>

@@ -32,6 +32,15 @@ type PackKey = (typeof PACK_KEYS)[number]
 const APPLY_KINDS = ['alerting', 'anomaly', 'security'] as const
 type ApplyKind = (typeof APPLY_KINDS)[number]
 
+function fmtElapsed(startedIso?: string): string {
+  if (!startedIso) return ''
+  const s = Math.max(0, Math.floor((Date.now() - Date.parse(startedIso)) / 1000))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  return h > 0 ? `${h} ч ${m} мин` : m > 0 ? `${m} мин ${sec} с` : `${sec} с`
+}
+
 export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
   const { t, tr, lang } = useI18n()
   const [st, setSt] = useState<OsdStatus | null>(null)
@@ -143,6 +152,7 @@ export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
         return
       }
       if (action === 'cancel') {
+        setMsg({ ok: true, text: tr(t.osd.cancelledMsg, { runId: String(extra.runId ?? '') }) })
         await load()
         return
       }
@@ -165,6 +175,7 @@ export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
   }
 
   const probe = st?.probe
+  const activeRun = st?.activeRun ?? null
   const packLabel: Record<PackKey, { title: string; desc: string }> = {
     traffic: { title: t.osd.packTraffic, desc: t.osd.packTrafficDesc },
     http: { title: t.osd.packHttp, desc: t.osd.packHttpDesc },
@@ -189,6 +200,24 @@ export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
 
   return (
     <div className="space-y-4">
+      {/* ── Выполняется прогон: явный баннер с кнопкой остановки ── */}
+      {activeRun && (
+        <Card className="bg-card border-amber-300">
+          <CardContent className="py-3 space-y-2">
+            <div className="text-sm flex items-center gap-2 flex-wrap">
+              <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+              <span className="font-medium">{t.osd.activeRunTitle}</span>
+              <Badge variant="outline" className="border-input text-muted-foreground font-normal">{activeRun.runId}</Badge>
+              {activeRun.startedAt && <span className="text-xs text-muted-foreground">{tr(t.osd.elapsed, { time: fmtElapsed(activeRun.startedAt) })}</span>}
+              <Button size="sm" variant="outline" className="ml-auto border-red-300 text-red-700 hover:bg-red-50" onClick={() => act('cancel', { runId: activeRun.runId })} disabled={busy !== null}>
+                <XCircle className="h-4 w-4 mr-1.5" /> {t.osd.stopRunBtn}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">{t.osd.activeRunHint}</p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── Состояние OpenSearch ── */}
       <Card className="bg-card border-border">
         <CardHeader className="pb-3">
@@ -397,7 +426,12 @@ export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
               <Terminal className="h-4 w-4 text-primary" /> {t.osd.logTitle}
               <Badge variant="outline" className="border-input text-muted-foreground font-normal">{run.runId}</Badge>
               {run.active ? (
-                <Badge variant="outline" className="border-blue-400 text-blue-700">{t.osd.running}</Badge>
+                <>
+                  <Badge variant="outline" className="border-blue-400 text-blue-700">{t.osd.running}</Badge>
+                  {run.startedAt && <span className="text-xs text-muted-foreground font-normal">{tr(t.osd.elapsed, { time: fmtElapsed(run.startedAt) })}</span>}
+                </>
+              ) : run.cancelled || run.exitCode === 143 ? (
+                <Badge variant="outline" className="border-amber-400 text-amber-700">{t.osd.stoppedBadge}</Badge>
               ) : (
                 <Badge variant="outline" className={run.exitCode === 0 ? 'border-emerald-400 text-emerald-700' : 'border-red-400 text-red-700'}>
                   {tr(t.osd.exitCode, { code: run.exitCode ?? '—' })}
@@ -429,7 +463,14 @@ export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
                 <span className="font-mono text-xs text-muted-foreground">{r.runId}</span>
                 <span className="text-xs text-muted-foreground">{fmtTime(r.startedAt, lang)}</span>
                 {!r.finishedAt ? (
-                  <Badge variant="outline" className="border-blue-400 text-blue-700">{t.osd.running}</Badge>
+                  <>
+                    <Badge variant="outline" className="border-blue-400 text-blue-700">{t.osd.running}</Badge>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-xs border-red-300 text-red-700 hover:bg-red-50" onClick={() => act('cancel', { runId: r.runId })} disabled={busy !== null}>
+                      {t.osd.stopRunBtn}
+                    </Button>
+                  </>
+                ) : r.cancelled || r.exitCode === 143 ? (
+                  <Badge variant="outline" className="border-amber-400 text-amber-700">{t.osd.stoppedBadge}</Badge>
                 ) : (
                   <Badge variant="outline" className={r.exitCode === 0 ? 'border-emerald-400 text-emerald-700' : 'border-red-400 text-red-700'}>
                     {tr(t.osd.exitCode, { code: r.exitCode ?? '—' })}

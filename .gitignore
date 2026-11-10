@@ -77,6 +77,7 @@ server.log
 !/scripts/test-clearndr-update-mock.sh
 !/scripts/test-clearndr-repair-mock.sh
 !/scripts/test-osd-probe-smoke.sh
+!/scripts/test-osd-stale-run.ts
 !/scripts/gh_release_backfill.sh
 /mini-services
 dev.log

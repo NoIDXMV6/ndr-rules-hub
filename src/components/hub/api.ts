@@ -203,6 +203,7 @@ export interface UpdateRunMeta {
   startedAt: string
   finishedAt?: string
   exitCode?: number
+  cancelled?: boolean
   options: UpdateOptionsUi
   args: string[]
   remoteDir?: string
@@ -235,6 +236,7 @@ export interface UpdateRunStatus {
   runId: string
   active: boolean
   exitCode?: number
+  cancelled?: boolean
   log: string
   startedAt?: string
   finishedAt?: string
@@ -285,6 +287,7 @@ export interface OsdRunMeta {
   startedAt: string
   finishedAt?: string
   exitCode?: number
+  cancelled?: boolean
   args: string[]
   remoteDir?: string
 }
@@ -294,7 +297,7 @@ export interface OsdStatus {
   packs: string[]
   applyKinds: string[]
   probe: OsdProbe
-  activeRun: { runId: string; active: boolean; exitCode?: number } | null
+  activeRun: { runId: string; active: boolean; exitCode?: number; startedAt?: string; cancelled?: boolean } | null
   runs: OsdRunMeta[]
 }
 
@@ -302,6 +305,7 @@ export interface OsdRunStatus {
   runId: string
   active: boolean
   exitCode?: number
+  cancelled?: boolean
   log: string
   startedAt?: string
   finishedAt?: string

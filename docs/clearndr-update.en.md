@@ -503,11 +503,18 @@ never overwritten.
 
 | Mechanism | What it does |
 |---|---|
-| Preflight restore | if `config/docker-compose.yaml` is missing, the script restores it (and other files) from `config.failed-*/` or archives before any changes |
+| Preflight restore | if the compose file is missing, the script restores it (and other files) from `config.failed-*/` or archives before any changes |
 | `docker compose config` validation | before changes and after `compose update`: the project must load, otherwise the update aborts/rolls back |
 | Network auto-patch | after `compose update` appends undefined networks (external, bound to the actual stack network by seed) |
 | Backup gate | a `config/` archive without the compose file is considered incomplete — the update stops BEFORE destructive steps |
 | Rollback guard | a fresh archive taken of an already-broken `config/` is replaced by an older full archive or `config.failed-*/` |
+
+Compose file names: since stamusctl templates switched to `compose.yml`
+(Compose Spec v2), all four names are recognized — `docker-compose.yaml`,
+`docker-compose.yml`, `compose.yaml`, `compose.yml` — in the hub preflight,
+`clearndr-update.sh` (compose_file_name, restore, backup gate) and
+`clearndr-repair-stack.sh`. The error “compose file not found in …/config”
+means none of these files exist in `config/`.
 
 The “Update Clear NDR” tab shows the configuration state in the preflight block
 (“Stack config (docker compose)”) and blocks the update when it is broken, hinting the

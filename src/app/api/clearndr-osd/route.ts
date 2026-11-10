@@ -51,12 +51,12 @@ export async function GET(req: NextRequest) {
       ),
       listOsdRuns(),
     ])
-    let activeRun = null as null | { runId: string; active: boolean; exitCode?: number }
+    let activeRun = null as null | { runId: string; active: boolean; exitCode?: number; startedAt?: string; cancelled?: boolean }
     for (const r of runs.slice(0, 3)) {
       if (!r.finishedAt) {
         const st = await readOsdRunStatus(cfg, r.runId, 2_000)
         if (st.active) {
-          activeRun = { runId: st.runId, active: true, exitCode: st.exitCode }
+          activeRun = { runId: st.runId, active: true, exitCode: st.exitCode, startedAt: st.startedAt, cancelled: st.cancelled }
           break
         }
       }

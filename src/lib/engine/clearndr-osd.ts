@@ -280,6 +280,7 @@ export interface OsdRunMeta {
   startedAt: string
   finishedAt?: string
   exitCode?: number
+  cancelled?: boolean   // остановлен пользователем (кнопка «Остановить»)
   args: string[]
   remoteDir?: string
 }
@@ -288,6 +289,7 @@ export interface OsdRunStatus {
   runId: string
   active: boolean
   exitCode?: number
+  cancelled?: boolean
   log: string
   startedAt?: string
   finishedAt?: string
@@ -342,13 +344,62 @@ export async function listOsdRuns(): Promise<OsdRunMeta[]> {
   }
 }
 
+// ────────────────── зависшие/прерванные прогоны (реанимация) ──────────────────
+// Раннер в local-режиме — detached-процесс; если контейнер хаба перезапускался,
+// процесс погиб, не записав rc — и прогон навсегда оставался «выполняется»,
+// блокируя новые запуски. Теперь статус-опрос проверяет живость процесса по pid
+// и помечает такие прогоны остановленными (rc=143).
+
+const STALE_RUN_MS = 3 * 60 * 1000 // нет pid-файла вообще → через 3 мин считаем прогон прерванным
+
+async function osdPid(runId: string): Promise<number> {
+  for (const f of ['pid.txt', 'pid']) {
+    try {
+      const pid = parseInt((await fs.readFile(path.join(OSD_RUNS_DIR, runId, f), 'utf8')).trim(), 10)
+      if (Number.isFinite(pid) && pid > 0) return pid
+    } catch { /* нет файла */ }
+  }
+  return 0
+}
+
+function pidAliveLocal(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    // EPERM = процесс есть, но чужой (другой пользователь) — считаем живым
+    return (e as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+async function osdRcExists(runId: string): Promise<boolean> {
+  try { await fs.access(path.join(OSD_RUNS_DIR, runId, 'rc')); return true } catch { return false }
+}
+
+/** Пометить local-прогон прерванным: rc=143, строка в лог, финализация meta. */
+async function finalizeInterruptedLocal(runId: string, reason: string, cancelled: boolean): Promise<void> {
+  const dir = path.join(OSD_RUNS_DIR, runId)
+  await fs.appendFile(path.join(dir, 'log.txt'), `\n[hub] ${reason}\n`).catch(() => undefined)
+  await fs.writeFile(path.join(dir, 'rc'), '143').catch(() => undefined)
+  const m = await readOsdMeta(runId)
+  if (m && !m.finishedAt) {
+    m.finishedAt = new Date().toISOString()
+    m.exitCode = 143
+    m.cancelled = cancelled || m.cancelled || false
+    await writeOsdMeta(m)
+    await logOsdEvent('error', `Прогон OSD (${runId}) прерван: ${reason}`)
+  }
+}
+
 /** Запуск прогонов аналитики/импорта (detached-раннер как в clearndr-update) */
 export async function startOsdRun(cfg: UpdateSettings, o: OsdRunOptions): Promise<{ ok: boolean; error?: string; runId?: string; args?: string[] }> {
   const runs = await listOsdRuns()
   const active = runs.find((r) => !r.finishedAt)
   if (active) {
+    // readOsdRunStatus сам реанимирует зависший прогон (pid мёртв/файла нет) —
+    // после этого запуск нового прогона снова разрешён
     const st = await readOsdRunStatus(cfg, active.runId)
-    if (st.active) return { ok: false, error: `прогон ${active.runId} ещё выполняется` }
+    if (st.active) return { ok: false, error: `прогон ${active.runId} ещё выполняется — остановите его кнопкой «Остановить» и попробуйте снова` }
   }
   const script = o.kind === 'apply' ? 'analytics' : 'import'
   const scriptLocal = script === 'analytics' ? localOsdAnalyticsPath() : localOsdImportPath()
@@ -400,7 +451,11 @@ export async function startOsdRun(cfg: UpdateSettings, o: OsdRunOptions): Promis
     await fs.writeFile(path.join(dir, 'pid.txt'), String(child.pid ?? '')).catch(() => undefined)
     child.on('exit', async (code) => {
       await out.close().catch(() => undefined)
+      // маркер отмены (cancelOsdRun): остановленный прогон получает код 143
+      let cancelledFlag = false
+      try { await fs.access(path.join(dir, 'cancelled')); cancelledFlag = true } catch { /* нет маркера */ }
       let finalCode = code ?? 1
+      if (cancelledFlag) finalCode = 143
       try {
         const rcRaw = parseInt((await fs.readFile(rcPath, 'utf8')).trim(), 10)
         if (Number.isFinite(rcRaw)) finalCode = rcRaw
@@ -411,6 +466,7 @@ export async function startOsdRun(cfg: UpdateSettings, o: OsdRunOptions): Promis
       if (m && !m.finishedAt) {
         m.finishedAt = new Date().toISOString()
         m.exitCode = finalCode
+        if (cancelledFlag) m.cancelled = true
         await writeOsdMeta(m)
       }
     })
@@ -467,9 +523,27 @@ export async function readOsdRunStatus(cfg: UpdateSettings, runId: string, tailB
     try { rc = (await fs.readFile(path.join(OSD_RUNS_DIR, runId, 'rc'), 'utf8')).trim() } catch { /* работает */ }
     let log = ''
     try { log = await readTailFile(path.join(OSD_RUNS_DIR, runId, 'log.txt'), tailBytes) } catch { /* нет лога */ }
-    const active = rc === null
+    let active = rc === null
+    // реанимация зависшего прогона: rc нет, но процесса уже нет
+    if (active) {
+      const pid = await osdPid(runId)
+      const startedMs = Date.parse(meta.startedAt || '') || 0
+      if (pid > 0 && !pidAliveLocal(pid)) {
+        const reason = `процесс прогона не найден (pid ${pid} завершился без записи кода — контейнер хаба перезапускался?) — прогон помечен остановленным`
+        await finalizeInterruptedLocal(runId, reason, !!meta.cancelled)
+        rc = '143'
+        active = false
+        log += `\n[hub] ${reason}`
+      } else if (pid === 0 && startedMs && Date.now() - startedMs > STALE_RUN_MS) {
+        const reason = 'pid-файл не найден и прогон запущен более 3 минут назад — запуск не состоялся; прогон помечен остановленным'
+        await finalizeInterruptedLocal(runId, reason, !!meta.cancelled)
+        rc = '143'
+        active = false
+        log += `\n[hub] ${reason}`
+      }
+    }
     await closeOsdMetaIfNeeded(meta, active, rc)
-    return { runId, active, exitCode: rc !== null ? parseInt(rc, 10) : undefined, log, startedAt: meta.startedAt, finishedAt: meta.finishedAt }
+    return { runId, active, exitCode: rc !== null ? parseInt(rc, 10) : undefined, cancelled: !!meta.cancelled, log, startedAt: meta.startedAt, finishedAt: meta.finishedAt }
   }
   const remoteDir = meta.remoteDir || `${remoteOsdRunRoot(cfg)}/${runId}`
   const r = await execOnHost(
@@ -477,13 +551,20 @@ export async function readOsdRunStatus(cfg: UpdateSettings, runId: string, tailB
     [
       `tail -c ${tailBytes} '${remoteDir}/log' 2>/dev/null || true`,
       `printf 'RC:' ; cat '${remoteDir}/rc' 2>/dev/null || echo RUNNING`,
+      // жив ли процесс прогона (иначе rc мог не записаться — контейнер хаба/сессия ssh перезапускались)
+      `if [ ! -s '${remoteDir}/rc' ]; then`,
+      `  PID="$(cat '${remoteDir}/pid' 2>/dev/null || true)"`,
+      `  if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then echo PIDDEAD`,
+      `  elif [ -z "$PID" ]; then echo PIDNONE`,
+      `  fi`,
+      `fi`,
     ].join('\n'),
     25_000,
   )
   const out = r.stdout || ''
   const m = out.match(/RC:(\d+)\s*$/)
-  const rc = m ? parseInt(m[1], 10) : null
-  const log = out.replace(/RC:\d+\s*$/, '').replace(/RC:RUNNING\s*$/, '')
+  let rc = m ? parseInt(m[1], 10) : null
+  let log = out.replace(/RC:\d+\s*$/, '').replace(/RC:RUNNING\s*$/, '')
   if (!r.ok) {
     return {
       runId, active: true, exitCode: undefined,
@@ -491,30 +572,101 @@ export async function readOsdRunStatus(cfg: UpdateSettings, runId: string, tailB
       startedAt: meta.startedAt, finishedAt: meta.finishedAt,
     }
   }
+  // реанимация: rc нет, а процесса уже нет → пишем rc на хосте и финализируем
+  if (rc === null) {
+    const startedMs = Date.parse(meta.startedAt || '') || 0
+    const dead = out.includes('PIDDEAD')
+    const none = out.includes('PIDNONE')
+    if (dead || (none && startedMs && Date.now() - startedMs > STALE_RUN_MS)) {
+      const reason = dead
+        ? `процесс прогона не найден (pid завершился без записи кода) — прогон помечен остановленным`
+        : 'pid-файл не найден и прогон запущен более 3 минут назад — запуск не состоялся; прогон помечен остановленным'
+      const w = await execOnHost(
+        cfg,
+        [
+          `echo '[hub] ${reason}' >> '${remoteDir}/log' 2>/dev/null || true`,
+          `echo 143 > '${remoteDir}/rc'`,
+          `echo finalized`,
+        ].join('\n'),
+        15_000,
+      )
+      if (w.ok) {
+        rc = 143
+        log += `\n[hub] ${reason}`
+      }
+    }
+  }
   const active = rc === null
   await closeOsdMetaIfNeeded(meta, active, rc === null ? null : String(rc))
-  return { runId, active, exitCode: rc ?? undefined, log, startedAt: meta.startedAt, finishedAt: meta.finishedAt }
+  return { runId, active, exitCode: rc ?? undefined, cancelled: !!meta.cancelled, log, startedAt: meta.startedAt, finishedAt: meta.finishedAt }
 }
 
+/**
+ * Остановка прогона: TERM группе процессов (при упорстве — KILL), затем запись
+ * rc=143 и финализация meta. Раньше после отмены rc не записывался — прогон
+ * оставался «выполняется» и продолжал блокировать новые запуски.
+ */
 export async function cancelOsdRun(cfg: UpdateSettings, runId: string): Promise<{ ok: boolean; error?: string }> {
   const meta = await readOsdMeta(runId)
   if (!meta) return { ok: false, error: 'прогон не найден' }
+  if (meta.finishedAt) return { ok: false, error: 'прогон уже завершён' }
   if (meta.mode === 'local') {
-    try {
-      let pid = parseInt(await fs.readFile(path.join(OSD_RUNS_DIR, runId, 'pid.txt'), 'utf8').catch(() => ''), 10)
-      if (!Number.isFinite(pid) || !(pid > 0)) {
-        pid = parseInt(await fs.readFile(path.join(OSD_RUNS_DIR, runId, 'pid'), 'utf8').catch(() => ''), 10)
+    // маркер отмены: exit-обработчик запишет код 143 и флаг cancelled
+    await fs.writeFile(path.join(OSD_RUNS_DIR, runId, 'cancelled'), '1').catch(() => undefined)
+    const pid = await osdPid(runId)
+    if (pid > 0) {
+      try { process.kill(-pid, 'SIGTERM') } catch { /* группа уже не существует */ }
+      try { process.kill(pid, 'SIGTERM') } catch { /* уже мёртв */ }
+      for (let i = 0; i < 8; i++) {
+        if (!pidAliveLocal(pid)) break
+        await new Promise((r) => setTimeout(r, 500))
       }
-      if (!Number.isFinite(pid) || !(pid > 0)) throw new Error('pid не найден')
-      process.kill(-pid, 'SIGTERM')
-      return { ok: true }
-    } catch {
-      return { ok: false, error: 'процесс не найден (возможно, уже завершён)' }
+      if (pidAliveLocal(pid)) {
+        try { process.kill(-pid, 'SIGKILL') } catch { /* уже мёртв */ }
+        try { process.kill(pid, 'SIGKILL') } catch { /* уже мёртв */ }
+        await new Promise((r) => setTimeout(r, 500))
+      }
     }
+    // если скрипт не успел записать rc — дописываем сами и финализируем
+    if (!(await osdRcExists(runId))) {
+      await fs.writeFile(path.join(OSD_RUNS_DIR, runId, 'rc'), '143').catch(() => undefined)
+      await fs.appendFile(path.join(OSD_RUNS_DIR, runId, 'log.txt'), '\n[hub] Прогон остановлен пользователем.\n').catch(() => undefined)
+    }
+    const m = await readOsdMeta(runId)
+    if (m && !m.finishedAt) {
+      m.finishedAt = new Date().toISOString()
+      m.exitCode = 143
+      m.cancelled = true
+      await writeOsdMeta(m)
+      await logOsdEvent('error', `Прогон OSD (${runId}) остановлен пользователем`)
+    }
+    return { ok: true }
   }
   const remoteDir = meta.remoteDir || `${remoteOsdRunRoot(cfg)}/${runId}`
-  const r = await execOnHost(cfg, `kill -TERM -- -"$(cat '${remoteDir}/pid' 2>/dev/null)" 2>/dev/null; echo done`, 20_000)
-  return r.ok ? { ok: true } : { ok: false, error: (r.stderr || '').trim().slice(0, 300) }
+  const r = await execOnHost(
+    cfg,
+    [
+      `PID="$(cat '${remoteDir}/pid' 2>/dev/null || true)"`,
+      `if [ -n "$PID" ]; then kill -TERM -- -$PID 2>/dev/null; kill -TERM "$PID" 2>/dev/null; fi`,
+      `sleep 2`,
+      `if [ ! -s '${remoteDir}/rc' ]; then`,
+      `  echo 143 > '${remoteDir}/rc'`,
+      `  echo '[hub] Прогон остановлен пользователем.' >> '${remoteDir}/log' 2>/dev/null || true`,
+      `fi`,
+      `echo done`,
+    ].join('\n'),
+    20_000,
+  )
+  if (!r.ok) return { ok: false, error: (r.stderr || '').trim().slice(0, 300) || 'не удалось выполнить остановку на хосте' }
+  const m = await readOsdMeta(runId)
+  if (m && !m.finishedAt) {
+    m.finishedAt = new Date().toISOString()
+    m.exitCode = 143
+    m.cancelled = true
+    await writeOsdMeta(m)
+    await logOsdEvent('error', `Прогон OSD (${runId}) остановлен пользователем`)
+  }
+  return { ok: true }
 }
 
 async function logOsdEvent(level: string, message: string): Promise<void> {
