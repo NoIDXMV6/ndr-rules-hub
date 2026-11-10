@@ -21,7 +21,7 @@
 import { execFile, spawn, SpawnOptions } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
-import { promises as fs } from 'fs'
+import { promises as fs, readFileSync } from 'fs'
 import { DATA_DIR } from './fetcher'
 import { getSettings } from './service'
 
@@ -741,12 +741,16 @@ export async function readRunStatus(cfg: UpdateSettings, runId: string, tailByte
     let log = ''
     try { log = await readTailFile(path.join(UPDATE_RUNS_DIR, runId, 'log.txt'), tailBytes) } catch { /* нет лога */ }
     let active = rc === null
-    // реанимация зависшего прогона: rc нет, но процесса уже нет (перезапуск контейнера хаба)
+    // реанимация зависшего прогона: rc нет, но процесса уже нет (или pid
+    // переиспользован чужим процессом после пересоздания контейнера хаба)
     if (active) {
       const pid = await updatePid(runId)
       const startedMs = Date.parse(meta.startedAt || '') || 0
-      if (pid > 0 && !pidAliveLocal(pid)) {
-        const reason = `процесс прогона не найден (pid ${pid} завершился без записи кода — контейнер хаба перезапускался?) — прогон помечен остановленным`
+      const ageMs = startedMs > 0 ? Date.now() - startedMs : -1
+      if (pid > 0 && (!pidAliveLocal(pid) || (ageMs >= 0 && !pidAliveForAge(pid, ageMs)))) {
+        const reason = !pidAliveLocal(pid)
+          ? `процесс прогона не найден (pid ${pid} завершился без записи кода — контейнер хаба перезапускался?) — прогон помечен остановленным`
+          : `pid ${pid} принадлежит другому процессу (контейнер хаба пересоздавался, номер переиспользован) — прогон помечен остановленным`
         await finalizeInterruptedUpdate(runId, reason, !!meta.cancelled)
         rc = '143'
         active = false
@@ -853,7 +857,10 @@ export async function cancelRun(cfg: UpdateSettings, runId: string): Promise<{ o
     // маркер отмены: exit-обработчик запишет код 143 и флаг cancelled
     await fs.writeFile(path.join(UPDATE_RUNS_DIR, runId, 'cancelled'), '1').catch(() => undefined)
     const pid = await updatePid(runId)
-    if (pid > 0) {
+    const startedMs = Date.parse(meta.startedAt || '') || 0
+    const ageMs = startedMs > 0 ? Date.now() - startedMs : -1
+    // kill только если pid действительно принадлежит прогону
+    if (pid > 0 && pidAliveLocal(pid) && (ageMs < 0 || pidAliveForAge(pid, ageMs))) {
       // pid.txt пишет хаб (child.pid), pid — сам раннер ($$ = лидер группы)
       try { process.kill(-pid, 'SIGTERM') } catch { /* группа уже не существует */ }
       try { process.kill(pid, 'SIGTERM') } catch { /* уже мёртв */ }
@@ -866,6 +873,8 @@ export async function cancelRun(cfg: UpdateSettings, runId: string): Promise<{ o
         try { process.kill(pid, 'SIGKILL') } catch { /* уже мёртв */ }
         await new Promise((r) => setTimeout(r, 500))
       }
+    } else if (pid > 0 && pidAliveLocal(pid)) {
+      await fs.appendFile(path.join(UPDATE_RUNS_DIR, runId, 'log.txt'), '\n[hub] pid принадлежит другому процессу (переиспользован после пересоздания контейнера) — остановка без kill.\n').catch(() => undefined)
     }
     // если раннер не успел записать rc — дописываем и финализируем сами
     if (!(await updRcExists(runId))) {
@@ -929,6 +938,27 @@ function pidAliveLocal(pid: number): boolean {
     return true
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * Жив ли процесс и принадлежит ли он этому прогону (как pidAliveForAge в
+ * clearndr-osd.ts): сравниваем возраст процесса (/proc/<pid>/stat, поле 22)
+ * с возрастом прогона — после пересоздания контейнера хаба номер pid может
+ * достаться чужому процессу.
+ */
+function pidAliveForAge(pid: number, runAgeMs: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const uptime = parseFloat(readFileSync('/proc/uptime', 'utf8').trim().split(/\s+/)[0] || '0')
+    const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+    const startTicks = parseFloat(rest[19] || '0')
+    const aliveForS = uptime - startTicks / 100 // CLK_TCK (USER_HZ) = 100
+    const ageS = runAgeMs / 1000
+    if (!(aliveForS >= 0) || !(ageS >= 0)) return true
+    return Math.abs(aliveForS - ageS) <= 120
+  } catch {
+    return true
   }
 }
 

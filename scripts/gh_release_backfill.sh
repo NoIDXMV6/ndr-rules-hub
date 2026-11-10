@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Дозаливка GitHub Releases для тегов v1.10.0…v1.13.1 (объекты Releases
-# создавались только до v1.9.0, теги при этом запушены).
+# Дозаливка GitHub Releases для тегов v1.10.0…v1.14.2 (объекты Releases
+# создавались не для всех запушенных тегов).
 # Идемпотентно: существующий релиз тега не пересоздаётся.
 # Токен берётся ТОЛЬКО из remote URL и не выводится.
 set -euo pipefail
@@ -112,6 +112,48 @@ cat > "$T/v1.13.1.md" <<'EOF'
 > Симптом у пользователей v1.13.0: пересборка образа хаба обрывается на этапе `[runtime 12/14] COPY scripts/clearndr-events-restore.sh`. После `git pull` сборка проходит.
 EOF
 
+# ── v1.14.0 ──────────────────────────────────────────────────────────────────
+cat > "$T/v1.14.0.md" <<'EOF'
+## Раздел «Дашборды OpenSearch»: наполнение Alerting / Anomaly Detection / Security Analytics + каталог pack-дашбордов
+
+Ответ на вопрос «почему разделы Alerting / Anomaly Detection / Security Analytics пустые» — теперь они наполняются из UI одним кликом.
+
+- **Новый раздел хаба «Дашборды OpenSearch»**: применение аналитики (мониторы Alerting, детекторы Anomaly Detection, детектор Security Analytics) и каталог дополнительных pack-дашбордов (traffic, http, dns, tls, alerts, files) с выбором пакетов;
+- **`clearndr-osd-analytics-setup.sh`** — мониторы/детекторы через плагинные API (`_plugins/_alerting/monitors`, `_plugins/_anomaly_detection/detectors`, `_plugins/_security_analytics/detectors`) на полях Suricata EVE (`logstash-*`);
+- **`clearndr-osd-dashboard-import.sh`** — импорт pack-ов в `.kibana`: определяет фактические имена полей по `_field_caps` (EVE raw или ECS), находит/создаёт index-pattern `logstash-*`, вырезает визуализации по отсутствующим полям (с WARN), идемпотентные id `ndr-pack-*` (штатные дашборды SELKS не трогаются), бэкапы в `$INSTANCE/backups/osd-import-<ts>/`;
+- **`scripts/osd-packs/*.json`** + генератор `osd-pack-generator.py`;
+- Прогоны (apply / import / remove) в SSH- и local-режиме: detached-раннер, поллинг лога, dry-run, документация `docs/osd-analytics.md`.
+EOF
+
+# ── v1.14.1 ──────────────────────────────────────────────────────────────────
+cat > "$T/v1.14.1.md" <<'EOF'
+## Дашборды OpenSearch: автоопределение канала OpenSearch и работоспособный local-режим
+
+- Зонд и скрипты автоматически находят OpenSearch: URL из настройки → `127.0.0.1:9200` (SSH / --network host) → `172.17.0.1:9200` (шлюз docker-моста — доступен из контейнера хаба) → `host.docker.internal:9200` → `docker exec` в контейнер opensearch;
+- **Диагностика docker из контейнера хаба** (`no-cli` / `no-sock` / `denied`) с точными подсказками: `-v /var/run/docker.sock:/var/run/docker.sock` и `-v /opt/ClearNDR:/opt/ClearNDR` при запуске хаба;
+- Показ фактического канала (`host:<base>` / `exec:<контейнер>`), версий OpenSearch / OpenSearch Dashboards, числа индексов и документов `logstash-*`, счётчиков мониторов/детекторов/объектов `ndr-pack-*`;
+- `127.0.0.1:9200` из контейнера хаба больше не вводит в заблуждение: перебор кандидатов охватывает шлюз моста, ошибка перечисляет все проверенные адреса и статус docker.
+EOF
+
+# ── v1.14.2 ──────────────────────────────────────────────────────────────────
+cat > "$T/v1.14.2.md" <<'EOF'
+## Прогоны без «висяков» (реанимация + отмена); compose.yml (Compose Spec v2) распознаётся везде
+
+### Зависшие прогоны OSD / обновления больше не блокируют UI
+Раннер — detached-процесс; если контейнер хаба перезапускался, процесс погибал, не записав `rc`, и прогон оставался «выполняется» навсегда, блокируя новые запуски («Обновить дашборды не даёт»).
+
+- **Реанимация при опросе статуса**: pid-файл мёртв → прогон помечается остановленным (rc=143, пометка `[hub]` в логе); pid-файла нет, а прогону больше 3 минут → запуск не состоялся, то же;
+- **Докончивающая отмена**: кнопка **«Остановить»** (active + история прогонов) убивает группу процессов (TERM → KILL) и гарантированно пишет rc=143 + «Прогон остановлен пользователем» — раньше после отмены rc не записывался и прогон продолжал блокировать;
+- Работает для OSD-прогонов (apply/import/remove) и локального режима; в SSH-режиме — та же логика на хосте (`kill -0`, запись rc на хосте);
+- Новый смоук-тест `scripts/test-osd-stale-run.ts` (сценарии S1–S4, 15 проверок).
+
+### compose.yml / compose.yaml (Compose Spec v2) распознаётся везде
+stamusctl в новых шаблонах создаёт `config/compose.yml`, а проверки знали только `docker-compose.yaml|yml` — отсюда ложное «Конфигурация инстанса повреждена» при штатной конфигурации.
+
+- Хаб-зонд и `clearndr-update.sh` (`compose_file_name`, восстановление/откат), `clearndr-repair-stack.sh`: принимаются все 4 имени — `docker-compose.yaml`, `docker-compose.yml`, `compose.yaml`, `compose.yml`;
+- Тесты: update-mock 75, repair-mock 93, osd-mock 53, stale-run 15 — все PASS.
+EOF
+
 ok=0; fail=0
 for spec in \
   "v1.10.0|v1.10.0 — Обновление Clear NDR из UI (скрипт обновления + вкладка хаба)" \
@@ -119,6 +161,9 @@ for spec in \
   "v1.12.0|v1.12.0 — Восстановлен repair-скрипт; лестница восстановления пустого Dashboards" \
   "v1.13.0|v1.13.0 — Реконструкция compose из контейнеров; фикс пустого OSD 3.x (Workspaces)" \
   "v1.13.1|v1.13.1 — Фикс сборки образа хаба (.dockerignore)" \
+  "v1.14.0|v1.14.0 — Раздел «Дашборды OpenSearch»: аналитика + pack-дашборды" \
+  "v1.14.1|v1.14.1 — Дашборды OpenSearch: автоопределение канала OpenSearch, рабочий local-режим" \
+  "v1.14.2|v1.14.2 — Реанимация зависших прогонов и отмена; compose.yml (Compose Spec v2)" \
 ; do
   tag="${spec%%|*}"; name="${spec#*|}"
   echo "== $tag"

@@ -14,7 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { spawn, SpawnOptions } from 'child_process'
 import path from 'path'
-import { promises as fs } from 'fs'
+import { promises as fs, readFileSync } from 'fs'
 import { DATA_DIR } from './fetcher'
 import { execOnHost, sudoPrefix, type UpdateSettings } from './clearndr-update'
 
@@ -372,6 +372,30 @@ function pidAliveLocal(pid: number): boolean {
   }
 }
 
+/**
+ * Жив ли процесс и принадлежит ли он этому прогону: сравниваем возраст
+ * процесса (/proc/<pid>/stat, поле 22 «starttime» относительно /proc/uptime)
+ * с возрастом прогона. После пересоздания контейнера хаба номер pid может
+ * достаться чужому процессу — без этой проверки зависший прогон считался бы
+ * «живым» бесконечно, а «Остановить» убивало бы посторонний процесс.
+ */
+function pidAliveForAge(pid: number, runAgeMs: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const uptime = parseFloat(readFileSync('/proc/uptime', 'utf8').trim().split(/\s+/)[0] || '0')
+    // comm может содержать пробелы — режем по закрывающей скобке; поле 22
+    // (starttime, 1-based) в остатке после «pid (comm)» имеет индекс 19
+    const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+    const startTicks = parseFloat(rest[19] || '0')
+    const aliveForS = uptime - startTicks / 100 // CLK_TCK (USER_HZ) = 100
+    const ageS = runAgeMs / 1000
+    if (!(aliveForS >= 0) || !(ageS >= 0)) return true // не разобрали — прежнее поведение
+    return Math.abs(aliveForS - ageS) <= 120
+  } catch {
+    return true // нет /proc (не Linux) или нет прав — прежнее поведение
+  }
+}
+
 async function osdRcExists(runId: string): Promise<boolean> {
   try { await fs.access(path.join(OSD_RUNS_DIR, runId, 'rc')); return true } catch { return false }
 }
@@ -524,12 +548,16 @@ export async function readOsdRunStatus(cfg: UpdateSettings, runId: string, tailB
     let log = ''
     try { log = await readTailFile(path.join(OSD_RUNS_DIR, runId, 'log.txt'), tailBytes) } catch { /* нет лога */ }
     let active = rc === null
-    // реанимация зависшего прогона: rc нет, но процесса уже нет
+    // реанимация зависшего прогона: rc нет, но процесса уже нет (или pid
+    // переиспользован чужим процессом после пересоздания контейнера хаба)
     if (active) {
       const pid = await osdPid(runId)
       const startedMs = Date.parse(meta.startedAt || '') || 0
-      if (pid > 0 && !pidAliveLocal(pid)) {
-        const reason = `процесс прогона не найден (pid ${pid} завершился без записи кода — контейнер хаба перезапускался?) — прогон помечен остановленным`
+      const ageMs = startedMs > 0 ? Date.now() - startedMs : -1
+      if (pid > 0 && (!pidAliveLocal(pid) || (ageMs >= 0 && !pidAliveForAge(pid, ageMs)))) {
+        const reason = !pidAliveLocal(pid)
+          ? `процесс прогона не найден (pid ${pid} завершился без записи кода — контейнер хаба перезапускался?) — прогон помечен остановленным`
+          : `pid ${pid} принадлежит другому процессу (контейнер хаба пересоздавался, номер переиспользован) — прогон помечен остановленным`
         await finalizeInterruptedLocal(runId, reason, !!meta.cancelled)
         rc = '143'
         active = false
@@ -614,7 +642,11 @@ export async function cancelOsdRun(cfg: UpdateSettings, runId: string): Promise<
     // маркер отмены: exit-обработчик запишет код 143 и флаг cancelled
     await fs.writeFile(path.join(OSD_RUNS_DIR, runId, 'cancelled'), '1').catch(() => undefined)
     const pid = await osdPid(runId)
-    if (pid > 0) {
+    const startedMs = Date.parse(meta.startedAt || '') || 0
+    const ageMs = startedMs > 0 ? Date.now() - startedMs : -1
+    // kill только если pid действительно принадлежит прогону: после
+    // пересоздания контейнера номер мог достаться чужому процессу
+    if (pid > 0 && pidAliveLocal(pid) && (ageMs < 0 || pidAliveForAge(pid, ageMs))) {
       try { process.kill(-pid, 'SIGTERM') } catch { /* группа уже не существует */ }
       try { process.kill(pid, 'SIGTERM') } catch { /* уже мёртв */ }
       for (let i = 0; i < 8; i++) {
@@ -626,6 +658,8 @@ export async function cancelOsdRun(cfg: UpdateSettings, runId: string): Promise<
         try { process.kill(pid, 'SIGKILL') } catch { /* уже мёртв */ }
         await new Promise((r) => setTimeout(r, 500))
       }
+    } else if (pid > 0 && pidAliveLocal(pid)) {
+      await fs.appendFile(path.join(OSD_RUNS_DIR, runId, 'log.txt'), '\n[hub] pid принадлежит другому процессу (переиспользован после пересоздания контейнера) — остановка без kill.\n').catch(() => undefined)
     }
     // если скрипт не успел записать rc — дописываем сами и финализируем
     if (!(await osdRcExists(runId))) {

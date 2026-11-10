@@ -6,7 +6,10 @@
  *  S1  зависший прогон (pid мёртв, rc отсутствует) → rc=143, meta завершена;
  *  S2  прогон без pid-файла старше 3 минут → rc=143;
  *  S3  живой процесс + cancelOsdRun → процесс убит, rc=143, cancelled=true;
- *  S4  живой прогон (спит 5 c, стартовал только что) → статус active.
+ *  S4  живой прогон (спит 5 c, стартовал только что) → статус active;
+ *  S5  pid переиспользован (процесс моложе прогона на часы) → rc=143,
+ *      чужой процесс НЕ убивается;
+ *  S6  cancelOsdRun при переиспользованном pid → ok, без kill, rc=143.
  * Запуск: bun scripts/test-osd-stale-run.ts
  */
 import { promises as fs } from 'fs'
@@ -75,7 +78,7 @@ console.log('S3: cancelOsdRun убивает живой процесс и фин
 {
   const runId = 'osd-import-20261110220002'
   const live = await alivePid()
-  await mkRun(runId, { livePid: live })
+  await mkRun(runId, { livePid: live, startedAtMs: Date.now() })
   let alive = true
   try { process.kill(live, 0); alive = true } catch { alive = false }
   check('процесс жив перед отменой', alive)
@@ -99,6 +102,39 @@ console.log('S4: живой прогон со свежим стартом ост
   await mkRun(runId, { livePid: live, startedAtMs: Date.now() - 5_000 })
   const st = await readOsdRunStatus(cfg as never, runId)
   check('статус активный', st.active === true)
+  try { process.kill(live, 'SIGKILL') } catch { /* уже мёртв */ }
+}
+console.log('S5: pid переиспользован (процесс моложе прогона) → прогон реанимируется, чужой процесс жив')
+{
+  const runId = 'osd-import-20261110220004'
+  const live = await alivePid()
+  // прогон «стартовал» 13 часов назад, а процесс только что создан —
+  // номер pid достался чужому процессу после пересоздания контейнера
+  await mkRun(runId, { livePid: live, startedAtMs: Date.now() - 13 * 60 * 60 * 1000 })
+  const st = await readOsdRunStatus(cfg as never, runId)
+  check('статус не активный', !st.active)
+  check('код выхода 143', st.exitCode === 143)
+  check('лог: pid принадлежит другому процессу', st.log.includes('переиспользован'))
+  let stillAlive = false
+  try { process.kill(live, 0); stillAlive = true } catch { stillAlive = false }
+  check('чужой процесс не убит опросом статуса', stillAlive)
+  try { process.kill(live, 'SIGKILL') } catch { /* уже мёртв */ }
+}
+console.log('S6: cancelOsdRun при переиспользованном pid — без kill, прогон финализирован')
+{
+  const runId = 'osd-import-20261110220005'
+  const live = await alivePid()
+  await mkRun(runId, { livePid: live, startedAtMs: Date.now() - 13 * 60 * 60 * 1000 })
+  const r = await cancelOsdRun(cfg as never, runId)
+  check('cancel вернул ok', r.ok === true, r.error)
+  let stillAlive = false
+  try { process.kill(live, 0); stillAlive = true } catch { stillAlive = false }
+  check('чужой процесс НЕ убит отменой', stillAlive)
+  const st = await readOsdRunStatus(cfg as never, runId)
+  check('статус не активный', !st.active)
+  check('флаг cancelled', st.cancelled === true)
+  const meta = JSON.parse(await fs.readFile(path.join(OSD_RUNS_DIR, runId, 'meta.json'), 'utf8'))
+  check('meta: cancelled=true', meta.cancelled === true)
   try { process.kill(live, 'SIGKILL') } catch { /* уже мёртв */ }
 }
 
