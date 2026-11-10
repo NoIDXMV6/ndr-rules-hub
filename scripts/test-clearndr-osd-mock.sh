@@ -58,21 +58,44 @@ class H(BaseHTTPRequestHandler):
             return self._send(None, text="opensearch-alerting\nopensearch-anomaly-detection\nopensearch-security-analytics\n")
         if p.startswith("/_cat/indices/logstash-"):
             return self._send(None, text="logstash-2026.11.10 295000\n")
-        if p.startswith("/logstash-*/_field_caps"):
-            fields = {}
-            raw = u.query.split("fields=")[-1].split("&")[0]
-            for name in re.split(r"%2C|,", raw):
-                if name in ("src_ip","dest_ip","dest_port","proto","event_type","app_proto",
-                            "alert.severity","alert.signature_id","alert.signature","alert.category",
-                            "flow.bytes_toserver","flow.bytes_toclient","flow.packets_toserver",
-                            "dns.rrname","dns.type","dns.rcode","http.hostname","http.url",
-                            "http.http_method","http.status","http.http_user_agent",
-                            "tls.client.server_name","tls.ja3.hash","fileinfo.filename",
-                            "fileinfo.size","fileinfo.magic","timestamp","@timestamp"):
-                    fields[name] = {"long" if name.endswith(("_port","severity")) else "keyword": {}}
-                if name in ("timestamp","@timestamp"):
-                    fields[name] = {"date": {}}
-            return self._send({"fields": fields})
+        if p == "/_cat/indices":
+            # JSON-формат (h=index,docs.count) — для автоопределения источника данных
+            return self._send([
+                {"index": "logstash-2026.11.10", "docs.count": "210000"},
+                {"index": "logstash-2026.11.09", "docs.count": "85000"},
+                {"index": "security-auditlog-2026.11.10", "docs.count": "1234"},
+            ])
+        if p.endswith("/_search") and "q=_exists_" in self.path:
+            # проба «есть ли тут EVE-события»: только logstash-* содержит event_type
+            idx = p.rsplit("/_search", 1)[0].strip("/")
+            v = 210000 if idx.startswith("logstash") else 0
+            return self._send({"hits": {"total": {"value": v, "relation": "eq"}, "hits": []}})
+        if p.endswith("/_count"):
+            v = 295000 if "logstash" in p else 0
+            return self._send({"count": v})
+        if p.endswith("/_field_caps"):
+            raw = unquote(u.query).split("fields=")[-1].split("&")[0]
+            T = {}
+            def add(n, t, agg=True):
+                T.setdefault(n, {})[t] = {"searchable": True, "aggregatable": agg}
+            add("src_ip", "ip"); add("dest_ip", "ip")
+            for n in ("src_port", "dest_port", "alert.severity", "fileinfo.size",
+                      "flow.bytes_toserver", "flow.bytes_toclient", "flow.packets_toserver"):
+                add(n, "long")
+            for n in ("event_type", "dns.type", "dns.rcode", "http.http_method",
+                      "http.http_user_agent", "alert.signature_id", "alert.category",
+                      "tls.client.server_name", "tls.ja3.hash", "fileinfo.filename"):
+                add(n, "keyword")
+            for n in ("proto", "app_proto", "dns.rrname", "alert.signature",
+                      "http.hostname", "http.url", "fileinfo.magic"):
+                add(n, "text", agg=False)        # динамический маппинг: text без agg
+                add(n + ".keyword", "keyword")   # …и keyword-подполе
+            for n in ("timestamp", "@timestamp"):
+                add(n, "date")
+            sel = [s for s in raw.split(",") if s]
+            if "*" in sel:
+                return self._send({"fields": T})
+            return self._send({"fields": {k: v for k, v in T.items() if k in sel}})
         if p.startswith("/_plugins/_alerting/monitors"):
             return self._send({"hits": {"hits": [{"_id": m["id"], "_source": {"name": m["name"]}} for m in ST["monitors"]]}})
         if p.startswith("/_plugins/_anomaly_detection/detectors"):
@@ -85,6 +108,10 @@ class H(BaseHTTPRequestHandler):
             if "q=_id:ndr-pack" in self.path:
                 hits = [{"_id": k} for k in ST["kibana"] if "ndr-pack-" in k]
                 return self._send({"hits": {"total": {"value": len(hits), "relation": "eq"}, "hits": hits}})
+            if "type:index-pattern" in self.path:
+                hits = [{"_id": k, "_source": v} for k, v in ST["kibana"].items()
+                        if k.startswith("index-pattern:")]
+                return self._send({"hits": {"total": {"value": len(hits), "relation": "eq"}, "hits": hits}})
             return self._send({"hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}})
         if p.startswith("/.kibana/_doc/"):
             doc = ST["kibana"].get(p.rsplit("/", 1)[-1])
@@ -96,7 +123,44 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path); p = unquote(u.path)
         body = self._read_body()
-        log("POST " + self.path + " BODY=" + body[:2000])
+        full = p.startswith("/.kibana/")   # для kibana-маршрутов пишем тело целиком (проверки)
+        log("POST " + self.path + (" BODY=" + body if full else " BODY=" + body[:2000]))
+        if p == "/__ctl/seed_pattern":
+            # сценарий «на хосте уже есть урезанный index-pattern от SELKS»
+            for k in [k for k in ST["kibana"] if k.startswith("index-pattern:")]:
+                ST["kibana"].pop(k, None)
+            ST["kibana"]["index-pattern:06e1e3c0-c1c7-11e8-9888-3f5bc9c31629"] = {
+                "type": "index-pattern",
+                "index-pattern": {
+                    "title": "logstash-*", "timeFieldName": "timestamp",
+                    "fields": json.dumps([
+                        {"name": "proto", "type": "string", "esTypes": ["text"],
+                         "count": 1, "scripted": False, "searchable": True,
+                         "aggregatable": False, "readFromDocValues": False},
+                        {"name": "src_ip", "type": "ip", "esTypes": ["ip"],
+                         "count": 1, "scripted": False, "searchable": True,
+                         "aggregatable": True, "readFromDocValues": True},
+                    ]),
+                },
+                "migrationVersion": {"index-pattern": "7.9.3"},
+            }
+            return self._send({"ok": True})
+        if p.startswith("/.kibana/_update/"):
+            _id = p.rsplit("/", 1)[-1]
+            cur = ST["kibana"].get(_id, {})
+            upd = json.loads(body).get("doc", {})
+            log("KIBANA_UPDATE " + _id + " " + json.dumps(upd, ensure_ascii=False))
+            for k, v in upd.items():
+                if isinstance(v, dict) and isinstance(cur.get(k), dict):
+                    cur[k].update(v)
+                else:
+                    cur[k] = v
+            ST["kibana"][_id] = cur
+            return self._send({"_id": _id, "result": "updated"})
+        if p.endswith("/_search") and '"aggs"' in body:
+            # max-агрегация по полю времени (последнее событие): 2026-11-10 08:00 UTC
+            return self._send({"took": 1, "hits": {"hits": []},
+                               "aggregations": {"m": {"value": 1794297600000.0}}})
         if p.startswith("/_plugins/_alerting/monitors"):
             _id = "mon-%d" % (len(ST["monitors"]) + 1)
             ST["monitors"].append({"id": _id, "name": json.loads(body).get("name", "?")})
@@ -273,6 +337,27 @@ printf '%s' "$bulkall" | grep -q '"dashboard": {'; check "B2: атрибуты �
 printf '%s' "$bulkall" | grep -q '"attributes"'; check "B2: envelope-поля attributes нет" $([ $? -ne 0 ]; echo $?)
 printf '%s' "$out" | grepq 'в .kibana: [1-9]'; check "B2: объекты видны в проверке после refresh=wait_for" $?
 requests | grep 'POST /.kibana/_doc/index-pattern' | grep -q 'logstash-\*'; check "B2: title index-pattern записан" $?
+printf '%s' "$bulkall" | grep -q 'proto.keyword'; check "B2: proto заменён на proto.keyword (Terms-агрегации)" $?
+
+# B7: созданный index-pattern получает ПОЛНЫЙ список полей из кластера
+req_create="$(requests | grep 'POST /.kibana/_doc/index-pattern' | grep ' BODY=' | tail -1)"
+body_create="${req_create#*BODY=}"
+python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+ipa = d["index-pattern"]
+names = {e["name"] for e in json.loads(ipa["fields"])}
+assert ipa["title"] == "logstash-*", ipa["title"]
+assert ipa["timeFieldName"] == "timestamp", ipa.get("timeFieldName")
+for need in ("dns.rrname", "dns.rrname.keyword", "http.url", "alert.severity",
+             "proto", "proto.keyword", "app_proto.keyword", "tls.client.server_name",
+             "fileinfo.filename", "flow.bytes_toserver", "src_ip", "timestamp"):
+    assert need in names, "нет поля %s" % need
+assert len(names) >= 25, len(names)
+print("ok")
+' "$body_create" >/dev/null; check "B7: index-pattern создан с полным списком полей из _field_caps" $?
+printf '%s' "$out" | grepq 'полей в index-pattern: [2-9]'; check "B7: счётчик полей показан" $?
+printf '%s' "$out" | grepq 'EVE-данные: logstash-\*'; check "B7: источник данных определён" $?
 
 out="$(run_import --pack alerts --pack dns --yes 2>&1)"; rc=$?
 check "B3: два пакета rc=$rc" $([ $rc -eq 0 ]; echo $?)
@@ -292,6 +377,37 @@ out="$(run_import --remove all --yes 2>&1)"; rc=$?
 check "B6: remove all rc=$rc" $([ $rc -eq 0 ]; echo $?)
 grepq 'удалён' "$out"; check "B6: объекты удаляются" $?
 requests | grep -q 'DELETE /.kibana/_doc/dashboard:ndr-pack-traffic'; check "B6: DELETE дашборда traffic" $?
+
+# B8: найденный урезанный паттерн (как у SELKS) дополняется полями, не пересоздаётся
+curl -s -X POST "$MOCK_URL/__ctl/seed_pattern" >/dev/null
+out="$(run_import --pack http --yes 2>&1)"; rc=$?
+check "B8: import http (seeded pattern) rc=$rc" $([ $rc -eq 0 ]; echo $?)
+grepq 'index-pattern найден: 06e1e3c0' "$out"; check "B8: найден урезанный паттерн SELKS" $?
+grepq 'поля index-pattern дополнены' "$out"; check "B8: поля дополнены из кластера" $?
+upd="$(requests | grep 'KIBANA_UPDATE index-pattern:06e1e3c0' | tail -1)"
+printf '%s' "$upd" | grep -q 'dns.rrname'; check "B8: в _update ушёл полный список полей" $?
+bulkall="$(sed -n '/BULK_RAW_START/,/BULK_RAW_END/p' "$T/requests.log")"
+printf '%s' "$bulkall" | grep -q '06e1e3c0-c1c7-11e8-9888-3f5bc9c31629'; check "B8: панели ссылаются на найденный паттерн" $?
+doc="$(curl -s "$MOCK_URL/.kibana/_doc/index-pattern:06e1e3c0-c1c7-11e8-9888-3f5bc9c31629")"
+python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+ipa = d["_source"]["index-pattern"]
+names = {e["name"] for e in json.loads(ipa["fields"])}
+assert "http.url" in names, "http.url не дописан"
+assert ipa["timeFieldName"] == "timestamp", ipa["timeFieldName"]
+assert ipa["title"] == "logstash-*", ipa["title"]
+print("ok")
+' "$doc" >/dev/null; check "B8: паттерн дополнен, титул/timeFieldName сохранены" $?
+
+# B9: --check — диагностика данных без изменений в кластере
+out="$(run_import --check 2>&1)"; rc=$?
+check "B9: --check rc=$rc" $([ $rc -eq 0 ]; echo $?)
+grepq 'Источник данных' "$out"; check "B9: секция источника" $?
+grepq 'EVE-данные: logstash-\*' "$out"; check "B9: цель данных показана" $?
+grepq 'последнее событие' "$out"; check "B9: время последнего события" $?
+grepq 'полей в паттерне' "$out"; check "B9: список index-pattern'ов" $?
+grepq 'proto.keyword' "$out"; check "B9: keyword-подполя показаны" $?
 
 printf '%s\n' "== Часть C: автоопределение канала OpenSearch"
 

@@ -10,9 +10,15 @@
 # управляемые объекты, не трогая штатные дашборды SELKS.
 #
 # Поля в пакетах записаны плейсхолдерами (__F:key__, __TS__, __IP__):
-# перед записью скрипт определяет фактические имена полей по _field_caps
-# (EVE raw или ECS-маппинг), находит/создаёт index-pattern logstash-* и
-# вырезает визуализации по отсутствующим в кластере полям (с WARN).
+# перед записью скрипт находит индекс(ы), где реально лежат EVE-события
+# (поле event_type / event.type, по _cat/indices), определяет фактические
+# имена полей по _field_caps (EVE raw или ECS-маппинг); для текстовых полей
+# берётся keyword-подполе, иначе Terms-агрегации OSD падают («Saved field
+# "proto" is invalid for use with the "Terms" aggregation»). Index-pattern
+# (титул = найденному выражению) дополняется ПОЛНЫМ списком полей из
+# кластера — без этого OSD показывает «Could not locate that
+# index-pattern-field» на dns.*/http.*/alert.*. Визуализации по отсутствующим
+# в кластере полям вырезаются (с WARN).
 #
 # Объекты пишутся в .kibana сырым форматом SavedObjects (type, <type>:
 # attributes, references, migrationVersion — версия миграций берётся с
@@ -21,6 +27,7 @@
 # требование bulk API — и refresh=wait_for для немедленной видимости.
 #
 # Использование:
+#   clearndr-osd-dashboard-import.sh --check
 #   clearndr-osd-dashboard-import.sh --list
 #   clearndr-osd-dashboard-import.sh --pack traffic --pack alerts [--yes] [--dry-run]
 #   clearndr-osd-dashboard-import.sh --pack all [--yes]
@@ -28,7 +35,9 @@
 # Опции: --es-url URL (иначе автоопределение: https/http на 127.0.0.1,
 # 172.17.0.1, host.docker.internal, затем docker exec), --seed SEED,
 # --instance-dir DIR, --no-color.
-# Коды выхода: 0 — успех, 1 — ошибка среды, 2 — не найден пакет.
+# Режим --check: показать, куда поступают EVE-данные, какие поля видны,
+# какие index-pattern'ы есть в .kibana — диагностика пустых дашбордов.
+# Коды выхода: 0 — успех, 1 — ошибка среды / данных нет, 2 — не найден пакет.
 # ─────────────────────────────────────────────────────────────────────────────
 set -u
 SELF="$(basename "$0")"
@@ -59,7 +68,8 @@ while [ $# -gt 0 ]; do
     --yes) YES=1;;
     --dry-run) DRY=1;;
     --no-color) :;;
-    -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    --check) MODE="check";;
+    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) err "Неизвестный аргумент: $1"; exit 1;;
   esac
   shift
@@ -69,6 +79,11 @@ TS="$(date +%Y%m%d-%H%M%S)"
 PROG_FILE="/tmp/ndr-osd-import.progress"
 BACKUP_ROOT="$INSTANCE_DIR/backups/osd-import-$TS"
 BACKUP_DIR=""
+# источник данных и выбранный index-pattern (заполняются по ходу)
+DATA_TARGET="logstash-*"   # индексное выражение, где реально лежат EVE-события
+DATA_DOCS=""               # документов с event_type под DATA_TARGET
+IP_ID=""                   # id выбранного index-pattern
+IP_TS=""                   # timeFieldName выбранного index-pattern
 
 # ── доступ к ES (как в clearndr-osd-analytics-setup.sh): --es-url → https/http
 #    на 127.0.0.1, 172.17.0.1, host.docker.internal → docker exec ──────────────
@@ -174,6 +189,106 @@ backup_obj() { # $1=file-slug $2=json
   [ -n "$BACKUP_DIR" ] && printf '%s' "$2" > "$BACKUP_DIR/$1.json" 2>/dev/null || true
 }
 
+# ── источник данных: где реально лежат EVE-события ─────────────────────────
+# «No results found» / Count 0 почти всегда значит, что index-pattern смотрит
+# не на тот индекс или EVE вообще не поступает; поэтому перед импортом ищем
+# индексы с документами, у которых есть поле event_type (event.type — ECS).
+discover_data_target() {
+  step "Источник данных"
+  local cat_file="$PROG_FILE.catidx" cands idx cnt hits="" n=0
+  es GET '/_cat/indices?format=json&h=index,docs.count&s=docs.count:desc' > "$cat_file" 2>/dev/null || true
+  cands="$(python3 - "$cat_file" <<'PYCAT'
+import json, sys
+try:
+    rows = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    rows = []
+out = []
+if isinstance(rows, list):
+    for r in rows:
+        n = str(r.get("index", "") or "")
+        try: c = int(r.get("docs.count") or 0)
+        except Exception: c = 0
+        if n and not n.startswith(".") and c > 0:
+            out.append((c, n))
+out.sort(reverse=True)
+for _, n in out[:20]:
+    print(n)
+PYCAT
+)"
+  if [ -z "$cands" ]; then
+    warn "список индексов недоступен — использую logstash-* без проверки"
+    DATA_TARGET="logstash-*"; DATA_DOCS=""
+    return 0
+  fi
+  while IFS= read -r idx; do
+    [ -n "$idx" ] || continue
+    cnt="$(es GET "/${idx}/_search?q=_exists_:event_type&size=0" | es_jq_get "str((d.get('hits') or {}).get('total',{}).get('value',0))")"
+    case "$cnt" in ''|0)
+      cnt="$(es GET "/${idx}/_search?q=_exists_:event.type&size=0" | es_jq_get "str((d.get('hits') or {}).get('total',{}).get('value',0))")"
+    ;; esac
+    case "$cnt" in ''|0) continue;; esac
+    hits+="${cnt} ${idx}"$'\n'
+    n=$((n+1))
+  done <<< "$cands"
+  if [ "$n" -eq 0 ]; then
+    warn "EVE-события (event_type/event.type) не найдены ни в одном индексе — Suricata EVE не поступает в OpenSearch"
+    warn "использую logstash-*: пока данные не появятся, дашборды будут пустыми"
+    DATA_TARGET="logstash-*"; DATA_DOCS=0
+    return 0
+  fi
+  local expr
+  expr="$(printf '%s' "$hits" | python3 -c '
+import sys, re
+agg, order = {}, []
+for line in sys.stdin:
+    p = line.split()
+    if len(p) != 2: continue
+    cnt, idx = int(p[0]), p[1]
+    pref = re.sub(r"\d[\d._-]*$", "*", idx)   # logstash-2026.11.10 → logstash-*
+    if pref not in agg:
+        agg[pref] = [0, 0]; order.append(pref)
+    agg[pref][0] += cnt; agg[pref][1] += 1
+items = sorted(order, key=lambda p: -agg[p][0])[:8]
+for p in items:
+    sys.stderr.write("%s\t%d\t%d\n" % (p, agg[p][0], agg[p][1]))
+print(",".join(items))
+' 2> "$PROG_FILE.dsrc")"
+  [ -n "$expr" ] || expr="logstash-*"
+  DATA_TARGET="$expr"
+  DATA_DOCS="$(printf '%s' "$hits" | awk '{s+=$1} END{print s+0}')"
+  ok "EVE-данные: $DATA_TARGET (документов с event_type: $DATA_DOCS)"
+  python3 -c "
+import sys
+for line in open('$PROG_FILE.dsrc', encoding='utf-8'):
+    p = line.rstrip('\n').split('\t')
+    if len(p) == 3: print('  %s — %s док. (%s инд.)' % (p[0], p[1], p[2]))
+" 2>/dev/null || true
+}
+
+verify_data() { # $1 = поле времени — увидят ли дашборды данные под паттерном
+  local docs resp ts_ms human age_h
+  docs="$(es GET "/$DATA_TARGET/_count" | es_jq_get "str(d.get('count',''))")"
+  msg "документов в $DATA_TARGET: ${docs:-?}"
+  if [ -z "$docs" ] || [ "$docs" = "0" ]; then
+    warn "документов нет — дашборды будут пустыми; проверьте поставку EVE (eve.json → Logstash/Filebeat → OpenSearch) и имя индекса"
+    return 0
+  fi
+  [ -n "${1:-}" ] || return 0
+  resp="$(es POST "/$DATA_TARGET/_search" '{"size":0,"track_total_hits":false,"aggs":{"m":{"max":{"field":"'"$1"'"}}}}')"
+  ts_ms="$(printf '%s' "$resp" | es_jq_get "str((d.get('aggregations') or {}).get('m',{}).get('value',''))")"
+  case "$ts_ms" in ''|None|0|0.0) return 0;; esac
+  human="$(python3 -c "
+import datetime
+print(datetime.datetime.utcfromtimestamp($ts_ms/1000).strftime('%Y-%m-%d %H:%M UTC'))" 2>/dev/null)"
+  age_h=$(( ($(date +%s) - ${ts_ms%.*}/1000) / 3600 ))
+  msg "последнее событие: ${human:-?} (${age_h} ч назад)"
+  if [ "$age_h" -ge 48 ]; then
+    warn "данные старше 48 ч — выберите в OSD более широкий диапазон времени, иначе панели покажут «No results found»"
+  fi
+  return 0
+}
+
 sample_migration_versions() { # {"dashboard":"7.9.3",...} — версии миграций
   # существующих объектов .kibana (сырой формат требует migrationVersion,
   # иначе OSD при чтении прогонит объект через цепочку миграций)
@@ -219,10 +334,13 @@ file_name fileinfo.filename|file.name
 file_magic fileinfo.magic|file.magic
 '
 FIELD_CAPS_FIELDS="$(printf '%s\n' "$FIELD_CANDIDATES" | sed -n 's/^[a-z_0-9]* //p' | tr '\n' ',' | sed 's/|/,/g; s/,$//')"
+# +keyword-подполя: _field_caps возвращает только запрошенные имена, а без
+# запроса proto.keyword не проверить, есть ли он в кластере (нужен для Terms)
+FIELD_CAPS_FIELDS="${FIELD_CAPS_FIELDS},$(printf '%s' "$FIELD_CAPS_FIELDS" | tr ',' '\n' | sed '/^$/d; s/$/.keyword/' | paste -sd, -)"
 detect_fields() { # «KEY<TAB>поле<TAB>тип»
   local caps_file="$PROG_FILE.fieldcaps" cands_file="$PROG_FILE.cands"
   printf '%s' "$FIELD_CANDIDATES" > "$cands_file"
-  es GET "/logstash-*/_field_caps?fields=${FIELD_CAPS_FIELDS}&ignore_unavailable=true&allow_no_indices=true" > "$caps_file" 2>/dev/null || true
+  es GET "/$DATA_TARGET/_field_caps?fields=${FIELD_CAPS_FIELDS}&ignore_unavailable=true&allow_no_indices=true" > "$caps_file" 2>/dev/null || true
   python3 - "$cands_file" "$caps_file" <<'PYFC'
 import json, sys
 cands = {}
@@ -240,61 +358,150 @@ have = {n: ",".join(sorted(s.keys())) for n, s in fc.items()}
 for key, fields in cands.items():
     for f in fields:
         if f in have:
-            print("%s\t%s\t%s" % (key, f, have[f]))
+            types = have[f]
+            # текстовое поле непригодно для Terms-агрегаций OSD — берём
+            # keyword-подполе (динамический маппинг создаёт его автоматически)
+            if "text" in types and "keyword" not in types and (f + ".keyword") in have:
+                f = f + ".keyword"
+            print("%s\t%s\t%s" % (key, f, types))
             break
 PYFC
 }
 
-# ── index-pattern ────────────────────────────────────────────────────────────
-resolve_index_pattern() { # печатает id В STDOUT (остальные сообщения — в stderr)
-  local ts_field
-  local -i quiet=0
-  # все сообщения функции уходят в stderr, чтобы не загрязнять stdout-захват
-  ts_field="$(awk -F'\t' '$1=="ts"{print $2; exit}' "$1")"
+fetch_ip_fields() { # полный список полей кластера → $PROG_FILE.ipfields; печатает число полей
+  local f="$PROG_FILE.ipfields"
+  es GET "/$DATA_TARGET/_field_caps?fields=*&ignore_unavailable=true&allow_no_indices=true" > "$PROG_FILE.fcall" 2>/dev/null || true
+  python3 - "$PROG_FILE.fcall" "$f" <<'PYIPF'
+import json, sys
+NUM = {"long", "integer", "short", "byte", "double", "float", "half_float",
+       "scaled_float", "unsigned_long"}
+def osd_type(ts):
+    if len(ts) > 1:
+        return "conflict"
+    t = next(iter(ts))
+    if t in ("keyword", "text", "match_only_text", "constant_keyword", "wildcard"):
+        return "string"
+    if t in NUM:
+        return "number"
+    if t in ("date", "date_nanos"):
+        return "date"
+    if t == "boolean":
+        return "boolean"
+    if t == "ip":
+        return "ip"
+    if t in ("geo_point", "geo_shape"):
+        return "geo_point"
+    return None            # object и прочее — в паттерн не входит
+try:
+    fc = json.load(open(sys.argv[1], encoding="utf-8")).get("fields", {})
+except Exception:
+    fc = {}
+out = []
+for name, variants in fc.items():
+    if not name or name.startswith("_"):
+        continue
+    types, searchable, aggregatable = set(), False, False
+    for t, v in variants.items():
+        if t == "object":
+            continue
+        types.add(t)
+        searchable = searchable or bool(v.get("searchable"))
+        aggregatable = aggregatable or bool(v.get("aggregatable"))
+    tt = osd_type(types)
+    if tt is None:
+        continue
+    out.append({"name": name, "type": tt, "esTypes": sorted(types), "count": 1,
+                "scripted": False, "searchable": searchable,
+                "aggregatable": bool(aggregatable) if tt != "conflict" else False,
+                "readFromDocValues": bool(aggregatable and tt in ("string", "number", "date", "boolean", "ip"))})
+out.sort(key=lambda e: e["name"])
+open(sys.argv[2], "w", encoding="utf-8").write(json.dumps(out, ensure_ascii=False))
+print(len(out))
+PYIPF
+}
+
+# ── index-pattern: найти/создать + полный список полей ────────────────────
+# Найденный паттерн (например, от SELKS) может иметь урезанный список полей —
+# тогда OSD пишет «Could not locate that index-pattern-field» на dns.*/http.*/
+# alert.*, поэтому после нахождения список полей всегда досинхронизируется из
+# кластера (_update, только атрибут fields — остальное не трогаем).
+ensure_index_pattern() { # $1 = файл с JSON-массивом полей; задаёт IP_ID, IP_TS
+  local ts_field resp
+  ts_field="$(awk -F'\t' '$1=="ts"{print $2; exit}' "$PROG_FILE.fields")"
   ts_field="${ts_field:-timestamp}"
-  local hit
+  if [ "$DRY" -eq 1 ]; then
+    msg "  dry-run: index-pattern «$DATA_TARGET» (time=$ts_field) был бы найден/создан/обновлён полным списком полей" >&2
+    IP_ID="ndr-logstash-pattern"; IP_TS="$ts_field"
+    return 0
+  fi
+  local hit found ip="" ip_title="" ip_tf=""
   hit="$(es GET '/.kibana/_search?q=type:index-pattern&size=50')"
-  ip="$(printf '%s' "$hit" | python3 -c '
-import json,sys,re
-try: d=json.load(sys.stdin)
-except Exception: print(""); raise SystemExit
+  found="$(printf '%s' "$hit" | python3 -c '
+import json, sys
+want = sys.argv[1]
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+best = ""
 for h in ((d.get("hits") or {}).get("hits") or []):
-    s=h.get("_source") or {}
-    ip=s.get("index-pattern") or {}
-    t=str(ip.get("title",""))
-    if re.match(r"^logstash", t): print(h.get("_id","").split(":",1)[-1] or h.get("_id","")); break
-' 2>/dev/null)"
-  if [ -n "${ip:-}" ]; then
-    ok "index-pattern найден: $ip" >&2
-    printf '%s' "$ip"; return 0
+    s = h.get("_source") or {}
+    ipa = s.get("index-pattern") or {}
+    t = str(ipa.get("title", "") or "")
+    tf = str(ipa.get("timeFieldName", "") or "")
+    iid = h.get("_id", "").split(":", 1)[-1] or h.get("_id", "")
+    cand = iid + "\t" + t + "\t" + tf
+    if t == want:            # точное совпадение титула — лучший вариант
+        best = cand; break
+    if not best and t.startswith("logstash"):
+        best = cand          # прежнее поведение: любой logstash-*
+print(best)
+' "$DATA_TARGET" 2>/dev/null)"
+  ip="$(printf '%s' "$found" | cut -f1)"
+  ip_title="$(printf '%s' "$found" | cut -f2)"
+  ip_tf="$(printf '%s' "$found" | cut -f3)"
+  if [ -n "$ip" ]; then
+    IP_ID="$ip"
+    IP_TS="${ip_tf:-$ts_field}"
+    ok "index-pattern найден: $ip («${ip_title:-?}», time=$IP_TS)" >&2
+    resp="$(es POST "/.kibana/_update/index-pattern:$ip" "$(python3 -c '
+import json, sys
+print(json.dumps({"doc": {"index-pattern": {"fields": open(sys.argv[1], encoding="utf-8").read()}}}))
+' "$1")")"
+    if printf '%s' "$resp" | grep -q '"error"'; then
+      warn "не удалось дописать поля в index-pattern ($(printf '%s' "$resp" | head -c 160))"
+    else
+      ok "поля index-pattern дополнены из кластера ($(python3 -c "import json;print(len(json.load(open('$1'))))") полей)" >&2
+    fi
+    return 0
   fi
   ip="ndr-logstash-pattern"
-  if [ "$DRY" -eq 1 ]; then
-    msg "  dry-run: index-pattern «ndr-logstash-pattern» (logstash-*, time=$ts_field) был бы создан" >&2
-    printf '%s' "$ip"; return 0
-  fi
   resp="$(es POST "/.kibana/_doc/index-pattern:$ip" "$(python3 -c "
-import json,sys
-src={'type':'index-pattern','index-pattern':{'title':'logstash-*','timeFieldName':sys.argv[1]}}
+import json, sys
+src = {'type': 'index-pattern',
+       'index-pattern': {'title': sys.argv[1], 'timeFieldName': sys.argv[2],
+                          'fields': open(sys.argv[3], encoding='utf-8').read()}}
 try:
-    mv=(json.loads(sys.argv[2]) or {}).get('index-pattern')
+    mv = (json.loads(sys.argv[4]) or {}).get('index-pattern')
 except Exception:
-    mv=None
-if mv: src['migrationVersion']={'index-pattern': mv}
-print(json.dumps(src))" "$ts_field" "${MV_JSON:-}")")"
+    mv = None
+if mv: src['migrationVersion'] = {'index-pattern': mv}
+print(json.dumps(src))" "$DATA_TARGET" "$ts_field" "$1" "${MV_JSON:-}")")"
+  local id
   id="$(printf '%s' "$resp" | es_jq_get "str(d.get('_id','').split(':',1)[-1])")"
   if [ -n "$id" ]; then
-    ok "index-pattern создан: $id (logstash-*, time=$ts_field)" >&2
-    printf '%s' "$ip"; return 0
+    IP_ID="$ip"; IP_TS="$ts_field"
+    ok "index-pattern создан: $ip ($DATA_TARGET, time=$ts_field, полный список полей)" >&2
+    return 0
   fi
-  err "не удалось создать index-pattern"; return 1
+  err "не удалось создать index-pattern" >&2
+  return 1
 }
 
 # ── рендер пакета: подстановка полей, вырезание отсутствующих визов ──────────
-render_pack() { # $1=pack-file $2=index-pattern-id $3=fields-file $4=mv-json; NDJSON на stdout
-  python3 - "$1" "$2" "$3" "$4" <<'PYRENDER'
+render_pack() { # $1=pack-file $2=index-pattern-id $3=fields-file $4=mv-json $5=ts-field; NDJSON на stdout
+  python3 - "$1" "$2" "$3" "$4" "${5:-timestamp}" <<'PYRENDER'
 import json, sys, re
 pack_path, ip_id, fields_file = sys.argv[1], sys.argv[2], sys.argv[3]
+ts_field = sys.argv[5] or "timestamp"
 try:
     mv_map = json.loads(sys.argv[4]) if sys.argv[4] else {}
 except Exception:
@@ -309,7 +516,9 @@ pack = json.load(open(pack_path, encoding="utf-8"))
 def subst(s):
     s = s.replace("__IP__", ip_id)
     if s == "__TS__":
-        return fields.get("ts", "timestamp")
+        # поле времени — из найденного index-pattern, а не из кандидатов:
+        # диапазон времени панели обязан совпадать с timeFieldName паттерна
+        return ts_field
     return re.sub(r"__F:([a-z_0-9]+)__", lambda m: fields.get(m.group(1), m.group(0)), s)
 
 def vis_fields(obj):
@@ -416,23 +625,29 @@ expand_packs() {
 }
 
 do_import() {
-  step "Определение полей событий"
+  discover_data_target || return 1
+  step "Определение полей событий ($DATA_TARGET)"
   detect_fields > "$PROG_FILE.fields" || true
   local nf; nf="$(wc -l < "$PROG_FILE.fields" | tr -d ' ')"
-  [ "$nf" -gt 0 ] || { err "поля не определены — есть ли данные logstash-*?"; return 1; }
-  ok "определено полей: $nf"
+  [ "$nf" -gt 0 ] || { err "поля не определены — в $DATA_TARGET нет полей EVE/ECS (есть ли данные? см. --check)"; return 1; }
+  ok "определено полей-кандидатов: $nf"
   # версии миграций существующих объектов — для сырого формата .kibana
   MV_JSON="$(sample_migration_versions)"
 
+  step "Полный список полей index-pattern"
+  local nf_all; nf_all="$(fetch_ip_fields)"
+  case "$nf_all" in ''|0) err "не удалось получить список полей из $DATA_TARGET"; return 1;; esac
+  ok "полей в index-pattern: $nf_all"
+
   step "Index-pattern"
-  local ip; ip="$(resolve_index_pattern "$PROG_FILE.fields")" || return 1
+  ensure_index_pattern "$PROG_FILE.ipfields" || return 1
 
   local created=0 updated=0 failed=0 p
   for p in "${PACKS[@]}"; do
     local f="$PACKS_DIR/$p.json"
     [ -f "$f" ] || { err "файл пакета не найден: $f"; return 2; }
     step "Импорт пакета: $p"
-    render_pack "$f" "$ip" "$PROG_FILE.fields" "${MV_JSON:-}" > "$PROG_FILE.bulk"
+    render_pack "$f" "$IP_ID" "$PROG_FILE.fields" "${MV_JSON:-}" "$IP_TS" > "$PROG_FILE.bulk"
     local info; info="$(tail -1 "$PROG_FILE.bulk" 2>/dev/null)"
     # render_pack печатает метаданные в stderr — перечитаем их из stderr нельзя,
     # поэтому просто считаем строки NDJSON
@@ -481,9 +696,50 @@ print("ошибок:", n)
     local have_n
     have_n="$(es GET '/.kibana/_search?q=_id:ndr-pack-*&size=0' | es_jq_get "str(d['hits']['total']['value'])")"
     ok "объектов ndr-pack-* в .kibana: ${have_n:-0}"
+    verify_data "$IP_TS"
     msg "Откройте OpenSearch Dashboards → Dashboards — дашборды «NDR · …» появятся в списке."
+    msg "Панели пустые? Обновите страницу OSD (кэш полей паттерна) и проверьте диапазон времени."
   fi
   [ "$failed" -eq 0 ]
+}
+
+do_check() { # диагностика: данные, поля, index-pattern'ы — без изменений в кластере
+  discover_data_target
+  step "Определение полей событий ($DATA_TARGET)"
+  detect_fields > "$PROG_FILE.fields" || true
+  local nf; nf="$(wc -l < "$PROG_FILE.fields" | tr -d ' ')"
+  if [ "$nf" -gt 0 ]; then
+    ok "полей-кандидатов найдено: $nf"
+    awk -F'\t' '{printf "  %-12s → %s (%s)\n", $1, $2, $3}' "$PROG_FILE.fields"
+  else
+    err "поля EVE/ECS в $DATA_TARGET не найдены"
+  fi
+  step "Полный список полей index-pattern"
+  local nf_all; nf_all="$(fetch_ip_fields)"
+  ok "полей в кластере под $DATA_TARGET: ${nf_all:-0}"
+  step "Index-pattern'ы в .kibana"
+  es GET '/.kibana/_search?q=type:index-pattern&size=50' | python3 -c '
+import json, sys
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+rows = []
+for h in ((d.get("hits") or {}).get("hits") or []):
+    s = h.get("_source") or {}
+    ipa = s.get("index-pattern") or {}
+    try: nf = len(json.loads(ipa.get("fields") or "[]"))
+    except Exception: nf = 0
+    rows.append((h.get("_id", ""), str(ipa.get("title", "")), str(ipa.get("timeFieldName", "")), nf))
+if not rows:
+    print("  (нет)")
+for r in sorted(rows):
+    print("  %s — «%s», time=%s, полей в паттерне: %d" % r)
+' 2>/dev/null
+  step "Данные"
+  verify_data "$(awk -F'\t' '$1=="ts"{print $2; exit}' "$PROG_FILE.fields")"
+  if [ "${DATA_DOCS:-0}" != "0" ] && [ "$nf" -gt 0 ]; then
+    return 0
+  fi
+  return 1
 }
 
 do_remove() {
@@ -545,4 +801,7 @@ case "$MODE" in
     expand_packs || exit 2
     detect_es || exit 1
     do_import; exit $?;;
+  check)
+    detect_es || exit 1
+    do_check; exit $?;;
 esac
