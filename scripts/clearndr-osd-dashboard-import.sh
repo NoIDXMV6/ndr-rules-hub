@@ -9,6 +9,20 @@
 # идемпотентен (повторный запуск перезаписывает), а --remove удаляет только
 # управляемые объекты, не трогая штатные дашборды SELKS.
 #
+# ВАЖНО: поиск/подсчёт/удаление ndr-pack-* НЕ делаются запросом по маске _id
+# (q=_id:ndr-pack-*): в .kibana идентификаторы имеют вид «type:id»
+# (dashboard:ndr-pack-…), такой термин не начинается с «ndr-pack-», а
+# wildcard/prefix-запросы по _id в ES 6+/OpenSearch вообще не матчатся.
+# Объекты ищутся серверно по type (q=type:dashboard OR type:visualization),
+# маска ndr-pack- фильтруется на стороне скрипта, точные id берутся из
+# файлов пакетов (в «Проверке» — из списка реально записанного bulk'ом).
+#
+# Пустые пакеты: если в кластере нет ни одного события типа пакета
+# (traffic→flow, http→http, tls→tls, files→fileinfo, dns→dns, alerts→alert),
+# пакет НЕ импортируется (дашборд был бы пустым «нет источников»), а его
+# ранее записанные объекты вычищаются из .kibana. Какие event_type реально
+# есть в кластере, показывает и режим --check.
+#
 # Поля в пакетах записаны плейсхолдерами (__F:key__, __TS__, __IP__):
 # перед записью скрипт находит индекс(ы), где реально лежат EVE-события
 # (поле event_type / event.type, по _cat/indices), определяет фактические
@@ -199,6 +213,75 @@ detect_es() {
 backup_obj() { # $1=file-slug $2=json
   if [ -z "$BACKUP_DIR" ]; then mkdir -p "$BACKUP_ROOT" 2>/dev/null && BACKUP_DIR="$BACKUP_ROOT"; fi
   [ -n "$BACKUP_DIR" ] && printf '%s' "$2" > "$BACKUP_DIR/$1.json" 2>/dev/null || true
+}
+
+# ── типы событий пакета и кластера ─────────────────────────────────────
+# Пакет, чьих типов событий в кластере нет (например http при поставке EVE без
+# http-записей), дал бы пустой дашборд «нет источников». Поэтому пакет
+# пропускается с WARN, а его ранее записанные объекты вычищаются из .kibana.
+PACK_ET="traffic=flow http=http dns=dns tls=tls alerts=alert files=fileinfo"
+
+fetch_event_types() { # EVENT_TYPES="a|b|…»; строки «key<TAB>count» → $PROG_FILE.et
+  EVENT_TYPES=""
+  : > "$PROG_FILE.et"
+  local et_field
+  et_field="$(awk -F'\t' '$1=="event_type"{print $2; exit}' "$PROG_FILE.fields")"
+  [ -n "$et_field" ] || return 0
+  es POST "/$DATA_TARGET/_search" '{"size":0,"aggs":{"et":{"terms":{"field":"'"$et_field"'","size":100}}}}' \
+    > "$PROG_FILE.etjson" 2>/dev/null || true
+  EVENT_TYPES="$(python3 - "$PROG_FILE.etjson" "$PROG_FILE.et" <<'PYET'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    d = {}
+buckets = ((d.get("aggregations") or {}).get("et") or {}).get("buckets") or []
+keys = []
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    for b in buckets:
+        k = str(b.get("key", ""))
+        if k:
+            keys.append(k)
+            f.write("%s\t%s\n" % (k, b.get("doc_count", "?")))
+print("|".join(keys))
+PYET
+)"
+}
+
+delete_ndr_ids() { # $1=ids (по строке) — удалить с бэкапом; итог в DEL_N/DEL_FAILED
+  DEL_N=0; DEL_FAILED=0
+  local doc_id resp
+  while IFS= read -r doc_id; do
+    [ -n "$doc_id" ] || continue
+    backup_obj "$(printf '%s' "$doc_id" | tr -c 'A-Za-z0-9._-' '_')" "$(es GET "/.kibana/_doc/$doc_id")"
+    # факт удаления — по телу ответа: curl не считает HTTP 404 ошибкой, а
+    # id из файлов пакетов может не быть в .kibana (не считаем провалом)
+    resp="$(es DELETE "/.kibana/_doc/$doc_id")"
+    case "$resp" in
+      *'"deleted"'*) ok "удалён: $doc_id"; DEL_N=$((DEL_N+1));;
+      *'"error"'*) : ;;   # документа уже нет — цель «удалено» достигнута
+      "") warn "нет ответа OpenSearch — не удалён: $doc_id"; DEL_FAILED=$((DEL_FAILED+1));;
+      *) warn "не удалён: $doc_id"; DEL_FAILED=$((DEL_FAILED+1));;
+    esac
+  done <<< "$1"
+}
+
+purge_pack_objects() { # $1=pack — вычистить ndr-pack-<pack>-* из .kibana
+  local scan_file="$PROG_FILE.purge" ids
+  es GET '/.kibana/_search?q=type:dashboard%20OR%20type:visualization&size=2000&_source=false' \
+    > "$scan_file" 2>/dev/null || true
+  ids="$(python3 -c '
+import json, sys
+try: d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception: d = {}
+for h in ((d.get("hits") or {}).get("hits") or []):
+    i = h.get("_id", "")
+    if "ndr-pack-" in i:
+        print(i)
+' "$scan_file" 2>/dev/null | grep -E -- "ndr-pack-($1)(-|$)" || true)"
+  [ -z "$ids" ] && return 0
+  delete_ndr_ids "$ids"
+  warn "пакет $1: вычищены устаревшие объекты из .kibana: $DEL_N"
 }
 
 # ── источник данных: где реально лежат EVE-события ─────────────────────────
@@ -632,7 +715,11 @@ for o in pack["objects"]:
 for o in pack["objects"]:
     t = o["type"]
     if t == "visualization":
-        keep.append(o)
+        # в bulk идут ТОЛЬКО живые визы: вырезанные по отсутствующим полям
+        # писать нельзя — у них останутся литеральные __F:…__ (subst не
+        # разрешит их) и они засорят OSD битыми объектами-сиротами
+        if vis_ok.get(o["id"], False):
+            keep.append(o)
     elif t == "dashboard":
         panels = json.loads(o["attributes"]["panelsJSON"])
         refs = [r for r in o["references"]]
@@ -730,11 +817,33 @@ do_import() {
   step "Index-pattern"
   ensure_index_pattern "$PROG_FILE.ipfields" || return 1
 
+  step "Типы событий в кластере"
+  fetch_event_types
+  if [ -n "$EVENT_TYPES" ]; then
+    ok "в кластере встречаются event_type: $(printf '%s' "$EVENT_TYPES" | tr '|' ' ')"
+  else
+    warn "список event_type пуст или недоступен — проверка пакетов по типам событий отключена"
+  fi
+
   local created=0 updated=0 failed=0 p
+  : > "$PROG_FILE.imported_ids"   # id записанных объектов — для итоговой «Проверки»
   for p in "${PACKS[@]}"; do
     local f="$PACKS_DIR/$p.json"
     [ -f "$f" ] || { err "файл пакета не найден: $f"; return 2; }
     step "Импорт пакета: $p"
+    # пакет без своих типов событий даст пустой дашборд («нет источников») —
+    # пропускаем его и вычищаем ранее записанные объекты
+    local pet
+    pet="$(printf '%s' "$PACK_ET" | tr ' ' '\n' | awk -F= -v k="$p" '$1==k{print $2; exit}')"
+    if [ -n "$pet" ] && [ -n "$EVENT_TYPES" ] && ! printf '%s' "$EVENT_TYPES" | tr '|' '\n' | grep -qx -- "$pet"; then
+      warn "пакет $p не импортирован: в $DATA_TARGET нет событий event_type: $pet — дашборд был бы пустым"
+      if [ "$DRY" -eq 1 ]; then
+        msg "  dry-run: пакет $p был бы пропущен, его старые объекты вычищены"
+      else
+        purge_pack_objects "$p"
+      fi
+      continue
+    fi
     render_pack "$f" "$IP_ID" "$PROG_FILE.fields" "${MV_JSON:-}" "$IP_TS" > "$PROG_FILE.bulk" 2> "$PROG_FILE.render" || true
     # render_pack пишет в stderr JSON {"missing": [...], "count": N} — показываем
     # вырезанные визуализации: это внятное объяснение, каких полей нет в кластере
@@ -767,6 +876,13 @@ for line in sys.stdin:
     if [ "$rc" = "False" ]; then
       ok "пакет $p импортирован: $((lines / 2)) объектов"
       created=$((created + lines / 2))
+      # id записанных объектов (вид «type:id») — сверяются в «Проверке»
+      grep '"index"' "$PROG_FILE.bulk" | python3 -c '
+import json,sys
+for line in sys.stdin:
+    d=json.loads(line)["index"]
+    print(d["_id"])
+' >> "$PROG_FILE.imported_ids" || true
     else
       local errs; errs="$(printf '%s' "$resp" | python3 -c '
 import json,sys
@@ -788,9 +904,50 @@ print("ошибок:", n)
   done
   if [ "$DRY" -ne 1 ]; then
     step "Проверка"
-    local have_n
-    have_n="$(es GET '/.kibana/_search?q=_id:ndr-pack-*&size=0' | es_jq_get "str(d['hits']['total']['value'])")"
-    ok "объектов ndr-pack-* в .kibana: ${have_n:-0}"
+    # Счёт по маске _id (q=_id:ndr-pack-*) здесь не работает: id в .kibana
+    # имеют вид «type:id» (dashboard:ndr-pack-…), а wildcard/prefix по _id
+    # в ES 6+/OpenSearch не матчится. Сканируем по type (серверно) и
+    # сверяем с id, реально записанными bulk'ом этим запуском.
+    local scan_file="$PROG_FILE.ipscan" chk
+    es GET '/.kibana/_search?q=type:dashboard%20OR%20type:visualization&size=2000&_source=false&track_total_hits=true' \
+      > "$scan_file" 2>/dev/null || true
+    chk="$(python3 - "$scan_file" "$PROG_FILE.imported_ids" <<'PYCHK'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    d = {}
+hits = (d.get("hits") or {}).get("hits") or []
+total = (d.get("hits") or {}).get("total") or {}
+total = total.get("value", 0) if isinstance(total, dict) else total
+in_index = {h.get("_id", "") for h in hits}
+written = [l.strip() for l in open(sys.argv[2], encoding="utf-8") if l.strip()]
+missing = sorted(set(written) - in_index)
+ndr_all = sorted(i for i in in_index if "ndr-pack-" in i)
+print("\t".join([str(len(ndr_all)), str(len(written)),
+                  str(len(written) - len(missing)),
+                  ",".join(missing[:5]),
+                  "1" if total > len(hits) else "0"]))
+PYCHK
+)" 2>/dev/null
+    local ndr_total written_n found_n missing_list trunc
+    ndr_total="$(printf '%s' "$chk" | cut -f1)"
+    written_n="$(printf '%s' "$chk" | cut -f2)"
+    found_n="$(printf '%s' "$chk" | cut -f3)"
+    missing_list="$(printf '%s' "$chk" | cut -f4)"
+    trunc="$(printf '%s' "$chk" | cut -f5)"
+    if [ -z "$ndr_total" ]; then
+      warn "не удалось проверить .kibana (нет ответа OpenSearch) — сверьте вручную"
+    elif [ "${written_n:-0}" -eq 0 ]; then
+      warn "этим запуском объекты не записывались (все визуализации вырезаны?)"
+      ok "объектов ndr-pack-* в .kibana: $ndr_total"
+    elif [ "${found_n:-0}" -eq "${written_n:-1}" ]; then
+      ok "объектов ndr-pack-* в .kibana: $ndr_total (записано этим запуском и найдено: $found_n/$written_n)"
+    else
+      warn "записано $written_n, найдено в .kibana: $found_n — не хватает: ${missing_list:-?}"
+      warn "перезапустите импорт и сверьте ответ bulk (проверьте доступ на запись в .kibana)"
+    fi
+    [ "${trunc:-0}" = "1" ] && warn "в .kibana больше 2000 объектов типа dashboard/visualization — скан показал часть (на сверку по id пакетов это не влияет)"
     verify_data "$IP_TS"
     msg "Откройте OpenSearch Dashboards → Dashboards — дашборды «NDR · …» появятся в списке."
     msg "Панели пустые? Обновите страницу OSD (кэш полей паттерна) и проверьте диапазон времени."
@@ -808,6 +965,20 @@ do_check() { # диагностика: данные, поля, index-pattern'ы 
     awk -F'\t' '{printf "  %-12s → %s (%s)\n", $1, $2, $3}' "$PROG_FILE.fields"
   else
     err "поля EVE/ECS в $DATA_TARGET не найдены"
+  fi
+  step "Типы событий в кластере"
+  fetch_event_types
+  if [ -s "$PROG_FILE.et" ]; then
+    awk -F'\t' '{printf "  %-22s %s\n", $1, $2}' "$PROG_FILE.et"
+    python3 - "$PROG_FILE.et" <<'PYET2'
+import sys
+have = {l.split("\t")[0] for l in open(sys.argv[1], encoding="utf-8") if l.strip()}
+missing = [t for t in ("http", "tls", "fileinfo") if t not in have]
+if missing:
+    print("  отсутствуют типы: %s — пакеты http/tls/files не импортируются (дашборды были бы пустыми)" % ", ".join(missing))
+PYET2
+  else
+    warn "список event_type пуст или недоступен"
   fi
   step "Полный список полей index-pattern"
   local nf_all; nf_all="$(fetch_ip_fields)"
@@ -839,43 +1010,54 @@ for r in sorted(rows):
 
 do_remove() {
   step "Удаление объектов ndr-pack-*"
-  local pat
-  case "${PACKS[0]:-}" in
-    all|"") pat="ndr-pack-*";;
-    *) 
-      local p
-      for p in "${PACKS[@]}"; do
-        case "$p" in traffic|http|dns|tls|alerts|files) ;; *) err "неизвестный пакет: $p"; return 1;; esac
-      done
-      pat="$(printf 'ndr-pack-(%s)-*|"ndr-pack-(%s)"' "$(IFS='|'; echo "${PACKS[*]}")" "$(IFS='|'; echo "${PACKS[*]}")")"
-      ;;
-  esac
+  # Маску по _id (q=_id:ndr-pack-*) OpenSearch не исполняет: id в .kibana
+  # имеют вид «type:id» (dashboard:ndr-pack-…), а wildcard/prefix-запросы по
+  # _id в ES 6+/OpenSearch не матчатся. Поэтому: серверно ищем по type,
+  # ndr-pack- фильтруем на своей стороне, плюс добавляем точные id из файлов
+  # пакетов (важно, если объектов больше размера скана).
+  local scan_file="$PROG_FILE.rmscan" ids_file="$PROG_FILE.rmids" p f
+  : > "$ids_file"
+  es GET '/.kibana/_search?q=type:dashboard%20OR%20type:visualization&size=2000&_source=false' \
+    > "$scan_file" 2>/dev/null || true
+  python3 - "$scan_file" "$ids_file" <<'PYRM'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    d = {}
+with open(sys.argv[2], "a", encoding="utf-8") as f:
+    for h in ((d.get("hits") or {}).get("hits") or []):
+        i = h.get("_id", "")
+        if "ndr-pack-" in i:
+            f.write(i + "\n")
+PYRM
+  for p in "${PACKS[@]}"; do
+    f="$PACKS_DIR/$p.json"
+    [ -f "$f" ] || continue
+    python3 -c '
+import json, sys
+p = json.load(open(sys.argv[1], encoding="utf-8"))
+for o in p["objects"]:
+    print("%s:%s" % (o["type"], o["id"]))
+' "$f" >> "$ids_file" 2>/dev/null || true
+  done
+  # при выборе пакетов (--remove traffic …) не трогаем ndr-pack-* других
+  # пакетов: «-» или конец строки после ключа (traffic не матчит trafficx)
+  local rx ids
+  rx="$(printf 'ndr-pack-(%s)(-|$)' "$(IFS='|'; echo "${PACKS[*]}")")"
+  ids="$(sort -u "$ids_file" | grep -E -- "$rx" || true)"
   if [ "$DRY" -eq 1 ]; then
-    msg "  dry-run: удалил бы объекты по маске id: $pat"
+    msg "  dry-run: удалил бы объекты ($rx):"
+    printf '%s\n' "$ids" | sed 's/^/    /'
     return 0
   fi
-  local ids
-  ids="$(es GET '/.kibana/_search?q=_id:ndr-pack-*&size=500' | python3 -c '
-import json,sys,re
-pat = sys.argv[1]
-try: rx = re.compile("^(" + "|".join(re.escape(x) for x in [pat]) + ")$")
-except Exception: rx=None
-try: d=json.load(sys.stdin)
-except Exception: raise SystemExit
-for h in ((d.get("hits") or {}).get("hits") or []):
-    print(h.get("_id",""))
-' "$pat" 2>/dev/null)"
-  # для простоты: удаляем ВСЕ ndr-pack-* при all, при выбранном пакете фильтруем по id
-  if [ "${PACKS[0]:-}" != "all" ] && [ -n "${PACKS[0]:-}" ]; then
-    ids="$(printf '%s\n' "$ids" | grep -E -- "ndr-pack-($(IFS='|'; echo "${PACKS[*]}"))" || true)"
+  delete_ndr_ids "$ids"
+  local n=$DEL_N failed=$DEL_FAILED
+  if [ "$n" -eq 0 ] && [ "$failed" -eq 0 ]; then
+    warn "объектов ndr-pack- по пакетам (${PACKS[*]}) в .kibana не найдено"
   fi
-  local n=0
-  printf '%s\n' "$ids" | while read -r doc_id; do
-    [ -n "$doc_id" ] || continue
-    backup_obj "$(printf '%s' "$doc_id" | tr -c 'A-Za-z0-9._-' '_')" "$(es GET "/.kibana/_doc/$doc_id")"
-    es DELETE "/.kibana/_doc/$doc_id" >/dev/null 2>&1 && { ok "удалён: $doc_id"; n=$((n+1)); } || warn "не удалён: $doc_id"
-  done
-  ok "Готово (бэкапы: ${BACKUP_ROOT:-—})"
+  ok "Готово: удалено объектов: $n (бэкапы: ${BACKUP_ROOT:-—})"
+  [ "$failed" -eq 0 ]
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -891,7 +1073,7 @@ case "$MODE" in
     fi
     expand_packs || exit 2
     detect_es || exit 1
-    do_remove; exit 0;;
+    do_remove; exit $?;;
   import)
     expand_packs || exit 2
     detect_es || exit 1

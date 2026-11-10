@@ -30,7 +30,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote
 
 REQ_LOG = sys.argv[2]
-ST = {"monitors": [], "adets": [], "sdets": [], "kibana": {}, "bulk": []}
+ST = {"monitors": [], "adets": [], "sdets": [], "kibana": {}, "bulk": [],
+      # какие event_type «встречаются» в кластере (по умолчанию — полный набор,
+      # как в SELKS; /__ctl/et_minimal — сценарий хоста без http/tls/fileinfo)
+      "etypes": ["flow", "dns", "quic", "bittorrent_dht", "alert", "sip",
+                 "stats", "anomaly", "ike", "snmp", "mdns",
+                 "http", "tls", "fileinfo"]}
 
 def log(line):
     with open(REQ_LOG, "a", encoding="utf-8") as f:
@@ -111,13 +116,21 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/_plugins/_security_analytics/detectors"):
             return self._send({"hits": {"hits": [{"_id": m["id"], "_source": {"name": m["name"]}} for m in ST["sdets"]]}})
         if p.startswith("/.kibana/_search"):
-            if "q=_id:ndr-pack" in self.path:
-                hits = [{"_id": k} for k in ST["kibana"] if "ndr-pack-" in k]
+            # поиск по type (q=type:dashboard OR …) — как настоящий OpenSearch:
+            # фильтр по префиксу id (вид «type:id»)
+            q = unquote(u.query)
+            types = re.findall(r"type:([a-z_-]+)", q)
+            if types:
+                keep_src = "_source=false" not in q
+                hits = []
+                for k, v in ST["kibana"].items():
+                    if k.split(":", 1)[0] in types:
+                        hits.append({"_id": k, "_source": v} if keep_src else {"_id": k})
                 return self._send({"hits": {"total": {"value": len(hits), "relation": "eq"}, "hits": hits}})
-            if "type:index-pattern" in self.path:
-                hits = [{"_id": k, "_source": v} for k, v in ST["kibana"].items()
-                        if k.startswith("index-pattern:")]
-                return self._send({"hits": {"total": {"value": len(hits), "relation": "eq"}, "hits": hits}})
+            # q=_id:ndr-pack-* и любые wildcard/prefix по _id — как настоящий
+            # OpenSearch (ES 6+): НОЛЬ совпадений (id имеют вид «type:id», а
+            # wildcard по _id не матчится). Спецветки нет нарочно: регрессия
+            # скрипта к запросу по маске _id видна в тестах как 0.
             return self._send({"hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}})
         if p.startswith("/.kibana/_doc/"):
             doc = ST["kibana"].get(p.rsplit("/", 1)[-1])
@@ -177,6 +190,17 @@ class H(BaseHTTPRequestHandler):
                 "migrationVersion": {"index-pattern": "7.9.3"},
             }
             return self._send({"ok": True})
+        if p == "/__ctl/et_minimal":
+            # сценарий реального хоста: EVE без http/tls/fileinfo записей —
+            # пакеты http/tls/files обязаны пропускаться как пустые
+            ST["etypes"] = ["flow", "dns", "quic", "bittorrent_dht", "alert", "sip",
+                            "stats", "anomaly", "ike", "snmp", "mdns"]
+            return self._send({"ok": True})
+        if p == "/__ctl/et_all":
+            ST["etypes"] = ["flow", "dns", "quic", "bittorrent_dht", "alert", "sip",
+                            "stats", "anomaly", "ike", "snmp", "mdns",
+                            "http", "tls", "fileinfo"]
+            return self._send({"ok": True})
         if p.startswith("/.kibana/_update/"):
             _id = p.rsplit("/", 1)[-1]
             cur = ST["kibana"].get(_id, {})
@@ -190,6 +214,11 @@ class H(BaseHTTPRequestHandler):
             ST["kibana"][_id] = cur
             return self._send({"_id": _id, "result": "updated"})
         if p.endswith("/_search") and '"aggs"' in body:
+            # термины по event_type — какие типы реально встречаются в кластере
+            if '"et"' in body and '"terms"' in body:
+                return self._send({"took": 1, "hits": {"hits": []},
+                                   "aggregations": {"et": {"buckets": [
+                                       {"key": t, "doc_count": 1000} for t in ST["etypes"]]}}})
             # max-агрегация по полю времени (последнее событие): 2026-11-10 08:00 UTC;
             # time_iso — «мёртвое» поле времени (value: null) для сценария B11
             if '"time_iso"' in body:
@@ -260,8 +289,12 @@ class H(BaseHTTPRequestHandler):
         log("DELETE " + self.path)
         if p.startswith("/.kibana/_doc/"):
             _id = p.rsplit("/", 1)[-1]
+            if _id not in ST["kibana"]:
+                # как настоящий OpenSearch: удаление несуществующего документа — 404
+                return self._send({"error": {"type": "document_missing_exception",
+                                 "reason": "no such document"}, "status": 404}, code=404)
             ST["kibana"].pop(_id, None)
-            return self._send({"result": "deleted"})
+            return self._send({"_id": _id, "result": "deleted"})
         return self._send({"result": "deleted"})
 
     def log_message(self, *a):
@@ -446,6 +479,8 @@ grepq 'EVE-данные: logstash-\*' "$out"; check "B9: цель данных �
 grepq 'последнее событие' "$out"; check "B9: время последнего события" $?
 grepq 'полей в паттерне' "$out"; check "B9: список index-pattern'ов" $?
 grepq 'proto.keyword' "$out"; check "B9: keyword-подполя показаны" $?
+grepq 'Типы событий в кластере' "$out"; check "B9: секция типов событий" $?
+grepq 'fileinfo' "$out"; check "B9: типы событий перечислены" $?
 printf '%s' "$out" | grepq 'полей в кластере под logstash-\*: [1-9]'; check "B9: поля кластера посчитаны (не 0 — регрессия StopIteration на object-полях)" $?
 printf '%s' "$out" | grepq 'StopIteration'; check "B9: без traceback StopIteration" $([ $? -ne 0 ]; echo $?)
 
@@ -466,6 +501,65 @@ printf '%s' "$out" | grepq 'index-pattern создан: ndr-logstash-pattern'; c
 bulkall="$(sed -n '/BULK_RAW_START/,/BULK_RAW_END/p' "$T/requests.log")"
 printf '%s' "$bulkall" | grep -q 'smb-decoy'; check "B11: decoy smb не используется" $([ $? -ne 0 ]; echo $?)
 printf '%s' "$bulkall" | grepq '"id": "ndr-logstash-pattern"\|"id":"ndr-logstash-pattern"'; check "B11: панели ссылаются на свой паттерн" $?
+
+# B12: импорт всех пакетов — итоговая «Проверка» обязана сверять записанное
+# с фактическим содержимым .kibana. Раньше проверка делала q=_id:ndr-pack-*:
+# на настоящем OpenSearch он всегда даёт 0 (id имеют вид «type:id», wildcard
+# по _id не матчится) — на хосте после успешного импорта писало «объектов: 0»,
+# а мок эту ошибку маскировал спецветкой (снята). Заодно регрессия render_pack:
+# вырезанные визы не должны попадать в bulk (в моке у http нет http.status →
+# «Коды ответа» вырезана, и это отражается в счётчике записанного).
+out="$(run_import --pack all --yes 2>&1)"; rc=$?
+check "B12: import all rc=$rc" $([ $rc -eq 0 ]; echo $?)
+line="$(printf '%s' "$out" | grep 'записано этим запуском' | head -1)"
+NWRITTEN=""
+if [[ "$line" =~ найдено:\ ([0-9]+)/([0-9]+) ]] && [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ] \
+   && [ "${BASH_REMATCH[1]}" -gt 0 ]; then
+  ok "B12: проверка сверила записанное с .kibana ($line)"
+  NWRITTEN="${BASH_REMATCH[1]}"
+else
+  bad "B12: проверка сверила записанное с .kibana ($line)"
+fi
+requests | grep -q 'q=_id:ndr-pack'; check "B12: запросов по маске _id нет" $([ $? -ne 0 ]; echo $?)
+
+# B13: remove all удаляет ровно записанное (раньше remove по той же сломанной
+# маске _id молча ничего не удалял); повторное удаление — «не найдено», rc=0
+out="$(run_import --remove all --yes 2>&1)"; rc=$?
+check "B13: remove all rc=$rc" $([ $rc -eq 0 ]; echo $?)
+if [ -n "$NWRITTEN" ]; then
+  grepq "удалено объектов: $NWRITTEN" "$out"; check "B13: удалено $NWRITTEN объектов" $?
+fi
+requests | grep -q 'DELETE /.kibana/_doc/dashboard:ndr-pack-traffic'; check "B13: DELETE дашборда traffic" $?
+out="$(run_import --remove traffic --yes 2>&1)"; rc=$?
+check "B13: повторное remove traffic rc=$rc" $([ $rc -eq 0 ]; echo $?)
+grepq 'не найдено' "$out"; check "B13: повторное удаление — не найдено" $?
+
+# B14: кластер без http/tls/fileinfo событий (как на реальном хосте): пакеты
+# обязаны пропускаться с WARN, их ранее записанные объекты — вычищаться, а
+# «Проверка» — сводиться только к фактически записанным пакетам (19/19:
+# traffic 7 + dns 6 + alerts 6)
+curl -s -X POST "$MOCK_URL/__ctl/et_all" >/dev/null
+run_import --pack http --pack tls --pack files --yes >/dev/null
+curl -s -X POST "$MOCK_URL/__ctl/et_minimal" >/dev/null
+out="$(run_import --pack all --yes 2>&1)"; rc=$?
+check "B14: import all без http/tls/fileinfo rc=$rc" $([ $rc -eq 0 ]; echo $?)
+for pk in http tls files; do
+  grepq "пакет $pk не импортирован" "$out"; check "B14: $pk пропущен с WARN" $?
+done
+printf '%s' "$out" | grep -q 'пакет http импортирован'; check "B14: http не записывался" $([ $? -ne 0 ]; echo $?)
+requests | grep -q 'DELETE /.kibana/_doc/dashboard:ndr-pack-http'; check "B14: старый дашборд http вычищен" $?
+printf '%s' "$out" | grepq 'в .kibana: 19 (записано этим запуском и найдено: 19/19)'; check "B14: проверка — 19/19 (traffic+dns+alerts)" $?
+
+# B15: возврат типов — всё импортируется снова (34/34, как в B12)
+curl -s -X POST "$MOCK_URL/__ctl/et_all" >/dev/null
+out="$(run_import --pack all --yes 2>&1)"; rc=$?
+check "B15: import all rc=$rc" $([ $rc -eq 0 ]; echo $?)
+printf '%s' "$out" | grepq 'в .kibana: 34 (записано этим запуском и найдено: 34/34)'; check "B15: типы вернулись — 34/34" $?
+
+# B16: --check показывает секцию типов событий
+out="$(run_import --check 2>&1)"; rc=$?
+check "B16: --check rc=$rc" $([ $rc -eq 0 ]; echo $?)
+grepq 'Типы событий в кластере' "$out"; check "B16: секция типов событий" $?
 
 printf '%s\n' "== Часть C: автоопределение канала OpenSearch"
 
