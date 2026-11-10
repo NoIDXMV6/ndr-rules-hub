@@ -52,6 +52,7 @@ export const UPDATE_SETTING_KEYS = [
   'scriptPath',       // /opt/ClearNDR/clearndr-update.sh
   'healthUrl',        // https://localhost/
   'apiToken',
+  'osdEsUrl',         // OpenSearch URL для раздела «Дашборды OpenSearch» (пусто = авто)
 ] as const
 
 export interface UpdateSettings {
@@ -65,6 +66,7 @@ export interface UpdateSettings {
   scriptPath: string
   healthUrl: string
   apiToken: string
+  osdEsUrl: string
 }
 
 export const UPDATE_SETTINGS_DEFAULTS: UpdateSettings = {
@@ -78,6 +80,7 @@ export const UPDATE_SETTINGS_DEFAULTS: UpdateSettings = {
   scriptPath: '/opt/ClearNDR/clearndr-update.sh',
   healthUrl: 'https://localhost/',
   apiToken: '',
+  osdEsUrl: '',
 }
 
 // ────────────────────────────── типы результатов ────────────────────────────
@@ -109,6 +112,7 @@ export interface HostProbe {
   webHttp?: string            // код ответа web UI (200/302/000…)
   apiHttp?: string            // код REST API (если задан токен)
   apiSources?: string         // количество источников правил (ответ REST)
+  apiBase?: string            // база, по которой REST ответил 200 (healthUrl или шлюз)
   containers: StackContainer[]
   ranAt: string
 }
@@ -285,6 +289,7 @@ export function parseProbeOutput(raw: string): Partial<HostProbe> {
       case 'web_http': p.webHttp = val; break
       case 'api_http': p.apiHttp = val; break
       case 'api_sources': p.apiSources = val; break
+      case 'api_base': p.apiBase = val; break
       case 'CT': {
         // CT\t<name>\t<status…>
         const parts = val.split('\t')
@@ -360,9 +365,20 @@ export function buildProbeScript(cfg: { instanceDir: string; healthUrl: string; 
     // web UI + REST API
     `p web_http "$(curl -k -s -o /dev/null -w '%{http_code}' --max-time 10 "$HEALTH" 2>/dev/null || echo 000)"`,
     `if [ -n "$TOKEN" ]; then`,
-    `  B="$(curl -k -s --max-time 15 -w '\\n%{http_code}' "$HEALTH/rest/rules/source/" -H "Authorization: Token $TOKEN" 2>/dev/null || true)"`,
+    `  AB="$HEALTH"`,
+    `  B="$(curl -k -s --max-time 15 -w '\\n%{http_code}' "$AB/rest/rules/source/" -H "Authorization: Token $TOKEN" 2>/dev/null || true)"`,
+    `  AC="$(printf '%s' "$B" | tail -1)"`,
+    `  # фолбэк: healthUrl (напр. публичный домен) может не проксировать /rest/ —`,
+    `  # пробуем шлюз docker-моста: nginx стека слушает и на нём`,
+    `  if [ "$AC" != "200" ]; then`,
+    `    B2="$(curl -k -s --max-time 15 -w '\\n%{http_code}' "https://172.17.0.1/rest/rules/source/" -H "Authorization: Token $TOKEN" 2>/dev/null || true)"`,
+    `    case "$(printf '%s' "$B2" | tail -1)" in`,
+    `      200) AB="https://172.17.0.1"; B="$B2" ;;`,
+    `    esac`,
+    `  fi`,
     `  p api_http "$(printf '%s' "$B" | tail -1)"`,
     `  p api_sources "$(printf '%s' "$B" | head -n -1 | sed -n 's/.*"count"[[:space:]]*:[[:space:]]*\\([0-9]*\\).*/\\1/p' | head -1)"`,
+    `  p api_base "$AB"`,
     `fi`,
     '',
   ].join('\n')

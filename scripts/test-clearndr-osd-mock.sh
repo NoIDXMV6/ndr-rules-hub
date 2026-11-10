@@ -279,6 +279,29 @@ check "B6: remove all rc=$rc" $([ $rc -eq 0 ]; echo $?)
 grepq 'удалён' "$out"; check "B6: объекты удаляются" $?
 requests | grep -q 'DELETE /.kibana/_doc/dashboard:ndr-pack-traffic'; check "B6: DELETE дашборда traffic" $?
 
+printf '%s\n' "== Часть C: автоопределение канала OpenSearch"
+
+# C1: явный --es-url (host-канал, docker не нужен)
+out="$(run_analytics --status --es-url "$MOCK_URL" 2>&1)"; rc=$?
+check "C1: --es-url rc=$rc" $([ $rc -eq 0 ]; echo $?)
+grepq 'OpenSearch: '"$MOCK_URL" "$out"; check "C1: подключение по --es-url" $?
+# C2: URL с учётными данными — секрет маскируется
+out="$(run_analytics --status --es-url "http://admin:s3cr3t@127.0.0.1:$MOCK_PORT" 2>&1)"; rc=$?
+check "C2: --es-url с авторизацией rc=$rc" $([ $rc -eq 0 ]; echo $?)
+grepq 'admin:\*\*\*@"127.0.0.1' "$out" || grepq 'admin:\*\*\*@127.0.0.1' "$out"; check "C2: пароль маскирован" $?
+printf '%s' "$out" | grepq 's3cr3t' && check "C2: секрет не печатается" 1 || check "C2: секрет не печатается" 0
+# C3: автоопределение без --es-url — через docker exec (фейковый docker → mock)
+out="$(run_analytics --status 2>&1)"; rc=$?
+check "C3: автоопределение rc=$rc" $([ $rc -eq 0 ]; echo $?)
+grepq 'OpenSearch через контейнер: config-opensearch-ABCD1234' "$out"; check "C3: найден контейнер opensearch" $?
+# C4: тот же автоопределение в import-скрипте
+out="$(run_import --list 2>&1)"; rc=$?
+check "C4: import без --es-url rc=$rc" $([ $rc -eq 0 ]; echo $?)
+# C5: недоступный --es-url — внятная ошибка, rc=1
+out="$(run_analytics --status --es-url "http://127.0.0.1:1" 2>&1)"; rc=$?
+check "C5: недоступный --es-url rc=$rc" $([ $rc -eq 1 ]; echo $?)
+grepq 'недоступен по --es-url' "$out"; check "C5: сообщение об ошибке" $?
+
 printf '%s\n' "== Итог: PASS=$PASS FAIL=$FAIL"
 [ "${KEEP_MOCK:-0}" = 1 ] || rm -rf "$T"
 [ "$FAIL" -eq 0 ]

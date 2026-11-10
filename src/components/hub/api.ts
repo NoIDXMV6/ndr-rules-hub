@@ -135,7 +135,7 @@ export const api = {
   updateRun: (runId: string, tail = 24000) => fetch(`/api/clearndr-update?log=${encodeURIComponent(runId)}&tail=${tail}`, { cache: 'no-store' }).then((r) => j<UpdateRunStatus>(r)),
   updateAction: (body: Record<string, unknown>) =>
     fetch('/api/clearndr-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
-  updateSaveSettings: (data: UpdateSettingsUi) =>
+  updateSaveSettings: (data: Partial<UpdateSettingsUi>) =>
     fetch('/api/clearndr-update', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; settings: UpdateStatus['settings'] }>(r)),
   // дашборды OpenSearch (аналитика)
   osdStatus: () => fetch('/api/clearndr-osd', { cache: 'no-store' }).then((r) => j<OsdStatus>(r)),
@@ -163,6 +163,8 @@ export interface HostProbe {
   pgTag?: string
   suricataInterfaces?: string
   mikrocata?: boolean
+  composeOk?: boolean
+  composeErr?: string
   maxMapCount?: number
   memAvailMb?: number
   dockerRoot?: string
@@ -170,6 +172,7 @@ export interface HostProbe {
   webHttp?: string
   apiHttp?: string
   apiSources?: string
+  apiBase?: string
   containers: StackContainerRow[]
   ranAt: string
 }
@@ -218,6 +221,7 @@ export interface UpdateStatus {
     scriptPath: string
     healthUrl: string
     apiToken: string
+    osdEsUrl: string
     sshKeySet: boolean
   }
   latest: LatestRelease
@@ -247,6 +251,7 @@ export interface UpdateSettingsUi {
   scriptPath: string
   healthUrl: string
   apiToken: string
+  osdEsUrl: string
 }
 
 // ── Раздел «Дашборды OpenSearch» ─────────────────────────────────────────────
@@ -258,6 +263,9 @@ export interface OsdProbe {
   cluster?: string
   esVersion?: string
   osdVersion?: string
+  esUrl?: string
+  esChannel?: string
+  dockerStatus?: string
   alerting?: boolean
   anomaly?: boolean
   security?: boolean

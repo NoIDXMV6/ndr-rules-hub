@@ -454,6 +454,14 @@ PersistentKeepalive = 25
       'Fill OSD sections “Alerting”, “Anomaly Detection” and “Security Analytics” with Suricata EVE data (logstash-*) and browse a catalog of extra dashboards. Details — docs/osd-analytics.md.',
     connNote: 'Uses the connection settings from the “Clear NDR Update” tab (mode, SSH, instance dir).',
     connMode: 'Mode',
+    esUrlLabel: 'OpenSearch URL (optional)',
+    esUrlPlaceholder: 'empty = auto-discovery (https://host:9200, user:pass@ allowed)',
+    esUrlSave: 'Save',
+    esUrlSaved: 'OpenSearch URL saved — run “Check OpenSearch” again',
+    esChannel: 'Channel',
+    localHintTitle: 'Local mode: the hub container needs bind mounts',
+    localHint:
+      'Restart the hub container with mounts:  -v /var/run/docker.sock:/var/run/docker.sock  -v /opt/ClearNDR:/opt/ClearNDR  (instance path identical on host and in container). Alternatively switch to SSH mode, or set an OpenSearch URL reachable from the container (e.g. https://172.17.0.1:9200). docker CLI and python3 are already in the image.',
     probeBtn: 'Check OpenSearch',
     probeOk: 'OpenSearch is reachable ({mode})',
     probeErr: 'OpenSearch is unreachable: {err}',
@@ -520,6 +528,12 @@ PersistentKeepalive = 25
     runView: 'open log',
     exitCode: 'code {code}',
     running: 'running',
+    channelHost: 'direct',
+    channelExec: 'via docker exec',
+    dockerOk: 'docker available',
+    dockerNoSock: '/var/run/docker.sock missing — mount required',
+    dockerDenied: 'no permission on the docker socket',
+    dockerNoCli: 'docker CLI missing',
   },
 
   logs: {

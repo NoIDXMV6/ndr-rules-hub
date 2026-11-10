@@ -451,6 +451,14 @@ PersistentKeepalive = 25
       'Наполнение разделов OSD «Alerting», «Anomaly Detection» и «Security Analytics» данными Suricata EVE (logstash-*) и каталог дополнительных дашбордов. Подробности — docs/osd-analytics.md.',
     connNote: 'Используются настройки соединения вкладки «Обновление Clear NDR» (режим, SSH, каталог инстанса).',
     connMode: 'Режим',
+    esUrlLabel: 'OpenSearch URL (необязательно)',
+    esUrlPlaceholder: 'пусто = автоопределение (https://host:9200, можно user:pass@)',
+    esUrlSave: 'Сохранить',
+    esUrlSaved: 'OpenSearch URL сохранён — повторите «Проверить OpenSearch»',
+    esChannel: 'Канал',
+    localHintTitle: 'Режим local: контейнеру хаба нужны монтирования',
+    localHint:
+      'Перезапустите контейнер хаба с монтированиями:  -v /var/run/docker.sock:/var/run/docker.sock  -v /opt/ClearNDR:/opt/ClearNDR  (путь инстанса одинаков на хосте и в контейнере). Либо переключитесь на режим SSH, либо укажите OpenSearch URL, доступный из контейнера (например https://172.17.0.1:9200). docker CLI и python3 уже входят в образ.',
     probeBtn: 'Проверить OpenSearch',
     probeOk: 'OpenSearch доступен ({mode})',
     probeErr: 'OpenSearch недоступен: {err}',
@@ -517,6 +525,12 @@ PersistentKeepalive = 25
     runView: 'открыть лог',
     exitCode: 'код {code}',
     running: 'выполняется',
+    channelHost: 'напрямую',
+    channelExec: 'через docker exec',
+    dockerOk: 'docker доступен',
+    dockerNoSock: 'нет /var/run/docker.sock — нужно монтирование',
+    dockerDenied: 'нет прав на docker-сокет',
+    dockerNoCli: 'нет docker CLI',
   },
 
   logs: {

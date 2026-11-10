@@ -50,6 +50,9 @@ export interface OsdProbe {
   cluster?: string        // имя кластера OpenSearch
   esVersion?: string      // версия OpenSearch
   osdVersion?: string     // версия OpenSearch Dashboards
+  esUrl?: string          // база, по которой OpenSearch доступен (учётные данные маскируются)
+  esChannel?: string      // host:<base> | exec:<контейнер>
+  dockerStatus?: string   // ok | no-cli | no-sock | denied
   alerting?: boolean      // плагин opensearch-alerting
   anomaly?: boolean       // плагин opensearch-anomaly-detection
   security?: boolean      // плагин opensearch-security-analytics
@@ -62,41 +65,93 @@ export interface OsdProbe {
   ranAt: string
 }
 
-/** Текст probe-скрипта (POSIX sh) — выполняется на хосте одной командой */
+/**
+ * Текст probe-скрипта (POSIX sh) — выполняется на хосте одной командой.
+ * Канал OpenSearch определяется автоматически:
+ *   1) URL из настройки osdEsUrl (если задан);
+ *   2) https/http на 127.0.0.1:9200 (ssh-режим, --network host);
+ *   3) https/http на 172.17.0.1:9200 (шлюз docker-моста — доступен из контейнера хаба);
+ *   4) https/http на host.docker.internal:9200;
+ *   5) docker exec в контейнер opensearch (если docker доступен).
+ */
 export function buildOsdProbeScript(cfg: UpdateSettings): string {
-  // p() печатает «KEY<TAB>VALUE»; esget() выбирает канал доступа к OpenSearch.
+  const esUrl = (cfg.osdEsUrl || '').replace(/'/g, '')
+  // p() печатает «KEY<TAB>VALUE»; root_cluster() достаёт cluster_name из тела /
   return [
     `p() { printf '%s\\t%s\\n' "$1" "$2"; }`,
-    `ES_MODE=""; OS_CT=""; OSD_CT=""`,
-    `if curl -s --max-time 5 http://127.0.0.1:9200 2>/dev/null | grep -q cluster_name; then`,
-    `  ES_MODE=host`,
-    `else`,
-    `  OS_CT="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E -- '-opensearch-[A-Za-z0-9_]+$' | head -1)"`,
-    `  [ -n "$OS_CT" ] && ES_MODE=exec`,
-    `fi`,
-    `esget() {`,
-    `  if [ "$ES_MODE" = host ]; then curl -s --max-time 15 "$1" 2>/dev/null`,
-    `  elif [ "$ES_MODE" = exec ]; then docker exec "$OS_CT" curl -s --max-time 15 "http://127.0.0.1:9200$1" 2>/dev/null`,
-    `  fi`,
+    `root_cluster() { sed -n 's/.*"cluster_name"[: ]*"\\([^"]*\\)".*/\\1/p' | head -1; }`,
+    // ── диагностика docker (объясняет, почему exec-канал может не работать) ──
+    `dstat() {`,
+    `  command -v docker >/dev/null 2>&1 || { echo no-cli; return; }`,
+    `  if [ ! -S /var/run/docker.sock ] && [ -z "$DOCKER_HOST" ]; then echo no-sock; return; fi`,
+    `  docker ps >/dev/null 2>&1 || { echo denied; return; }`,
+    `  echo ok`,
     `}`,
-    `INFO="$(esget /)"`,
-    `printf '%s' "$INFO" | grep -q cluster_name || { p error "OpenSearch недоступен (127.0.0.1:9200 и docker)"; exit 0; }`,
-    `p cluster "$(printf '%s' "$INFO" | sed -n 's/.*"cluster_name"[: ]*"\\([^"]*\\)".*/\\1/p' | head -1)"`,
+    `DS="$(dstat)"; p docker_status "$DS"`,
+    `ES_URL='${esUrl}'`,
+    `ES_BASE=""; ES_CH=""; AUTH=""; OS_CT=""`,
+    `es_try() { # $1=base → печатает cluster_name; 401/403 запоминает в AUTH`,
+    `  local out code body`,
+    `  out="$(curl -sk --noproxy '*' --max-time 4 -w '\\n%{http_code}' "$1/" 2>/dev/null)" || return 1`,
+    `  code="$(printf '%s' "$out" | tail -1)"; body="$(printf '%s' "$out" | sed '$d')"`,
+    `  case "$code" in`,
+    `    200) printf '%s' "$body" | grep -q cluster_name || return 1`,
+    `         printf '%s' "$body" | root_cluster; return 0 ;;`,
+    `    401|403) AUTH="$code"; return 2 ;;`,
+    `    *) return 1 ;;`,
+    `  esac`,
+    `}`,
+    `for b in "$ES_URL" https://127.0.0.1:9200 http://127.0.0.1:9200 https://172.17.0.1:9200 http://172.17.0.1:9200 https://host.docker.internal:9200 http://host.docker.internal:9200; do`,
+    `  [ -n "$b" ] || continue`,
+    `  C="$(es_try "$b")" && { ES_BASE="$b"; ES_CH="host"; break; }`,
+    `done`,
+    `if [ -z "$ES_CH" ] && [ "$DS" = ok ]; then`,
+    `  OS_CT="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E -- '-opensearch-[A-Za-z0-9_]+$' | head -1)"`,
+    `  if [ -n "$OS_CT" ]; then`,
+    `    for b in https://127.0.0.1:9200 http://127.0.0.1:9200; do`,
+    `      out="$(docker exec "$OS_CT" curl -sk --noproxy '*' --max-time 6 -w '\\n%{http_code}' "$b/" 2>/dev/null)" || continue`,
+    `      code="$(printf '%s' "$out" | tail -1)"; body="$(printf '%s' "$out" | sed '$d')"`,
+    `      case "$code" in`,
+    `        200) C="$(printf '%s' "$body" | root_cluster)"; [ -n "$C" ] && { ES_BASE="$b"; ES_CH="exec"; break; } ;;`,
+    `        401|403) AUTH="$code" ;;`,
+    `      esac`,
+    `    done`,
+    `  fi`,
+    `fi`,
+    `if [ -z "$ES_CH" ]; then`,
+    `  H=""`,
+    `  [ "$DS" = no-sock ] && H="; в контейнере нет /var/run/docker.sock — запустите хаб с -v /var/run/docker.sock:/var/run/docker.sock и -v /opt/ClearNDR:/opt/ClearNDR"`,
+    `  [ "$DS" = denied ] && H="; docker есть, но нет прав на сокет (запустите контейнер от root или дайте доступ к /var/run/docker.sock)"`,
+    `  [ "$DS" = no-cli ] && H="; в окружении нет docker CLI"`,
+    `  [ -n "$AUTH" ] && H="$H; OpenSearch отвечает HTTP $AUTH — нужна авторизация, укажите URL вида https://user:pass@host:9200 в настройках раздела"`,
+    `  p error "OpenSearch не найден (\${ES_URL:+заданный URL, }127.0.0.1:9200, 172.17.0.1:9200, host.docker.internal:9200 — https и http; docker: $DS)$H"`,
+    `  exit 0`,
+    `fi`,
+    `p cluster "$C"`,
+    `p es_url "$(printf '%s' "$ES_BASE" | sed -E 's#(://[^/@:]+):[^@]*@#\\1:***@#')"`,
+    `if [ "$ES_CH" = exec ]; then p es_channel "exec:$OS_CT"; else p es_channel "host:$ES_BASE"; fi`,
+    `esc() { # $1=path — GET по выбранному каналу`,
+    `  if [ "$ES_CH" = exec ]; then docker exec "$OS_CT" curl -sk --noproxy '*' --max-time 15 "$ES_BASE$1" 2>/dev/null`,
+    `  else curl -sk --noproxy '*' --max-time 15 "$ES_BASE$1" 2>/dev/null; fi`,
+    `}`,
+    `INFO="$(esc /)"`,
     `p es_version "$(printf '%s' "$INFO" | sed -n 's/.*"number"[: ]*"\\([^"]*\\)".*/\\1/p' | head -1)"`,
-    `PLUG="$(esget '/_cat/plugins?h=component')"`,
+    `PLUG="$(esc '/_cat/plugins?h=component')"`,
     `p alerting "$(printf '%s' "$PLUG" | grep -q opensearch-alerting && echo 1 || echo 0)"`,
     `p anomaly "$(printf '%s' "$PLUG" | grep -q opensearch-anomaly-detection && echo 1 || echo 0)"`,
     `p security "$(printf '%s' "$PLUG" | grep -q opensearch-security-analytics && echo 1 || echo 0)"`,
-    `IDX="$(esget '/_cat/indices/logstash-*?h=docs.count&bytes=mb')";`,
+    `IDX="$(esc '/_cat/indices/logstash-*?h=docs.count&bytes=mb')";`,
     `p indices "$(printf '%s\\n' "$IDX" | grep -c . || true)"`,
     `p docs "$(printf '%s\\n' "$IDX" | awk '{s+=$1} END{printf "%d", s+0}')";`,
-    `p packs "$(esget '/.kibana/_search?q=_id:ndr-pack-*&size=0' | sed -n 's/.*"value":[0-9]*.*/&/p' | sed -n 's/.*"value":\\([0-9]*\\).*/\\1/p' | head -1)"`,
-    `p monitors "$(esget '/_plugins/_alerting/monitors/_search?size=200' 2>/dev/null | grep -o '"name":"NDR' | wc -l | tr -d ' ')"`,
-    `p adetectors "$(esget '/_plugins/_anomaly_detection/detectors/_search?size=200' 2>/dev/null | grep -o '"name":"NDR' | wc -l | tr -d ' ')"`,
-    `p sdetectors "$(esget '/_plugins/_security_analytics/detectors/_search?size=200' 2>/dev/null | grep -o '"name":"NDR' | wc -l | tr -d ' ')"`,
-    `OSD_CT="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E -- '-opensearch-dashboards-[A-Za-z0-9_]+$' | head -1)"`,
-    `if [ -n "$OSD_CT" ]; then`,
-    `  p osd_version "$(docker exec "$OSD_CT" curl -s --max-time 8 http://127.0.0.1:5601/api/stats 2>/dev/null | sed -n 's/.*"version":{[^}]*"number":"\\([^"]*\\)".*/\\1/p' | head -1)"`,
+    `p packs "$(esc '/.kibana/_search?q=_id:ndr-pack-*&size=0' | sed -n 's/.*"value":[0-9]*.*/&/p' | sed -n 's/.*"value":\\([0-9]*\\).*/\\1/p' | head -1)"`,
+    `p monitors "$(esc '/_plugins/_alerting/monitors/_search?size=200' 2>/dev/null | grep -o '"name":"NDR' | wc -l | tr -d ' ')"`,
+    `p adetectors "$(esc '/_plugins/_anomaly_detection/detectors/_search?size=200' 2>/dev/null | grep -o '"name":"NDR' | wc -l | tr -d ' ')"`,
+    `p sdetectors "$(esc '/_plugins/_security_analytics/detectors/_search?size=200' 2>/dev/null | grep -o '"name":"NDR' | wc -l | tr -d ' ')"`,
+    `if [ "$DS" = ok ]; then`,
+    `  OSD_CT="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E -- '-opensearch-dashboards-[A-Za-z0-9_]+$' | head -1)"`,
+    `  if [ -n "$OSD_CT" ]; then`,
+    `    p osd_version "$(docker exec "$OSD_CT" curl -s --max-time 8 http://127.0.0.1:5601/api/stats 2>/dev/null | sed -n 's/.*"version":{[^}]*"number":"\\([^"]*\\)".*/\\1/p' | head -1)"`,
+    `  fi`,
     `fi`,
     '',
   ].join('\n')
@@ -112,6 +167,9 @@ export function parseOsdProbe(raw: string): Partial<OsdProbe> {
     const val = line.slice(i + 1).trim()
     if (!val && key !== 'docs') continue
     switch (key) {
+      case 'es_url': p.esUrl = val; break
+      case 'es_channel': p.esChannel = val; break
+      case 'docker_status': p.dockerStatus = val; break
       case 'error': p.error = val; break
       case 'cluster': p.cluster = val; break
       case 'es_version': p.esVersion = val; break
@@ -235,9 +293,10 @@ export interface OsdRunStatus {
   finishedAt?: string
 }
 
-function buildOsdArgs(kind: OsdRunOptions['kind'], script: 'analytics' | 'import', o: OsdRunOptions): string[] {
+function buildOsdArgs(kind: OsdRunOptions['kind'], script: 'analytics' | 'import', o: OsdRunOptions, esUrl: string): string[] {
   const args: string[] = ['--yes', '--no-color']
   if (o.dryRun) args.push('--dry-run')
+  if (esUrl) args.push('--es-url', esUrl)
   if (script === 'analytics') {
     args.push(`--apply-${o.what || 'all'}`)
   } else {
@@ -300,7 +359,7 @@ export async function startOsdRun(cfg: UpdateSettings, o: OsdRunOptions): Promis
   } else {
     scriptOnHost = `${scriptDirOnHost(cfg)}/${path.basename(scriptLocal)}`
   }
-  const args = buildOsdArgs(o.kind, script, o)
+  const args = buildOsdArgs(o.kind, script, o, cfg.osdEsUrl || '')
   const runId = `osd-${o.kind}-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}`
   const remoteDir = cfg.updateMode === 'local' ? path.join(OSD_RUNS_DIR, runId) : `${remoteOsdRunRoot(cfg)}/${runId}`
   const meta: OsdRunMeta = { runId, mode: cfg.updateMode, kind: o.kind, startedAt: new Date().toISOString(), args, remoteDir }
@@ -333,7 +392,10 @@ export async function startOsdRun(cfg: UpdateSettings, o: OsdRunOptions): Promis
     const rcPath = path.join(dir, 'rc')
     await fs.writeFile(path.join(dir, 'runner.sh'), runner, { mode: 0o755 })
     const out = await fs.open(logPath, 'a')
-    const spawnOpts: SpawnOptions = { detached: true, stdio: ['ignore', out.fd, out.fd], cwd: cfg.instanceDir }
+    // cwd: каталог инстанса может быть не смонтирован в контейнер — не падаем
+    let cwd = cfg.instanceDir
+    try { await fs.access(cwd) } catch { cwd = DATA_DIR }
+    const spawnOpts: SpawnOptions = { detached: true, stdio: ['ignore', out.fd, out.fd], cwd }
     const child = spawn('bash', [path.join(dir, 'runner.sh')], spawnOpts)
     await fs.writeFile(path.join(dir, 'pid.txt'), String(child.pid ?? '')).catch(() => undefined)
     child.on('exit', async (code) => {

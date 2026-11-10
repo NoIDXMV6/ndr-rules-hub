@@ -27,7 +27,9 @@
 #        --apply-security|--apply-all [--yes] [--dry-run]
 #   clearndr-osd-analytics-setup.sh --remove-managed [--yes]
 # Опции: --instance-dir DIR (по умолч. /opt/ClearNDR), --es-url URL (иначе
-# автоопределение), --seed SEED, --webhook URL (доп. действие webhook,
+# автоопределение: https/http на 127.0.0.1, 172.17.0.1, host.docker.internal,
+# затем docker exec в контейнер -opensearch-<seed>; URL с авторизацией —
+# https://user:pass@host:9200), --seed SEED, --webhook URL (доп. действие webhook,
 # требует настроенный канал notifications), --no-color.
 # Коды выхода: 0 — успех (допустимы предупреждения), 1 — ошибка среды.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,21 +81,32 @@ find_os_container() {
 }
 have_docker() { docker info >/dev/null 2>&1; }
 
-# ── доступ к ES: --es-url | хост 9200 | docker exec ─────────────────────────
-ES_MODE=""
+# ── доступ к ES: --es-url → https/http на 127.0.0.1, 172.17.0.1,
+#    host.docker.internal → docker exec в контейнер opensearch ────────────────
+# Из контейнера хаба (local-режим) 127.0.0.1 — сам хаб, поэтому перебираем
+# шлюз docker-моста и host.docker.internal; на хосте (ssh) первым отвечает
+# 127.0.0.1. Схема определяется автоматически (security-плагин = https).
+ES_MODE=""            # host | exec
 OS_CT=""
-es_probe() { # $1=curl-выражение; печатает ответ
-  case "$ES_MODE" in
-    host) curl -s --max-time 10 "$@" "http://127.0.0.1:${ES_PORT:-9200}" 2>/dev/null ;;
-    exec) docker exec "$OS_CT" curl -s --max-time 10 "$@" "http://127.0.0.1:9200" 2>/dev/null ;;
+ES_BASE=""            # база вида https://host:9200 (без завершающего /)
+AUTH=""               # 401/403, если OpenSearch требует авторизацию
+es_mask() { printf '%s' "$1" | sed -E 's#(://[^/@:]+):[^@]*@#\1:***@#'; }
+try_base() { # $1=base → печатает cluster_name при успехе
+  local out code body
+  out="$(curl -sk --noproxy '*' --max-time 5 -w '\n%{http_code}' "$1/" 2>/dev/null)" || return 1
+  code="$(printf '%s' "$out" | tail -1)"; body="$(printf '%s' "$out" | sed '$d')"
+  case "$code" in
+    200) printf '%s' "$body" | es_jq_get "str(d.get('cluster_name',''))"; return 0 ;;
+    401|403) AUTH="$code"; return 1 ;;
+    *) return 1 ;;
   esac
 }
-es() { # es METHOD PATH [BODY]
+es() { # es METHOD PATH [BODY] — по выбранному каналу
   local m="$1" p="$2" b="${3:-}"
   case "$p" in /*) ;; *) p="/$p" ;; esac
   case "$ES_MODE" in
-    host) curl -s --max-time 20 -X "$m" -H 'Content-Type: application/json' ${b:+-d "$b"} "http://${ES_HOST:-127.0.0.1}:${ES_PORT:-9200}$p" 2>/dev/null ;;
-    exec) docker exec "$OS_CT" curl -s --max-time 20 -X "$m" -H 'Content-Type: application/json' ${b:+-d "$b"} "http://127.0.0.1:9200$p" 2>/dev/null ;;
+    host) curl -sk --noproxy '*' --max-time 20 -X "$m" -H 'Content-Type: application/json' ${b:+-d "$b"} "$ES_BASE$p" 2>/dev/null ;;
+    exec) docker exec "$OS_CT" curl -sk --noproxy '*' --max-time 20 -X "$m" -H 'Content-Type: application/json' ${b:+-d "$b"} "$ES_BASE$p" 2>/dev/null ;;
   esac
 }
 es_jq_get() { # вытащить простое значение python-ом: es_jq_get '<py-expr над json из stdin>'
@@ -104,29 +117,42 @@ print($1)" 2>/dev/null
 }
 
 detect_es() {
+  local b r out code body cands=""
   if [ -n "$ES_URL" ]; then
-    # парсим host:port без регэксп-хрупкости
-    eval "$(python3 - "$ES_URL" <<'PYURL'
-import sys, urllib.parse
-u = urllib.parse.urlparse(sys.argv[1] if "://" in sys.argv[1] else "http://" + sys.argv[1])
-print("ES_HOST=%r; ES_PORT=%r" % (u.hostname or "127.0.0.1", u.port or 9200))
-PYURL
-)"
-    ES_MODE="host"
-    local r; r="$(curl -s --max-time 8 "http://${ES_HOST}:${ES_PORT}" 2>/dev/null | es_jq_get "str(d.get('cluster_name',''))")"
-    if [ -n "$r" ]; then ok "OpenSearch доступен по --es-url ($ES_HOST:$ES_PORT)"; return 0; fi
-    err "ES_URL задан ($ES_URL), но кластер недоступен"; return 1
+    # явный URL — только он, без тихого отката на авто-кандидаты
+    case "$ES_URL" in
+      *://*) cands="${ES_URL%/}" ;;
+      *) cands="https://$ES_URL http://$ES_URL" ;;
+    esac
+  else
+    cands="https://127.0.0.1:9200 http://127.0.0.1:9200 https://172.17.0.1:9200 http://172.17.0.1:9200 https://host.docker.internal:9200 http://host.docker.internal:9200"
   fi
-  r="$(curl -s --max-time 5 "http://127.0.0.1:9200" 2>/dev/null | es_jq_get "str(d.get('cluster_name',''))")"
-  if [ -n "$r" ]; then ES_MODE="host"; ES_PORT=9200; ok "OpenSearch доступен на хосте: 127.0.0.1:9200"; return 0; fi
-  OS_CT="$(find_os_container)"
+  for b in $cands; do
+    r="$(try_base "$b")"
+    if [ -n "$r" ]; then ES_MODE="host"; ES_BASE="${b%/}"; ok "OpenSearch: $(es_mask "$ES_BASE")"; return 0; fi
+  done
+  if [ -n "$ES_URL" ]; then
+    err "OpenSearch недоступен по --es-url ($(es_mask "$ES_URL"))$([ -n "$AUTH" ] && printf ' (HTTP %s — нужна авторизация, добавьте user:pass в URL)' "$AUTH")"
+    return 1
+  fi
+  OS_CT="$(find_os_container 2>/dev/null || true)"
   if [ -n "$OS_CT" ]; then
-    ES_MODE="exec"
-    r="$(es_probe | es_jq_get "str(d.get('cluster_name',''))")"
-    if [ -n "$r" ]; then ok "OpenSearch доступен через контейнер: $OS_CT"; return 0; fi
-    ES_MODE=""
+    for b in https://127.0.0.1:9200 http://127.0.0.1:9200; do
+      out="$(docker exec "$OS_CT" curl -sk --noproxy '*' --max-time 8 -w '\n%{http_code}' "$b/" 2>/dev/null)" || continue
+      code="$(printf '%s' "$out" | tail -1)"; body="$(printf '%s' "$out" | sed '$d')"
+      case "$code" in
+        200) r="$(printf '%s' "$body" | es_jq_get "str(d.get('cluster_name',''))")"
+             if [ -n "$r" ]; then ES_MODE="exec"; ES_BASE="${b%/}"; ok "OpenSearch через контейнер: $OS_CT ($ES_BASE)"; return 0; fi ;;
+        401|403) AUTH="$code" ;;
+      esac
+    done
   fi
-  err "OpenSearch не найден ни на 127.0.0.1:9200, ни через docker (контейнер -opensearch-<seed> не запущен?)"
+  local hint=""
+  [ -n "$AUTH" ] && hint="; OpenSearch отвечает HTTP $AUTH — укажите --es-url https://user:pass@host:9200"
+  if [ -z "$AUTH" ] && ! have_docker; then
+    hint="; docker недоступен из этого окружения (в контейнере хаба local-режим требует -v /var/run/docker.sock:/var/run/docker.sock и -v /opt/ClearNDR:/opt/ClearNDR)"
+  fi
+  err "OpenSearch не найден (127.0.0.1:9200, 172.17.0.1:9200, host.docker.internal:9200 — https/http, docker exec)$hint"
   return 1
 }
 

@@ -69,6 +69,7 @@ export function UpdateTab({ onChange }: { data: unknown; onChange: () => void })
         scriptPath: s.settings.scriptPath,
         healthUrl: s.settings.healthUrl,
         apiToken: s.settings.apiToken ? MASK : '',
+        osdEsUrl: s.settings.osdEsUrl || '',
       })
       if (s.activeRun) {
         setRunActive(true)

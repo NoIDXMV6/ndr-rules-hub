@@ -21,9 +21,10 @@ import {
 import { api, fmtTime, type OsdRunStatus, type OsdStatus } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
 import {
-  BarChart3, CheckCircle2, Download, Loader2, Plug, RefreshCw, ShieldCheck,
+  BarChart3, CheckCircle2, Download, Loader2, Plug, RefreshCw, Save, ShieldCheck,
   Terminal, Trash2, TriangleAlert, XCircle,
 } from 'lucide-react'
+import { Input } from '@/components/ui/input'
 
 const PACK_KEYS = ['traffic', 'http', 'dns', 'tls', 'alerts', 'files'] as const
 type PackKey = (typeof PACK_KEYS)[number]
@@ -36,6 +37,7 @@ export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
   const [st, setSt] = useState<OsdStatus | null>(null)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [esUrl, setEsUrl] = useState('')
   const [selected, setSelected] = useState<Set<PackKey>>(new Set(['traffic', 'alerts']))
   const [applyWhat, setApplyWhat] = useState<Set<ApplyKind>>(new Set(APPLY_KINDS))
   const [dryRun, setDryRun] = useState(false)
@@ -63,6 +65,26 @@ export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  // синхронизируем поле OpenSearch URL с загруженными настройками
+  useEffect(() => {
+    if (st && !esUrl) setEsUrl(st.settings.osdEsUrl || '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [st])
+
+  const saveEsUrl = async () => {
+    setBusy('es-url')
+    setMsg(null)
+    try {
+      await api.updateSaveSettings({ osdEsUrl: esUrl.trim() })
+      setMsg({ ok: true, text: t.osd.esUrlSaved })
+      await api.osdStatus().then(setSt).catch(() => undefined)
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
 
   // поллинг: активный прогон — 3с, статус — 20с
   useEffect(() => {
@@ -191,6 +213,11 @@ export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
                 <div className="text-xs text-muted-foreground">{t.osd.cluster}</div>
                 <div className="font-medium">{probe.cluster || '—'}</div>
                 <div className="text-xs text-muted-foreground">{t.osd.esVersion}: {probe.esVersion || '—'} · {t.osd.osdVersion}: {probe.osdVersion || '—'}</div>
+                {probe.esChannel && (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {t.osd.esChannel}: {probe.esChannel.startsWith('exec:') ? t.osd.channelExec : `${t.osd.channelHost} ${probe.esChannel.replace(/^host:/, '')}`}
+                  </div>
+                )}
               </div>
               <div className="border border-border rounded-md p-2.5">
                 <div className="text-xs text-muted-foreground">{t.osd.data}</div>
@@ -215,11 +242,31 @@ export function OsdTab({ onChange }: { data: unknown; onChange: () => void }) {
               </div>
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground border border-dashed border-border rounded-md p-4">
-              {probe?.error ? `${t.osd.probeErr.replace('{err}', '')}${probe.error}` : t.osd.noData}
+            <div className="text-sm text-muted-foreground border border-dashed border-border rounded-md p-4 space-y-3">
+              <div>{probe?.error ? `${t.osd.probeErr.replace('{err}', '')}${probe.error}` : t.osd.noData}</div>
+              {st?.settings.updateMode === 'local' && (
+                <div className="border border-amber-300 bg-amber-50 text-amber-900 rounded-md p-3">
+                  <div className="font-medium mb-1 flex items-center gap-1.5"><TriangleAlert className="h-4 w-4" /> {t.osd.localHintTitle}</div>
+                  <div className="text-xs leading-relaxed">{t.osd.localHint}</div>
+                  <pre className="mt-2 text-xs font-mono bg-white/60 border border-amber-200 rounded p-2 whitespace-pre-wrap break-all">docker run … -v /var/run/docker.sock:/var/run/docker.sock -v /opt/ClearNDR:/opt/ClearNDR ndr-rules-hub</pre>
+                </div>
+              )}
             </div>
           )}
 
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              value={esUrl}
+              onChange={(e) => setEsUrl(e.target.value)}
+              placeholder={t.osd.esUrlPlaceholder}
+              className="h-8 text-xs max-w-sm bg-background"
+              id="osd-es-url"
+            />
+            <Button size="sm" variant="outline" className="border-input text-foreground" onClick={saveEsUrl} disabled={busy !== null}>
+              {busy === 'es-url' ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Save className="h-4 w-4 mr-1.5" />}
+              {t.osd.esUrlSave}
+            </Button>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" className="border-input text-foreground" onClick={() => act('probe')} disabled={busy !== null}>
               <RefreshCw className={`h-4 w-4 mr-1.5 ${busy === 'probe' ? 'animate-spin' : ''}`} /> {t.osd.probeBtn}

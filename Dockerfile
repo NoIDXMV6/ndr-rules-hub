@@ -37,6 +37,8 @@ WORKDIR /app
 # без него wg-quick up падает с «resolvconf: command not found»
 # procps (sysctl) обязателен для full-tunnel конфигов (AllowedIPs 0.0.0.0/0)
 # openssh-client — режим SSH раздела «Обновление Clear NDR» (скрипт запускается на хосте)
+# python3 — скрипты OSD-аналитики (clearndr-osd-*.sh) в режиме local:
+#   разбор ответов OpenSearch, генерация мониторов/детекторов — stdlib only
 RUN apt-get update && apt-get install -y --no-install-recommends \
       wireguard-tools \
       iptables \
@@ -47,6 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       gzip \
       curl \
       openssh-client \
+      python3 \
       ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     # Патчим wg-quick как в upstream wireguard-tools (коммит ac74ed6):
