@@ -92,6 +92,12 @@ class H(BaseHTTPRequestHandler):
                 add(n + ".keyword", "keyword")   # …и keyword-подполе
             for n in ("timestamp", "@timestamp"):
                 add(n, "date")
+            # поля-«объекты»: в _field_caps у родительских контейнеров (dns, http,
+            # tls, flow, fileinfo, alert) единственный вариант типа «object» —
+            # именно на них падал fetch_ip_fields (StopIteration на пустом
+            # множестве типов), поэтому они обязаны быть в моке
+            for n in ("dns", "http", "tls", "fileinfo", "alert", "flow", "sip"):
+                T.setdefault(n, {})["object"] = {"searchable": False, "aggregatable": False}
             sel = [s for s in raw.split(",") if s]
             if "*" in sel:
                 return self._send({"fields": T})
@@ -140,8 +146,34 @@ class H(BaseHTTPRequestHandler):
                         {"name": "src_ip", "type": "ip", "esTypes": ["ip"],
                          "count": 1, "scripted": False, "searchable": True,
                          "aggregatable": True, "readFromDocValues": True},
+                        # маркер SELKS: при обновлении полей паттерна запись
+                        # обязана выжить (merge, а не замена)
+                        {"name": "selks_custom_field", "type": "string",
+                         "esTypes": ["keyword"], "count": 1, "scripted": False,
+                         "searchable": True, "aggregatable": True,
+                         "readFromDocValues": True},
                     ]),
                 },
+                "migrationVersion": {"index-pattern": "7.9.3"},
+            }
+            return self._send({"ok": True})
+        if p == "/__ctl/seed_host":
+            # сценарий реального хоста clearNDR: зонтичный SELKS-паттерн с
+            # «мёртвым» полем времени (данные есть, значения поля времени — нет)
+            # и decoy-паттерн logstash-smb-* без данных; старый код брал их
+            # по фолбэку «любой logstash*» — дашборды получались пустыми
+            for k in [k for k in ST["kibana"] if k.startswith("index-pattern:")]:
+                ST["kibana"].pop(k, None)
+            ST["kibana"]["index-pattern:logstash-*"] = {
+                "type": "index-pattern",
+                "index-pattern": {"title": "logstash-*", "timeFieldName": "time_iso",
+                                  "fields": "[]"},
+                "migrationVersion": {"index-pattern": "7.9.3"},
+            }
+            ST["kibana"]["index-pattern:smb-decoy"] = {
+                "type": "index-pattern",
+                "index-pattern": {"title": "logstash-smb-*", "timeFieldName": "@timestamp",
+                                  "fields": "[]"},
                 "migrationVersion": {"index-pattern": "7.9.3"},
             }
             return self._send({"ok": True})
@@ -158,7 +190,11 @@ class H(BaseHTTPRequestHandler):
             ST["kibana"][_id] = cur
             return self._send({"_id": _id, "result": "updated"})
         if p.endswith("/_search") and '"aggs"' in body:
-            # max-агрегация по полю времени (последнее событие): 2026-11-10 08:00 UTC
+            # max-агрегация по полю времени (последнее событие): 2026-11-10 08:00 UTC;
+            # time_iso — «мёртвое» поле времени (value: null) для сценария B11
+            if '"time_iso"' in body:
+                return self._send({"took": 1, "hits": {"hits": []},
+                                   "aggregations": {"m": {"value": None}}})
             return self._send({"took": 1, "hits": {"hits": []},
                                "aggregations": {"m": {"value": 1794297600000.0}}})
         if p.startswith("/_plugins/_alerting/monitors"):
@@ -383,9 +419,10 @@ curl -s -X POST "$MOCK_URL/__ctl/seed_pattern" >/dev/null
 out="$(run_import --pack http --yes 2>&1)"; rc=$?
 check "B8: import http (seeded pattern) rc=$rc" $([ $rc -eq 0 ]; echo $?)
 grepq 'index-pattern найден: 06e1e3c0' "$out"; check "B8: найден урезанный паттерн SELKS" $?
-grepq 'поля index-pattern дополнены' "$out"; check "B8: поля дополнены из кластера" $?
+grepq 'поля index-pattern синхронизированы' "$out"; check "B8: поля синхронизированы из кластера" $?
 upd="$(requests | grep 'KIBANA_UPDATE index-pattern:06e1e3c0' | tail -1)"
 printf '%s' "$upd" | grep -q 'dns.rrname'; check "B8: в _update ушёл полный список полей" $?
+printf '%s' "$upd" | grep -q 'selks_custom_field'; check "B8: MERGE — свои поля SELKS сохранены" $?
 bulkall="$(sed -n '/BULK_RAW_START/,/BULK_RAW_END/p' "$T/requests.log")"
 printf '%s' "$bulkall" | grep -q '06e1e3c0-c1c7-11e8-9888-3f5bc9c31629'; check "B8: панели ссылаются на найденный паттерн" $?
 doc="$(curl -s "$MOCK_URL/.kibana/_doc/index-pattern:06e1e3c0-c1c7-11e8-9888-3f5bc9c31629")"
@@ -395,6 +432,7 @@ d = json.loads(sys.argv[1])
 ipa = d["_source"]["index-pattern"]
 names = {e["name"] for e in json.loads(ipa["fields"])}
 assert "http.url" in names, "http.url не дописан"
+assert "selks_custom_field" in names, "MERGE затёр поле SELKS"
 assert ipa["timeFieldName"] == "timestamp", ipa["timeFieldName"]
 assert ipa["title"] == "logstash-*", ipa["title"]
 print("ok")
@@ -408,6 +446,26 @@ grepq 'EVE-данные: logstash-\*' "$out"; check "B9: цель данных �
 grepq 'последнее событие' "$out"; check "B9: время последнего события" $?
 grepq 'полей в паттерне' "$out"; check "B9: список index-pattern'ов" $?
 grepq 'proto.keyword' "$out"; check "B9: keyword-подполя показаны" $?
+printf '%s' "$out" | grepq 'полей в кластере под logstash-\*: [1-9]'; check "B9: поля кластера посчитаны (не 0 — регрессия StopIteration на object-полях)" $?
+printf '%s' "$out" | grepq 'StopIteration'; check "B9: без traceback StopIteration" $([ $? -ne 0 ]; echo $?)
+
+# B10: импорт при наличии object-полей в _field_caps (регрессия v1.14.5:
+# StopIteration на «dns"/"http"/… с единственным типом object)
+out="$(run_import --pack traffic --yes 2>&1)"; rc=$?
+check "B10: import с object-полями в field_caps rc=$rc" $([ $rc -eq 0 ]; echo $?)
+printf '%s' "$out" | grepq 'полей в index-pattern: [1-9]'; check "B10: полный список полей получен" $?
+printf '%s' "$out" | grepq 'StopIteration'; check "B10: без traceback StopIteration" $([ $? -ne 0 ]; echo $?)
+
+# B11: сценарий реального хоста — зонтичный паттерн с мёртвым полем времени и
+# decoy logstash-smb-*; оба обязаны быть ПРОПУЩЕНЫ, создаётся свой паттерн
+curl -s -X POST "$MOCK_URL/__ctl/seed_host" >/dev/null
+out="$(run_import --pack traffic --yes 2>&1)"; rc=$?
+check "B11: сценарий хоста rc=$rc" $([ $rc -eq 0 ]; echo $?)
+printf '%s' "$out" | grepq 'пропущен: поле времени'; check "B11: зонтичный с мёртвым временем отклонён" $?
+printf '%s' "$out" | grepq 'index-pattern создан: ndr-logstash-pattern'; check "B11: создан свой паттерн" $?
+bulkall="$(sed -n '/BULK_RAW_START/,/BULK_RAW_END/p' "$T/requests.log")"
+printf '%s' "$bulkall" | grep -q 'smb-decoy'; check "B11: decoy smb не используется" $([ $? -ne 0 ]; echo $?)
+printf '%s' "$bulkall" | grepq '"id": "ndr-logstash-pattern"\|"id":"ndr-logstash-pattern"'; check "B11: панели ссылаются на свой паттерн" $?
 
 printf '%s\n' "== Часть C: автоопределение канала OpenSearch"
 
