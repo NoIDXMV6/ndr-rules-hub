@@ -42,9 +42,15 @@ export async function getSettings(): Promise<Record<string, string>> {
   return out
 }
 
-/** Первичная инициализация каталога источников и настроек */
-export async function ensureSeed(): Promise<{ seeded: boolean }> {
+/** Первичная инициализация каталога источников и настроек.
+ *  Начиная с текущей версии работает и «докатка»: на уже инициализированной БД
+ *  новые builtin-источники каталога добавляются, а у существующих builtin
+ *  синхронизируются url/category/kind/badge/notes (enabled и priority —
+ *  пользовательские, их не трогаем). Пользовательские источники не затрагиваются. */
+export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: string[]; catalogUpdated: string[] }> {
   const count = await db.source.count()
+  const added: string[] = []
+  const updated: string[] = []
   if (count === 0) {
     for (const s of SEED_SOURCES) {
       await db.source.create({
@@ -64,13 +70,54 @@ export async function ensureSeed(): Promise<{ seeded: boolean }> {
       })
     }
     await log('info', 'system', `Каталог инициализирован: ${SEED_SOURCES.length} источников`)
+  } else {
+    const rows = await db.source.findMany({
+      select: { id: true, name: true, builtin: true, category: true, kind: true, url: true, badge: true, notes: true },
+    })
+    const byName = new Map(rows.map((r) => [r.name, r]))
+    for (const s of SEED_SOURCES) {
+      const cur = byName.get(s.name)
+      if (!cur) {
+        await db.source.create({
+          data: {
+            name: s.name,
+            category: s.category,
+            kind: s.kind,
+            url: s.url ?? null,
+            authType: s.authType ?? 'none',
+            extraJson: s.extraJson ?? null,
+            enabled: s.enabled ?? false,
+            priority: s.priority ?? 100,
+            badge: s.badge ?? null,
+            notes: s.notes ?? null,
+            builtin: true,
+          },
+        })
+        added.push(s.name)
+        continue
+      }
+      if (cur.builtin) {
+        const patch: { category?: string; kind?: string; url?: string; badge?: string | null; notes?: string } = {}
+        if (cur.category !== s.category) patch.category = s.category
+        if (cur.kind !== s.kind) patch.kind = s.kind
+        if (s.url && cur.url !== s.url) patch.url = s.url
+        if ((s.badge ?? null) !== cur.badge) patch.badge = s.badge ?? null
+        if (s.notes && cur.notes !== s.notes) patch.notes = s.notes
+        if (Object.keys(patch).length) {
+          await db.source.update({ where: { id: cur.id }, data: patch })
+          updated.push(s.name)
+        }
+      }
+    }
+    if (added.length) await log('info', 'system', `Каталог дополнен новыми источниками (${added.length}): ${added.join(', ')}`)
+    if (updated.length) await log('info', 'system', `Синхронизированы описания builtin-источников (${updated.length}): ${updated.join(', ')}`)
   }
   const sc = await db.setting.count()
   if (sc === 0) {
     for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) await setSetting(k, v)
     if (DEFAULT_SETTINGS.oinkcode) await log('info', 'system', 'Oinkcode загружен из переменной окружения OINKCODE')
   }
-  return { seeded: count === 0 }
+  return { seeded: count === 0, catalogAdded: added, catalogUpdated: updated }
 }
 
 /** Загрузка одного источника и сохранение правил в БД */

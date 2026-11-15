@@ -22,7 +22,7 @@
 
 | Блок | Что умеет |
 |---|---|
-| **Источники** | Каталог из 25 преднастроенных источников (13 исходных из Clear NDR + 12 новых). Добавление своих по URL/архиву/локальному файлу. Типы: ruleset, tar.gz-архив, IP/домен/URL-списки (конвертеры) |
+| **Источники** | Каталог из 36 преднастроенных источников (13 исходных из Clear NDR + 23 новых). Добавление своих по URL/архиву/локальному файлу. Типы: ruleset, tar.gz-архив, IP/домен/URL-списки (конвертеры) |
 | **Загрузка** | HTTP(S) с поддержкой **oinkcode** (snort.org, без логина/пароля), auth-key, Basic. Обработка лимитов snort.org (403 → понятное сообщение). Локальные архивы и каталоги |
 | **Конвертеры** | Списки IP/CIDR → правила (чанки по N адресов на SID), домены → DNS-правила, URL → HTTP-правила. SID из приватного диапазона 1 000 000+ |
 | **Конвертер Snort→Suricata** | `scripts/s2x_convert.py`: sticky-буферы Snort 3 (http_uri…) → dot-формы (http.uri…), inline-модификаторы content → отдельные ключевые слова, bufferlen → bsize, вырезание soid/service, маппинг переменных, file→tcp, ssl→tls. Калиброван эмпирически на Suricata 7.0.10 |
@@ -336,7 +336,7 @@ src/lib/engine/
   exporter.ts               # файл · Clear NDR REST (upload → apply) · HTTP POST · каталог
   vpn.ts                    # wg-quick: конфиг, up/down, status, проверка окружения
   service.ts                # оркестрация: fetch → build → export, cron, сид каталога
-  seed.ts                   # каталог 25 источников + настройки по умолчанию
+  seed.ts                   # каталог 36 источников + настройки по умолчанию
 src/lib/i18n/
   detect.ts                 # тип Lang, detectLang (строки браузера), tr(), localeOf
   ru.ts / en.ts             # словари интерфейса (en типизирован как Dictionary = typeof ru)

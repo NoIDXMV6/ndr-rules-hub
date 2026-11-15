@@ -22,7 +22,7 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 
 | Block | What it does |
 |---|---|
-| **Sources** | Catalog of 25 preconfigured sources (13 original from Clear NDR + 12 new). Add your own by URL/archive/local file. Types: ruleset, tar.gz archive, IP/domain/URL lists (converters) |
+| **Sources** | Catalog of 36 preconfigured sources (13 original from Clear NDR + 23 new). Add your own by URL/archive/local file. Types: ruleset, tar.gz archive, IP/domain/URL lists (converters) |
 | **Fetching** | HTTP(S) with **oinkcode** support (snort.org, no login/password), auth-key, Basic. snort.org rate-limit handling (403 → a clear message). Local archives and directories |
 | **Converters** | IP/CIDR lists → rules (chunks of N addresses per SID), domains → DNS rules, URLs → HTTP rules. SIDs from the private 1,000,000+ range |
 | **Snort→Suricata converter** | `scripts/s2x_convert.py`: Snort 3 sticky buffers (http_uri…) → dot forms (http.uri…), inline content modifiers → separate keywords, bufferlen → bsize, soid/service removal, variable mapping, file→tcp, ssl→tls. Empirically calibrated on Suricata 7.0.10 |

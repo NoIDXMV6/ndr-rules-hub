@@ -54,6 +54,9 @@ export interface ExtraCfg {
   // для tarball: не перекачивать архив чаще N минут (0/нет — перекачивать всегда;
   // у snort.org лимит — не чаще раза в 15 минут)
   cacheTtlMinutes?: number
+  // переопределение User-Agent (некоторые серверы блокируют не-браузерные UA,
+  // например ptrules.com отвечает 403 на clearndr-rules-hub/…)
+  userAgent?: string
 }
 
 export function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): string {
@@ -90,7 +93,7 @@ async function httpGet(url: string, extra: ExtraCfg): Promise<{ status: number; 
     redirect: 'follow',
     signal: AbortSignal.timeout(120_000),
     headers: {
-      'User-Agent': 'clearndr-rules-hub/1.0 (rules updater)',
+      'User-Agent': extra.userAgent || 'clearndr-rules-hub/1.0 (rules updater)',
       ...(cfg_basic(extra)),
     },
   })
