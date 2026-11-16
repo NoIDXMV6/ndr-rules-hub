@@ -20,19 +20,34 @@ mkdir -p /app/data/clearndr-update/runs
 # P2022 «The column … does not exist in the current database» на всех API.
 TEMPLATE_VER=$(cat /app/db-template/.schema-version 2>/dev/null || echo unknown)
 
+# Хвостовые файлы WAL принадлежат КОНКРЕТНОМУ файлу БД: оставленный -wal
+# поверх другого файла (шаблона/снимка) — типичная причина ошибки
+# «database disk image is malformed» (SQLITE_CORRUPT): SQLite прикладывает
+# кадры старого журнала к чужим страницам. Поэтому при ЛЮБОЙ подмене
+# hub.db (шаблон, снимок) -wal/-shm уезжают вместе с бэкапом.
+clean_db_sidecars() {
+  rm -f /app/data/hub.db-wal /app/data/hub.db-shm
+}
+
 if [ ! -f /app/data/hub.db ]; then
+  clean_db_sidecars
   echo "[entrypoint] инициализация БД /app/data/hub.db (схема ${TEMPLATE_VER})"
   cp /app/db-template/hub.db /app/data/hub.db
   echo "$TEMPLATE_VER" > /app/data/.schema-version
 elif node /app/db-heal.cjs /app/data/hub.db /app/db-template/schema-manifest.json; then
   echo "$TEMPLATE_VER" > /app/data/.schema-version
 else
-  # БД не открылась (повреждена) или лечение не удалось — прежний путь:
-  # бэкап старого файла и свежий шаблон (источники перекачиваются,
-  # oinkcode восстановится из OINKCODE, ключ abuse.ch нужно ввести заново)
+  # БД повреждена (db-heal не смог: integrity_check не прошёл даже на снимках)
+  # или лечение не удалось — бэкап старого файла (вместе с -wal/-shm, они
+  # содержат несброшенные страницы именно этого файла и пригодятся для
+  # ручного разбора) и свежий шаблон (источники перекачиваются, oinkcode
+  # восстановится из OINKCODE, ключ abuse.ch нужно ввести заново)
   BAK="/app/data/hub.db.bak-$(date +%Y%m%d-%H%M%S)"
   echo "[entrypoint] БД не читается или лечение не удалось — бэкап -> ${BAK}, создаётся новая из шаблона (v:${TEMPLATE_VER})"
   mv /app/data/hub.db "$BAK"
+  [ -f /app/data/hub.db-wal ] && mv /app/data/hub.db-wal "${BAK}-wal"
+  [ -f /app/data/hub.db-shm ] && mv /app/data/hub.db-shm "${BAK}-shm"
+  clean_db_sidecars
   cp /app/db-template/hub.db /app/data/hub.db
   echo "$TEMPLATE_VER" > /app/data/.schema-version
 fi
