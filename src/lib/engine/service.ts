@@ -4,12 +4,20 @@
 import { db } from '@/lib/db'
 import { SEED_SOURCES, DEFAULT_SETTINGS } from './seed'
 import { fetchSource, FetchSourceCfg, CACHE_DIR, EXPORTS_DIR, DATA_DIR } from './fetcher'
-import { mergeSources, renderFinalFile, hashRule, conflictKey, findConflictingDuplicates, dedupeConflicting, SourceRules, DedupPolicy } from './build'
+import {
+  mergeSources, renderFinalFile, hashRule, conflictKey, findConflictingDuplicates, dedupeConflicting,
+  sanitizeSciriusCompat, findSciriusSidConflicts, renderPerSourceFiles, SourceRules, DedupPolicy, BuildStats, BuiltRule,
+} from './build'
 import { saveExportFile, pushToClearndr, ClearndrExportCfg } from './exporter'
 import { SidMapper, remapToClearndrBlock } from './sidmap'
 import { promises as fs } from 'fs'
 import path from 'path'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
+import { createHash } from 'crypto'
 import cron from 'node-cron'
+
+const execFileP = promisify(execFile)
 
 export async function log(level: string, scope: string, message: string, detail?: unknown) {
   try {
@@ -145,6 +153,15 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     if (!extra.oinkcode && settings.oinkcode) extra.oinkcode = settings.oinkcode
     cfg.extraJson = JSON.stringify(extra)
   }
+  // подстановка глобального Auth-Key abuse.ch (ThreatFox/URLhaus и др.)
+  if (src.authType === 'authkey') {
+    let extra: Record<string, unknown> = {}
+    try {
+      extra = src.extraJson ? JSON.parse(src.extraJson) : {}
+    } catch { /* ignore */ }
+    if (!extra.authKey && settings.abusechAuthKey) extra.authKey = settings.abusechAuthKey
+    cfg.extraJson = JSON.stringify(extra)
+  }
 
   const t0 = Date.now()
   const res = await fetchSource(cfg)
@@ -263,15 +280,6 @@ export async function buildFinal(origin = 'manual'): Promise<{
 
   const { rules: merged, stats } = mergeSources(srcRules, policy)
 
-  // Политика SID: всё, что вне свободного clearndr-блока 1e9..1.1e9, переносится
-  // детерминированно (карта общая с python-конвейером, data/sidmap.json).
-  // Гейт: при дубликатах или выходе за блок сборка падает — плохой файл не пишется.
-  const mapper = new SidMapper()
-  await mapper.load()
-  const remap = remapToClearndrBlock(merged, mapper)
-  await mapper.save()
-  stats.renumbered = remap.renumbered
-
   // Гейт Clear NDR: правила-близнецы (совпадают после снятия sid/reference:*)
   // роняют импорт с «conflicting SID in same source». Убираем их ВСЕГДА,
   // независимо от настроек, и не пишем файл, если конфликтные пары остались.
@@ -284,8 +292,39 @@ export async function buildFinal(origin = 'manual'): Promise<{
     await log('error', 'build', `Сборка прервана: ${conflicting.length} конфликтных дубликатов (${sample}); файл не записан`)
     return { ok: false, error: `конфликтные дубликаты содержимого: ${conflicting.length}` }
   }
+  stats.uniqueSids = rules.length
 
-  const content = renderFinalFile(rules, {
+  // Гейт Clear NDR №2: наивный парсер scirius берёт ПЕРВОЕ совпадение
+  // "sid *: *(\d+)" в строке — контент вида content:"clsid:33…" роняет импорт
+  // с «conflicting SID (33) in same source». Переносим настоящий sid в начало
+  // опций проблемных правил (ДО перенумерации: remap тоже заменяет первое
+  // вхождение sid — после санитайза это гарантированно настоящий sid).
+  const sanitized = sanitizeSciriusCompat(rules)
+  if (sanitized.failed.length > 0) {
+    const sample = sanitized.failed.slice(0, 3).map((f) => `sid ${f.sid}`).join(', ')
+    await log('error', 'build', `Сборка прервана: ${sanitized.failed.length} правил не удалось привести к формату парсера Clear NDR (${sample}); файл не записан`, sanitized.failed[0])
+    return { ok: false, error: `правила, несовместимые с парсером Clear NDR: ${sanitized.failed.length}` }
+  }
+  stats.sanitizedForScirius = sanitized.rewritten
+
+  // Политика SID: всё, что вне свободного clearndr-блока 1e9..1.1e9, переносится
+  // детерминированно (карта общая с python-конвейером, data/sidmap.json).
+  // Гейт: при дубликатах или выходе за блок сборка падает — плохой файл не пишется.
+  const mapper = new SidMapper()
+  await mapper.load()
+  const remap = remapToClearndrBlock(sanitized.rules, mapper)
+  await mapper.save()
+  stats.renumbered = remap.renumbered
+
+  // Финальная проверка глазами scirius: уникальность «видимых» SID всего набора
+  const sidConflicts = findSciriusSidConflicts(sanitized.rules)
+  if (sidConflicts.size > 0) {
+    const sample = [...sidConflicts.entries()].slice(0, 5).map(([sid, n]) => `sid ${sid} ×${n}`).join(', ')
+    await log('error', 'build', `Сборка прервана: парсер Clear NDR увидит дубликаты SID (${sample}); файл не записан`)
+    return { ok: false, error: `видимые парсеру Clear NDR дубликаты SID: ${sidConflicts.size}` }
+  }
+
+  const content = renderFinalFile(sanitized.rules, {
     sources: sources.map((s) => s.name),
     stats,
   })
@@ -293,9 +332,20 @@ export async function buildFinal(origin = 'manual'): Promise<{
   const { filePath, sizeBytes } = await saveExportFile(fileName, content)
   const sha256 = (await import('crypto')).createHash('sha256').update(content).digest('hex')
 
+  // Вариант сохранения: tgz-архив, правила разбиты по файлам-источникам.
+  // Такой архив импортируется в Clear NDR как источник с datatype "sigs":
+  // каждый <источник>.rules становится отдельной категорией.
+  if (settings.buildFormat === 'file+tgz') {
+    try {
+      stats.archive = await buildPerSourceArchive(sanitized.rules, fileName, stats)
+    } catch (e) {
+      await log('warn', 'build', `Архив по источникам не создан: ${(e as Error).message}`)
+    }
+  }
+
   const build = await db.build.create({
     data: {
-      totalRules: rules.length,
+      totalRules: sanitized.rules.length,
       statsJson: JSON.stringify(stats),
       policyJson: JSON.stringify(policy),
       fileName,
@@ -305,8 +355,47 @@ export async function buildFinal(origin = 'manual'): Promise<{
       source: origin,
     },
   })
-  await log('success', 'build', `Собран итоговый набор: ${rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}`)
-  return { ok: true, buildId: build.id, total: rules.length, fileName }
+  const archiveNote = stats.archive ? `; архив по источникам: ${stats.archive.fileName} (${stats.archive.files.length} файл(ов), ${(stats.archive.sizeBytes / 1e6).toFixed(1)} МБ)` : ''
+  await log('success', 'build', `Собран итоговый набор: ${sanitized.rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}; адаптировано под парсер Clear NDR: ${sanitized.rewritten}${archiveNote}`)
+  return { ok: true, buildId: build.id, total: sanitized.rules.length, fileName }
+}
+
+/** Собрать tgz-архив: один .rules-файл на каждый источник + README.txt */
+async function buildPerSourceArchive(
+  rules: BuiltRule[],
+  baseFileName: string,
+  stats: BuildStats
+): Promise<BuildStats['archive']> {
+  const perSource = renderPerSourceFiles(rules)
+  if (perSource.length === 0) throw new Error('нет правил для архива')
+  const base = baseFileName.replace(/\.rules$/i, '')
+  const archiveName = `${base}.tgz`
+  const archivePath = path.join(EXPORTS_DIR, archiveName)
+
+  const tmpDir = await fs.mkdtemp(path.join(EXPORTS_DIR, '.pack-'))
+  try {
+    const files: Array<{ name: string; rules: number; sha256: string }> = []
+    for (const f of perSource) {
+      await fs.writeFile(path.join(tmpDir, f.name), f.content)
+      files.push({ name: f.name, rules: f.rules, sha256: createHash('sha256').update(f.content).digest('hex') })
+    }
+    const readme = [
+      '# NDR Rules Hub — итоговый набор, разбитый по источникам',
+      `# Сгенерировано: ${new Date().toISOString()}`,
+      `# Всего правил: ${rules.length}; файлов: ${perSource.length}`,
+      `# Импорт в Clear NDR: Sources → ваш источник (datatype "sigs") → Upload → этот архив;`,
+      '# каждый <имя-источника>.rules станет отдельной категорией.',
+      '#',
+      ...files.map((f) => `# ${f.name}: ${f.rules} правил, sha256=${f.sha256}`),
+    ].join('\n') + '\n'
+    await fs.writeFile(path.join(tmpDir, 'README.txt'), readme)
+    await fs.mkdir(EXPORTS_DIR, { recursive: true })
+    await execFileP('tar', ['-czf', archivePath, '-C', tmpDir, ...files.map((f) => f.name), 'README.txt'], { timeout: 300_000 })
+    const st = await fs.stat(archivePath)
+    return { fileName: archiveName, filePath: archivePath, sizeBytes: st.size, files }
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  }
 }
 
 /** Экспорт последней сборки в Clear NDR */

@@ -8,12 +8,23 @@ import { apiError } from '@/lib/api-error'
 
 export const dynamic = 'force-dynamic'
 
-/** GET /api/export — скачать последний итоговый файл */
-export async function GET() {
+/** GET /api/export — скачать последний итоговый файл; ?archive=1 — tgz-архив по источникам */
+export async function GET(req: NextRequest) {
   try {
     const build = await db.build.findFirst({ orderBy: { createdAt: 'desc' } })
     if (!build) return NextResponse.json({ error: 'нет сборок' }, { status: 404 })
     try {
+      if (req.nextUrl.searchParams.get('archive')) {
+        const stats = JSON.parse(build.statsJson || '{}') as { archive?: { filePath: string; fileName: string } }
+        if (!stats.archive) return NextResponse.json({ error: 'в этой сборке нет архива — включите «Формат сборки: файл + tgz» в настройках и пересоберите' }, { status: 404 })
+        const content = await fs.readFile(stats.archive.filePath)
+        return new NextResponse(new Uint8Array(content), {
+          headers: {
+            'Content-Type': 'application/gzip',
+            'Content-Disposition': `attachment; filename="${stats.archive.fileName}"`,
+          },
+        })
+      }
       const content = await fs.readFile(build.filePath)
       return new NextResponse(new Uint8Array(content), {
         headers: {

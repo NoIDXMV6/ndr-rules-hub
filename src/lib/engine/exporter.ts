@@ -173,7 +173,7 @@ async function pushToClearndrRest(
   if (!uploadRes.ok) {
     const text = (await uploadRes.text().catch(() => '')).slice(0, 300)
     if (/conflicting SID|Duplicate sids/i.test(text)) {
-      return { ok: false, error: `Clear NDR отклонил файл: конфликт SID (${text}). Включите дедупликацию в настройках сборки` }
+      return { ok: false, error: `Clear NDR отклонил файл: конфликт SID (${text}). Обновите хаб до последней версии (авто-санитайзер наивного парсера scirius: sid переносится в начало опций) и пересоберите набор; при повторении — включите дедупликацию в настройках сборки` }
     }
     return { ok: false, error: `Clear NDR: загрузка файла отклонена — ${describeStatus(uploadRes.status)}: ${text}` }
   }

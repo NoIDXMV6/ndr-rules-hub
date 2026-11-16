@@ -67,6 +67,9 @@ export interface BuildStats {
   duplicateByContent: number
   incompatibleDropped: number
   renumbered: number
+  conflictingRemoved?: number
+  sanitizedForScirius?: number
+  archive?: { fileName: string; filePath: string; sizeBytes: number; files: Array<{ name: string; rules: number; sha256: string }> }
   perSource: Record<string, { total: number; kept: number; droppedSid: number; droppedContent: number; droppedCompat: number }>
 }
 

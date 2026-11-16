@@ -213,6 +213,7 @@ export const ru = {
     bySchedule: 'по расписанию',
     manual: 'вручную',
     download: 'Скачать',
+    downloadArchive: 'Скачать tgz (по источникам)',
     statInput: 'Правил на входе',
     statDupSid: 'Дубликатов SID',
     statDupContent: 'Дубликатов содержимого',
@@ -402,6 +403,12 @@ PersistentKeepalive = 25
   },
 
   settings: {
+    abusechTitle: 'abuse.ch — Auth-Key (ThreatFox, URLhaus)',
+    abusechDesc: 'С 10.2026 выгрузки abuse.ch отдаются только с бесплатным ключом. Ключ подставляется в URL выгрузок ThreatFox и URLhaus автоматически.',
+    abusechKey: 'Auth-Key',
+    abusechPlaceholder: 'ключ из abuse.ch Authentication Portal',
+    abusechHelp:
+      'Как получить ключ (бесплатно):\n1) откройте https://auth.abuse.ch/ и зарегистрируйтесь / войдите;\n2) в личном кабинете создайте Auth-Key (раздел Auth Keys / Create Key);\n3) вставьте ключ сюда и сохраните настройки;\n4) включите источники ThreatFox и URLhaus и нажмите «Обновить».\nБез ключа сервер отвечает HTTP 401/410. Ключ используется как сегмент пути выгрузки /v2/files/exports/<ключ>/файл и не логируется.',
     snortTitle: 'snort.org — доступ к зарегистрированным правилам',
     snortDesc: 'Достаточно Oinkcode — это официальный способ автоматизации. Вводить логин/пароль не требуется.',
     oinkcode: 'Oinkcode',
@@ -421,6 +428,11 @@ PersistentKeepalive = 25
     switchDropIncompatible: 'Убирать правила, несовместимые с Suricata (preproc, keystore и др.)',
     switchDropDisabled: 'Удалять заглушки DELETED/DISABLED',
     buildFileName: 'Имя итогового файла',
+    buildFormat: 'Формат сохранения сборки',
+    buildFormatFile: 'один файл .rules (как раньше)',
+    buildFormatBoth: '.rules + tgz-архив (правила разбиты по источникам)',
+    buildFormatHelp:
+      'В архиве каждый источник — отдельный .rules-файл + README.txt. Импорт в Clear NDR: источники с типом данных «sigs» принимают tar.gz — каждый файл станет отдельной категорией, удобно включать/выключать по источникам.',
     exportTitle: 'Экспорт в Clear NDR',
     exportDesc: 'Как передавать итоговый файл: вручную из файла, через REST API Clear NDR, HTTP-загрузкой или копированием в каталог. Подробная инструкция — docs/clearndr-integration.md',
     mode: 'Режим',

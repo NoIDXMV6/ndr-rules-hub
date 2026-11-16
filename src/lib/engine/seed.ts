@@ -187,22 +187,33 @@ export const SEED_SOURCES: SeedSource[] = [
     name: 'Abuse.ch Suricata JA3 Fingerprint Ruleset',
     category: 'ruleset',
     kind: 'url',
-    url: 'https://sslbl.abuse.ch/ja3_fingerprints/JA3suricata.rules',
-    enabled: false,
+    url: 'https://sslbl.abuse.ch/blacklist/ja3_fingerprints.rules',
+    enabled: true,
     priority: 61,
-    badge: 'unavailable',
-    notes: 'abuse.ch закрыл отдельную JA3-выгрузку (404). Содержимое перенесено в SSL Blacklist (см. выше).',
+    badge: 'recommended',
+    notes: 'Алерты по JA3-отпечаткам вредоносных TLS-клиентов (C&C, adware). Новый URL после реорганизации sslbl.abuse.ch (старый /ja3_fingerprints/JA3suricata.rules отдал 404). Не пересекается с SSL Blacklist выше: там — сертификаты, здесь — JA3-отпечатки клиентов.',
   },
   {
     name: 'Threatfox Indicators of Compromise',
     category: 'ruleset',
     kind: 'url',
-    url: 'https://threatfox.abuse.ch/downloads/threatfox_suricata.rules',
+    url: 'https://threatfox-api.abuse.ch/v2/files/exports/%%AUTHKEY%%/threatfox_suricata.rules',
     authType: 'authkey',
     enabled: false,
     priority: 62,
     badge: 'unavailable',
-    notes: 'Прямая выгрузка закрыта (HTTP 410). С 10.2026 ThreatFox требует бесплатный Auth-Key для API (threatfox.abuse.ch/api/) — ключ задаётся в настройках источника.',
+    notes: 'Прямая выгрузка закрыта (HTTP 410): с 10.2026 abuse.ch требует бесплатный Auth-Key (сегмент пути выгрузки, подставляется вместо %%AUTHKEY%%). Ключ задаётся один раз в «Настройки → abuse.ch Auth-Key»: зарегистрируйтесь на auth.abuse.ch → создайте ключ → включите источник.',
+  },
+  {
+    name: 'Abuse.ch URLhaus IDS Ruleset (malicious URLs)',
+    category: 'ruleset',
+    kind: 'url',
+    url: 'https://urlhaus-api.abuse.ch/v2/files/exports/%%AUTHKEY%%/urlhaus_ids.rules',
+    authType: 'authkey',
+    enabled: false,
+    priority: 66,
+    badge: 'new',
+    notes: 'Suricata-правила по URL распространения малвари из URLhaus (срабатывание на точный URL в HTTP-запросе). Требует тот же бесплатный Auth-Key abuse.ch, что и ThreatFox (настройки → abuse.ch Auth-Key).',
   },
   {
     name: 'Feodo Tracker Botnet C2 (rules)',
@@ -247,7 +258,7 @@ export const SEED_SOURCES: SeedSource[] = [
     enabled: false,
     priority: 121,
     badge: 'new',
-    notes: 'Французский набор IDPS/NSM (~21 500 правил: подозрительные потоки, угрозы, IOC групп, боковое движение, shadow IT), обновляется часто. CC-BY-SA-4.0. Найдено через индекс EveBox Rules.',
+    notes: 'Французский набор IDPS/NSM (~21 500 правил: подозрительные потоки, угрозы, IOC групп, боковое движение, shadow IT), обновляется часто. CC-BY-SA-4.0. Найдено через индекс EveBox Rules. URL подтверждён официальным README (woundride/pawpatrules); сервер rules.pawpatrules.fr периодически не отвечает — просто повторите «Обновить» позже (после первой удачной загрузки работает кэш-фолбэк).',
   },
   {
     name: 'The Hunters Ledger (MITRE-детекты)',
@@ -411,12 +422,14 @@ export const SEED_SOURCES: SeedSource[] = [
 
 export const DEFAULT_SETTINGS: Record<string, string> = {
   oinkcode: process.env.OINKCODE || '',
+  abusechAuthKey: process.env.ABUSECH_AUTH_KEY || '', // Auth-Key abuse.ch (ThreatFox/URLhaus, сегмент пути выгрузки)
   dedupSidStrategy: 'highest-rev', // highest-rev | source-priority | renumber-private
   dedupContent: 'true',
   dropIncompatible: 'true',
   dropDisabledMsg: 'true',
   privateSidStart: '1000000',
   buildFileName: 'clearndr-import.rules',
+  buildFormat: 'file', // file | file+tgz (файл + архив с правилами по источникам)
   clearndrExportMode: 'file', // file | clearndr | http | local-path | disabled
   clearndrExportUrl: '', // clearndr: базовый URL (например https://clearndr.local); http: полный адрес POST-эндпоинта
   clearndrExportToken: '', // API-токен Scirius (Clear NDR → меню пользователя → Edit Token)

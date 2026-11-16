@@ -216,6 +216,7 @@ export const en: Dictionary = {
     bySchedule: 'by schedule',
     manual: 'manual',
     download: 'Download',
+    downloadArchive: 'Download tgz (per source)',
     statInput: 'Input rules',
     statDupSid: 'SID duplicates',
     statDupContent: 'Content duplicates',
@@ -405,6 +406,12 @@ PersistentKeepalive = 25
   },
 
   settings: {
+    abusechTitle: 'abuse.ch — Auth-Key (ThreatFox, URLhaus)',
+    abusechDesc: 'Since 10/2026 abuse.ch exports require a free Auth-Key. The key is substituted into ThreatFox and URLhaus download URLs automatically.',
+    abusechKey: 'Auth-Key',
+    abusechPlaceholder: 'key from the abuse.ch Authentication Portal',
+    abusechHelp:
+      'How to get a free key:\n1) open https://auth.abuse.ch/ and register / sign in;\n2) create an Auth-Key in your account (Auth Keys / Create Key);\n3) paste the key here and save settings;\n4) enable the ThreatFox and URLhaus sources and press Refresh.\nWithout the key the server answers HTTP 401/410. The key is used as a URL path segment /v2/files/exports/<key>/file and is never logged.',
     snortTitle: 'snort.org — access to registered rules',
     snortDesc: 'Oinkcode is enough — it is the official automation method. No login/password required.',
     oinkcode: 'Oinkcode',
@@ -424,6 +431,11 @@ PersistentKeepalive = 25
     switchDropIncompatible: 'Drop rules incompatible with Suricata (preproc, keystore, etc.)',
     switchDropDisabled: 'Remove DELETED/DISABLED stubs',
     buildFileName: 'Final file name',
+    buildFormat: 'Build output format',
+    buildFormatFile: 'single .rules file (as before)',
+    buildFormatBoth: '.rules + tgz archive (rules split per source)',
+    buildFormatHelp:
+      'The archive contains one .rules file per source plus README.txt. Clear NDR import: sources with datatype "sigs" accept tar.gz — each file becomes a separate category, easy to toggle per source.',
     exportTitle: 'Export to Clear NDR',
     exportDesc: 'How to deliver the final file: manual download, Clear NDR REST API, HTTP upload, or copying to a directory. Full guide — docs/clearndr-integration.en.md',
     mode: 'Mode',

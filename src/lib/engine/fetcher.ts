@@ -77,10 +77,25 @@ export function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): st
     }
   }
   if (cfg.authType === 'authkey' && extra.authKey) {
-    const sep = url.includes('?') ? '&' : '?'
-    return `${url}${sep}auth-key=${extra.authKey}`
+    const key = extra.authKey.trim()
+    if (key) {
+      // abuse.ch (ThreatFox/URLhaus, с 10.2026): ключ — сегмент пути выгрузки,
+      // в seed-URL он помечен плейсхолдером %%AUTHKEY%%:
+      //   https://threatfox-api.abuse.ch/v2/files/exports/%%AUTHKEY%%/threatfox_suricata.rules
+      if (url.includes('%%AUTHKEY%%')) return url.replaceAll('%%AUTHKEY%%', key)
+      // прочие провайдеры — ключ в query (обратная совместимость)
+      const sep = url.includes('?') ? '&' : '?'
+      return `${url}${sep}auth-key=${key}`
+    }
   }
   return url
+}
+
+/** Скрыть Auth-Key в URL перед логированием (ключ — сегмент пути у abuse.ch v2) */
+export function maskAuthKey(url: string): string {
+  return url
+    .replace(/\/v2\/files\/exports\/([^/]+)\//i, '/v2/files/exports/***/')
+    .replace(/([?&]auth-key=)[^&]+/i, '$1***')
 }
 
 /** У настоящего tar.gz первые два байта — 0x1f 0x8b (magic gzip) */
@@ -357,7 +372,23 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
     }
     return { ok: true, rules: parseRuleText(text), sizeBytes: text.length }
   } catch (e) {
-    return { ok: false, error: `ошибка загрузки: ${(e as Error).message}`, rules: [], sizeBytes: 0 }
+    const err = e as Error & { cause?: { code?: string; message?: string } }
+    let msg = err.message || 'ошибка загрузки'
+    // Node fetch сводит все сетевые сбои к «fetch failed»; причина — в cause.code
+    if (/fetch failed/i.test(msg)) {
+      const code = err.cause?.code ?? ''
+      const cause = err.cause?.message ?? ''
+      msg = `сервер источника недоступен (fetch failed${code ? `, причина: ${code}` : ''}${cause ? ` — ${cause}` : ''})`
+      if (code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'UND_ERR_SOCKET' || /timeout|ETIMEDOUT|ECONNRESET/i.test(`${code} ${cause}`)) {
+        msg += ' — TCP-соединение не получило ответа: сервер источника перегружен/временно лежит; повторите «Обновить» позже. Для tarball-источников после первой удачной загрузки работает кэш-фолбэк'
+      } else if (/ENOTFOUND|EAI_AGAIN/i.test(`${code} ${cause}`)) {
+        msg += ' — домен не резолвится: проверьте URL источника и DNS'
+      } else if (/CERT|TLS|SSL/i.test(`${code} ${cause}`)) {
+        msg += ' — ошибка TLS-рукопожатия: сертификат сервера недействителен или цепочка неполна'
+      }
+      msg += `; URL: ${maskAuthKey(cfg.url ?? '')}`
+    }
+    return { ok: false, error: msg, rules: [], sizeBytes: 0 }
   }
 }
 

@@ -92,12 +92,22 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
                 <Badge variant="outline" className="border-input text-foreground">{tr(t.build.badgeRules, { n: b.totalRules.toLocaleString(loc) })}</Badge>
                 <Badge variant="outline" className="border-input text-foreground">{fmtSize(b.sizeBytes, lang)}</Badge>
                 <Badge variant="outline" className="border-input text-foreground">{b.fileName}</Badge>
+                {b.stats?.archive ? (
+                  <Badge variant="outline" className="border-input text-foreground"><FileArchive className="h-3 w-3 mr-1 inline" />{b.stats.archive.fileName}</Badge>
+                ) : null}
                 <Badge variant="outline" className={b.source === 'cron' ? 'border-sky-700 text-sky-700' : 'border-input text-muted-foreground'}>{b.source === 'cron' ? t.build.bySchedule : t.build.manual}</Badge>
                 <a href="/api/export" download className="ml-auto">
                   <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">
                     <Download className="h-4 w-4 mr-1.5" /> {t.build.download}
                   </Button>
                 </a>
+                {b.stats?.archive ? (
+                  <a href="/api/export?archive=1" download>
+                    <Button size="sm" variant="outline" className="border-input text-foreground">
+                      <FileArchive className="h-4 w-4 mr-1.5" /> {t.build.downloadArchive}
+                    </Button>
+                  </a>
+                ) : null}
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                 <MiniStat label={t.build.statInput} value={b.stats.totalInputRules?.toLocaleString(loc) ?? '—'} />

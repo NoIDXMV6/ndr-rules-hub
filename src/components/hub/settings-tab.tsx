@@ -69,6 +69,28 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
 
       <Card className="bg-card border-border">
         <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t.settings.abusechTitle}</CardTitle>
+          <CardDescription>{t.settings.abusechDesc}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="max-w-xl">
+            <Label className="text-foreground">{t.settings.abusechKey}</Label>
+            <Input
+              type="password"
+              value={s.abusechAuthKey ?? ''}
+              onChange={(e) => set('abusechAuthKey', e.target.value.trim())}
+              className="bg-card border-input font-mono"
+              placeholder={t.settings.abusechPlaceholder}
+            />
+            <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">
+              {t.settings.abusechHelp}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-card border-border">
+        <CardHeader className="pb-2">
           <CardTitle className="text-base">{t.settings.dedupTitle}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -106,6 +128,19 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
           <div className="max-w-sm">
             <Label className="text-foreground">{t.settings.buildFileName}</Label>
             <Input value={s.buildFileName ?? ''} onChange={(e) => set('buildFileName', e.target.value)} className="bg-card border-input" />
+          </div>
+          <div className="max-w-xl">
+            <Label className="text-foreground">{t.settings.buildFormat}</Label>
+            <Select value={s.buildFormat ?? 'file'} onValueChange={(v) => set('buildFormat', v)}>
+              <SelectTrigger className="bg-card border-input"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                <SelectItem value="file">{t.settings.buildFormatFile}</SelectItem>
+                <SelectItem value="file+tgz">{t.settings.buildFormatBoth}</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">
+              {t.settings.buildFormatHelp}
+            </p>
           </div>
         </CardContent>
       </Card>

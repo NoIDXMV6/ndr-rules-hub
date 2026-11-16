@@ -91,3 +91,37 @@ describe('fetcher: notArchiveError', () => {
     expect(msg).not.toContain('oinkcode')
   })
 })
+
+describe('fetcher: applyAuth — Auth-Key abuse.ch (v2, сегмент пути)', () => {
+  const authCfg: FetchSourceCfg = { id: 'x', name: 'x', category: 'ruleset', kind: 'url', url: 'u', authType: 'authkey', format: 'auto' }
+  const keyExtra = (): ExtraCfg => ({ authKey: 'ABUSECH-KEY-123' })
+
+  it('плейсхолдер %%AUTHKEY%% подставляется в сегмент пути (ThreatFox)', () => {
+    const url = applyAuth('https://threatfox-api.abuse.ch/v2/files/exports/%%AUTHKEY%%/threatfox_suricata.rules', authCfg, keyExtra())
+    expect(url).toBe('https://threatfox-api.abuse.ch/v2/files/exports/ABUSECH-KEY-123/threatfox_suricata.rules')
+  })
+  it('плейсхолдер %%AUTHKEY%% подставляется (URLhaus)', () => {
+    const url = applyAuth('https://urlhaus-api.abuse.ch/v2/files/exports/%%AUTHKEY%%/urlhaus_ids.rules', authCfg, keyExtra())
+    expect(url).toBe('https://urlhaus-api.abuse.ch/v2/files/exports/ABUSECH-KEY-123/urlhaus_ids.rules')
+  })
+  it('без плейсхолдера — ключ в query (обратная совместимость)', () => {
+    const url = applyAuth('https://example.com/feed.rules', authCfg, keyExtra())
+    expect(url).toBe('https://example.com/feed.rules?auth-key=ABUSECH-KEY-123')
+    const url2 = applyAuth('https://example.com/feed.rules?a=1', authCfg, keyExtra())
+    expect(url2).toBe('https://example.com/feed.rules?a=1&auth-key=ABUSECH-KEY-123')
+  })
+  it('пустой ключ — URL не меняется (плейсхолдер остаётся видимым)', () => {
+    const url = applyAuth('https://threatfox-api.abuse.ch/v2/files/exports/%%AUTHKEY%%/threatfox_suricata.rules', authCfg, {})
+    expect(url).toContain('%%AUTHKEY%%')
+  })
+})
+
+describe('fetcher: maskAuthKey — ключ не утекает в логи', () => {
+  it('маскирует ключ в сегменте пути v2 и в query', async () => {
+    const { maskAuthKey } = await import('@/lib/engine/fetcher')
+    expect(maskAuthKey('https://threatfox-api.abuse.ch/v2/files/exports/SECRETKEY1/threatfox_suricata.rules'))
+      .toBe('https://threatfox-api.abuse.ch/v2/files/exports/***/threatfox_suricata.rules')
+    expect(maskAuthKey('https://example.com/feed.rules?auth-key=SECRETKEY2'))
+      .toBe('https://example.com/feed.rules?auth-key=***')
+  })
+})
