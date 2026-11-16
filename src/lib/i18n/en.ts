@@ -43,6 +43,14 @@ export const en: Dictionary = {
     about: 'About',
   },
 
+  menu: {
+    aria: 'Main menu',
+    catalog: 'Rules Catalog',
+    integrations: 'Integrations',
+    admin: 'Administration',
+    help: 'Help',
+  },
+
   footer: {
     tagline: 'NDR Rules Hub — merging, deduplication and export of Snort/Suricata rule sets',
     developer: 'Developer:',

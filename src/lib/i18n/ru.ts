@@ -40,6 +40,14 @@ export const ru = {
     about: 'О системе',
   },
 
+  menu: {
+    aria: 'Главное меню',
+    catalog: 'Каталог правил',
+    integrations: 'Интеграции',
+    admin: 'Администрирование',
+    help: 'Справка',
+  },
+
   footer: {
     tagline: 'NDR Rules Hub — объединение, дедупликация и экспорт наборов правил Snort/Suricata',
     developer: 'Разработчик:',

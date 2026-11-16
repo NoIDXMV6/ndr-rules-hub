@@ -112,13 +112,26 @@ describe('паритет словарей ru/en', () => {
   })
 
   it('словарь содержит все вкладки и ключевые блоки', () => {
-    for (const ns of ['meta', 'header', 'tabs', 'footer', 'messages', 'overview', 'sources', 'rules', 'build', 'vpn', 'settings', 'logs', 'help', 'about']) {
+    for (const ns of ['meta', 'header', 'tabs', 'menu', 'footer', 'messages', 'overview', 'sources', 'rules', 'build', 'vpn', 'settings', 'logs', 'help', 'about']) {
       expect(ruFlat.has(ns) || [...ruFlat.keys()].some((k) => k.startsWith(`${ns}.`)), ns).toBe(true)
     }
     expect(ruFlat.get('tabs.help')).toBe('Помощь')
     expect(enFlat.get('tabs.help')).toBe('Help')
     expect(ruFlat.get('tabs.about')).toBe('О системе')
     expect(enFlat.get('tabs.about')).toBe('About')
+  })
+
+  it('меню: все группы функционала локализованы в обоих словарях', () => {
+    // 4 группы + aria-подпись навигации; прямые пункты (Обзор, Сборка и экспорт) берут tabs.*
+    const groups = ['menu.aria', 'menu.catalog', 'menu.integrations', 'menu.admin', 'menu.help']
+    for (const k of groups) {
+      expect(ruFlat.has(k), `нет ключа ru.${k}`).toBe(true)
+      expect(enFlat.has(k), `нет ключа en.${k}`).toBe(true)
+    }
+    // группа каталога покрывает три вкладки контента, интеграции — две + VPN, админ — настройки/журнал/пользователи
+    expect(ruFlat.get('menu.catalog')).toContain('правил')
+    expect(ruFlat.get('menu.admin')).toBe('Администрирование')
+    expect(enFlat.get('menu.admin')).toBe('Administration')
   })
 })
 

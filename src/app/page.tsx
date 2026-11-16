@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { SourcesTab } from '@/components/hub/sources-tab'
 import { CategoriesTab } from '@/components/hub/categories-tab'
 import { RulesTab } from '@/components/hub/rules-tab'
@@ -19,10 +20,13 @@ import { HelpTab } from '@/components/hub/help-tab'
 import { AboutTab } from '@/components/hub/about-tab'
 import { AuthScreen } from '@/components/hub/auth-screen'
 import { api, Dashboard, fmtSize, fmtTime, type Me } from '@/components/hub/api'
-import { useI18n, type Lang } from '@/lib/i18n'
-import { editionLabel } from '@/lib/edition'
+import { useI18n, type Dictionary, type Lang } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import {
-  Activity, Database, Download, Globe, Layers, LogOut, RefreshCw, Wifi,
+  Activity, Blocks, ChartColumn, Check, ChevronDown, CircleHelp, Database,
+  Download, FolderTree, Globe, Info, Layers, LayoutDashboard, Library,
+  LifeBuoy, LogOut, Network, Package, RefreshCw, ScrollText, Settings,
+  Shield, Users, Wifi, Wrench,
 } from 'lucide-react'
 
 type Role = 'admin' | 'user' | 'anon'
@@ -34,6 +38,8 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
+  // Активная вкладка управляется меню-баром (прямые кнопки + drop-down группы)
+  const [tab, setTab] = useState('overview')
 
   const refresh = useCallback(async () => {
     try {
@@ -64,6 +70,20 @@ export default function Home() {
     const t = setInterval(() => void refresh(), 20000)
     return () => clearInterval(t)
   }, [refresh])
+
+  // Смена пользователя/роли (вход, выход, верификация) может закрыть часть вкладок —
+  // если активная вкладка стала недоступной, возвращаемся к «Обзору».
+  useEffect(() => {
+    const admin = !me?.multiUser || me.user?.role === 'admin'
+    const allowed = new Set(['overview', 'sources', 'categories', 'rules', 'build', 'update', 'osd', 'help', 'about'])
+    if (admin) {
+      allowed.add('vpn')
+      allowed.add('settings')
+      allowed.add('logs')
+      if (me?.multiUser) allowed.add('users')
+    }
+    if (!allowed.has(tab)) setTab('overview')
+  }, [tab, me])
 
   const runCycle = async () => {
     setBusy('cycle')
@@ -97,7 +117,7 @@ export default function Home() {
 
   // Enterprise: не верифицирован / не вошёл — экран входа и ожидания верификации
   if (me.multiUser && (!me.authenticated || me.user?.status === 'pending')) {
-    return <AuthScreen me={me} onAuthed={() => void refreshMe()} />
+    return <AuthScreen me={me} onAuthed={() => { void refreshMe(); void refresh() }} />
   }
 
   // Роль: в Community — полные права без аутентификации (как раньше)
@@ -115,7 +135,8 @@ export default function Home() {
               <h1 className="text-lg font-bold leading-tight">NDR Rules Hub</h1>
               <p className="text-xs text-muted-foreground leading-tight">{t.header.subtitle}</p>
             </div>
-            <Badge variant="outline" className="border-input text-muted-foreground hidden sm:inline-flex">{tr(t.header.editionBadge, { ed: editionLabel() })}</Badge>
+            {/* редакция приходит от API (/api/auth/me): клиентский process.env.NDR_EDITION не виден в браузере */}
+            <Badge variant="outline" className="border-input text-muted-foreground hidden sm:inline-flex">{tr(t.header.editionBadge, { ed: me.edition === 'enterprise' ? 'Enterprise' : 'Community' })}</Badge>
           </div>
           <div className="ml-auto flex items-center gap-2 flex-wrap">
             {data && isAdmin && (
@@ -161,30 +182,8 @@ export default function Home() {
       </header>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
-        <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="bg-card border border-border flex-wrap h-auto gap-1 p-1">
-            <TabsTrigger value="overview" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.overview}</TabsTrigger>
-            <TabsTrigger value="sources" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.sources}</TabsTrigger>
-            <TabsTrigger value="categories" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.categories}</TabsTrigger>
-            <TabsTrigger value="rules" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.rules}</TabsTrigger>
-            <TabsTrigger value="build" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.build}</TabsTrigger>
-            {isAdmin && (
-              <TabsTrigger value="vpn" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.vpn}</TabsTrigger>
-            )}
-            <TabsTrigger value="update" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.update}</TabsTrigger>
-            <TabsTrigger value="osd" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.osd}</TabsTrigger>
-            {isAdmin && (
-              <>
-                <TabsTrigger value="settings" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.settings}</TabsTrigger>
-                <TabsTrigger value="logs" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.logs}</TabsTrigger>
-              </>
-            )}
-            {showUsersTab && (
-              <TabsTrigger value="users" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.users}</TabsTrigger>
-            )}
-            <TabsTrigger value="help" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.help}</TabsTrigger>
-            <TabsTrigger value="about" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.about}</TabsTrigger>
-          </TabsList>
+        <Tabs value={tab} onValueChange={setTab} className="w-full">
+          <MenuBar value={tab} onValue={setTab} isAdmin={isAdmin} showUsers={showUsersTab} />
 
           <TabsContent value="overview" className="mt-4">
             <Overview data={data} onRefresh={refresh} role={role} />
@@ -249,6 +248,129 @@ export default function Home() {
         </div>
       </footer>
     </div>
+  )
+}
+
+/** Пункт меню: вкладка + подпись + иконка */
+type MenuItemDef = { value: string; label: string; icon: React.ReactNode }
+
+/** Группа меню: прямая кнопка-вкладка или drop-down с несколькими вкладками; grow — относительная ширина пункта (по длине подписи) */
+type MenuGroupDef =
+  | { kind: 'direct'; key: string; item: MenuItemDef; grow?: number }
+  | { kind: 'dropdown'; key: string; label: string; icon: React.ReactNode; items: MenuItemDef[]; grow?: number }
+
+/**
+ * Структура главного меню: пункты сгруппированы по типу функционала.
+ * Обзор и Сборка/экспорт — прямые кнопки (главный экран и главный рабочий процесс),
+ * остальное собрано в drop-down группы; видимость зависит от роли.
+ */
+function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean): MenuGroupDef[] {
+  const ico = (Icon: React.ComponentType<{ className?: string }>) => <Icon className="h-4 w-4 shrink-0 opacity-80" />
+
+  const integrations: MenuItemDef[] = [
+    { value: 'update', label: t.tabs.update, icon: ico(Download) },
+    { value: 'osd', label: t.tabs.osd, icon: ico(ChartColumn) },
+  ]
+  if (isAdmin) integrations.push({ value: 'vpn', label: t.tabs.vpn, icon: ico(Network) })
+
+  const groups: MenuGroupDef[] = [
+    { kind: 'direct', key: 'overview', item: { value: 'overview', label: t.tabs.overview, icon: ico(LayoutDashboard) } },
+    {
+      kind: 'dropdown',
+      key: 'catalog',
+      grow: 1.15,
+      label: t.menu.catalog,
+      icon: ico(Library),
+      items: [
+        { value: 'sources', label: t.tabs.sources, icon: ico(Globe) },
+        { value: 'categories', label: t.tabs.categories, icon: ico(FolderTree) },
+        { value: 'rules', label: t.tabs.rules, icon: ico(Shield) },
+      ],
+    },
+    { kind: 'direct', key: 'build', grow: 1.25, item: { value: 'build', label: t.tabs.build, icon: ico(Package) } },
+    { kind: 'dropdown', key: 'integrations', label: t.menu.integrations, icon: ico(Blocks), items: integrations },
+  ]
+
+  if (isAdmin) {
+    const adminItems: MenuItemDef[] = [
+      { value: 'settings', label: t.tabs.settings, icon: ico(Settings) },
+      { value: 'logs', label: t.tabs.logs, icon: ico(ScrollText) },
+    ]
+    if (showUsers) adminItems.push({ value: 'users', label: t.tabs.users, icon: ico(Users) })
+    groups.push({ kind: 'dropdown', key: 'admin', grow: 1.35, label: t.menu.admin, icon: ico(Wrench), items: adminItems })
+  }
+
+  groups.push({
+    kind: 'dropdown',
+    key: 'help',
+    label: t.menu.help,
+    icon: ico(LifeBuoy),
+    items: [
+      { value: 'help', label: t.tabs.help, icon: ico(CircleHelp) },
+      { value: 'about', label: t.tabs.about, icon: ico(Info) },
+    ],
+  })
+
+  return groups
+}
+
+/**
+ * Меню-бар вместо плоского списка вкладок: пункты распределены по всей ширине
+ * строки (flex-1), группы функционала раскрываются drop-down'ом. Группа, в которой
+ * лежит активная вкладка, подсвечена; конкретная вкладка отмечена галочкой в меню.
+ */
+function MenuBar({ value, onValue, isAdmin, showUsers }: { value: string; onValue: (v: string) => void; isAdmin: boolean; showUsers: boolean }) {
+  const { t } = useI18n()
+  const groups = buildMenu(t, isAdmin, showUsers)
+  const triggerCls =
+    'flex-1 basis-[7.5rem] min-w-0 h-9 inline-flex items-center justify-center gap-1.5 rounded-md px-2 text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50'
+  const activeCls = 'bg-primary text-primary-foreground shadow-sm'
+  const idleCls = 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
+
+  return (
+    <nav aria-label={t.menu.aria} className="bg-card border border-border rounded-lg p-1 flex flex-wrap gap-1">
+      {groups.map((g) =>
+        g.kind === 'direct' ? (
+          <button
+            key={g.key}
+            type="button"
+            style={{ flexGrow: g.grow ?? 1 }}
+            onClick={() => onValue(g.item.value)}
+            aria-current={value === g.item.value ? 'true' : undefined}
+            className={cn(triggerCls, value === g.item.value ? activeCls : idleCls)}
+          >
+            {g.item.icon}
+            <span className="truncate">{g.item.label}</span>
+          </button>
+        ) : (
+          <DropdownMenu key={g.key}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                style={{ flexGrow: g.grow ?? 1 }}
+                className={cn(triggerCls, g.items.some((i) => i.value === value) ? activeCls : idleCls)}
+              >
+                {g.icon}
+                <span className="truncate">{g.label}</span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-60 shrink-0" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="center" className="w-60">
+              {g.items.map((i) => {
+                const active = i.value === value
+                return (
+                  <DropdownMenuItem key={i.value} onSelect={() => onValue(i.value)} className={cn(active && 'bg-accent font-medium')}>
+                    {i.icon}
+                    <span className="truncate">{i.label}</span>
+                    {active && <Check className="ml-auto h-4 w-4 text-primary" />}
+                  </DropdownMenuItem>
+                )
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ),
+      )}
+    </nav>
   )
 }
 
