@@ -16,6 +16,7 @@ export interface SourceRules {
     contentHash: string
     suricataOk: boolean
     compatNotes: string | null
+    clsType?: string | null
   }>
 }
 
@@ -37,6 +38,10 @@ export interface BuildStats {
   conflictingRemoved?: number
   /** правил переписано под наивный парсер scirius (перенос sid в начало опций) */
   sanitizedForScirius?: number
+  /** исключено выключенными категориями (раздел «Категории») */
+  excludedByCategory?: number
+  /** исключено пользовательскими выключателями отдельных правил (RuleOverride) */
+  excludedByRule?: number
   /** архив tgz с файлами по источникам (если включён формат сборки file+tgz) */
   archive?: ArchiveInfo
   perSource: Record<string, { total: number; kept: number; droppedSid: number; droppedContent: number; droppedCompat: number }>
@@ -416,6 +421,8 @@ export function renderFinalFile(
     lines.push(`# Отброшено несовместимых с Suricata: ${meta.stats.incompatibleDropped}`)
     if (meta.stats.conflictingRemoved) lines.push(`# Конфликтных близнецов Clear NDR удалено: ${meta.stats.conflictingRemoved}`)
     if (meta.stats.sanitizedForScirius) lines.push(`# Адаптировано под парсер Clear NDR (sid перенесён в начало опций): ${meta.stats.sanitizedForScirius}`)
+    if (meta.stats.excludedByCategory) lines.push(`# Исключено выключенными категориями: ${meta.stats.excludedByCategory}`)
+    if (meta.stats.excludedByRule) lines.push(`# Исключено вручную отключёнными правилами: ${meta.stats.excludedByRule}`)
     if (meta.stats.archive) lines.push(`# Архив по источникам: ${meta.stats.archive.fileName}`)
   }
   lines.push('# ─────────────────────────────────────────────────────────────')

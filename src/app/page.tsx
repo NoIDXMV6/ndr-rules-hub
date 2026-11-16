@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SourcesTab } from '@/components/hub/sources-tab'
+import { CategoriesTab } from '@/components/hub/categories-tab'
 import { RulesTab } from '@/components/hub/rules-tab'
 import { BuildTab } from '@/components/hub/build-tab'
 import { VpnTab } from '@/components/hub/vpn-tab'
@@ -117,6 +118,7 @@ export default function Home() {
           <TabsList className="bg-card border border-border flex-wrap h-auto gap-1 p-1">
             <TabsTrigger value="overview" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.overview}</TabsTrigger>
             <TabsTrigger value="sources" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.sources}</TabsTrigger>
+            <TabsTrigger value="categories" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.categories}</TabsTrigger>
             <TabsTrigger value="rules" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.rules}</TabsTrigger>
             <TabsTrigger value="build" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.build}</TabsTrigger>
             <TabsTrigger value="vpn" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.vpn}</TabsTrigger>
@@ -133,6 +135,9 @@ export default function Home() {
           </TabsContent>
           <TabsContent value="sources" className="mt-4">
             <SourcesTab data={data} onChange={refresh} />
+          </TabsContent>
+          <TabsContent value="categories" className="mt-4">
+            <CategoriesTab data={data} onChange={refresh} />
           </TabsContent>
           <TabsContent value="rules" className="mt-4">
             <RulesTab data={data} />

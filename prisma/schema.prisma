@@ -33,6 +33,7 @@ model Source {
   badge      String?  // recommended | duplicate | legacy | paid | converter
   notes      String?  // анализ источника
   builtin    Boolean  @default(false)
+  deletedAt  DateTime? // не null — источник в корзине (не участвует в загрузке/сборке)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   rules      Rule[]
@@ -77,6 +78,28 @@ model Build {
 model Setting {
   key       String   @id
   value     String
+  updatedAt DateTime @updatedAt
+}
+
+// Категория итогового набора: группировка правил по classtype.
+// Строки создаются автоматически при анализе правил (scan), пользователь
+// управляет: включение/выключение в сборке, переименование, скрытие.
+model Category {
+  id        String   @id @default(cuid())
+  name      String   @unique  // значение classtype; "none" — правила без classtype
+  label     String?           // пользовательское отображаемое имя
+  enabled   Boolean  @default(true) // false — правила категории не попадают в сборку
+  hidden    Boolean  @default(false) // true — скрыта пользователем из раздела «Категории»
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Пользовательское решение по отдельному правилу (переживает перезагрузку источников):
+// enabled=false — правило исключено из сборки, несмотря на источник и категорию
+model RuleOverride {
+  sid       Int      @id
+  enabled   Boolean  @default(true)
+  note      String?
   updatedAt DateTime @updatedAt
 }
 

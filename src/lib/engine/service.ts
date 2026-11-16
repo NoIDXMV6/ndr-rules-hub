@@ -10,6 +10,7 @@ import {
 } from './build'
 import { saveExportFile, pushToClearndr, ClearndrExportCfg } from './exporter'
 import { SidMapper, remapToClearndrBlock } from './sidmap'
+import { ruleCategory, applyCategoryAndRuleFilter } from './categories'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { execFile } from 'child_process'
@@ -54,13 +55,17 @@ export async function getSettings(): Promise<Record<string, string>> {
  *  Начиная с текущей версии работает и «докатка»: на уже инициализированной БД
  *  новые builtin-источники каталога добавляются, а у существующих builtin
  *  синхронизируются url/category/kind/badge/notes (enabled и priority —
- *  пользовательские, их не трогаем). Пользовательские источники не затрагиваются. */
+ *  пользовательские, их не трогаем). Пользовательские источники не затрагиваются.
+ *  Источники в корзине (deletedAt) не синхронизируются и не пересоздаются;
+ *  имена удалённых навсегда builtin запоминаются в настройке purgedBuiltinSources. */
 export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: string[]; catalogUpdated: string[] }> {
   const count = await db.source.count()
   const added: string[] = []
   const updated: string[] = []
+  const purged = new Set<string>(JSON.parse((await getSetting('purgedBuiltinSources')) || '[]') as string[])
   if (count === 0) {
     for (const s of SEED_SOURCES) {
+      if (purged.has(s.name)) continue
       await db.source.create({
         data: {
           name: s.name,
@@ -80,10 +85,11 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
     await log('info', 'system', `Каталог инициализирован: ${SEED_SOURCES.length} источников`)
   } else {
     const rows = await db.source.findMany({
-      select: { id: true, name: true, builtin: true, category: true, kind: true, url: true, badge: true, notes: true },
+      select: { id: true, name: true, builtin: true, deletedAt: true, category: true, kind: true, url: true, badge: true, notes: true },
     })
     const byName = new Map(rows.map((r) => [r.name, r]))
     for (const s of SEED_SOURCES) {
+      if (purged.has(s.name)) continue
       const cur = byName.get(s.name)
       if (!cur) {
         await db.source.create({
@@ -104,7 +110,8 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
         added.push(s.name)
         continue
       }
-      if (cur.builtin) {
+      if (cur.builtin && !cur.deletedAt) {
+        // источник в корзине не синхронизируем — восстановит пользователь
         const patch: { category?: string; kind?: string; url?: string; badge?: string | null; notes?: string } = {}
         if (cur.category !== s.category) patch.category = s.category
         if (cur.kind !== s.kind) patch.kind = s.kind
@@ -132,6 +139,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
 export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; error?: string; count: number; note?: string }> {
   const src = await db.source.findUnique({ where: { id: sourceId } })
   if (!src) return { ok: false, error: 'источник не найден', count: 0 }
+  if (src.deletedAt) return { ok: false, error: 'источник в корзине — сначала восстановите его', count: 0 }
 
   const settings = await getSettings()
   const cfg: FetchSourceCfg = {
@@ -220,9 +228,9 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
   return { ok: true, count: rows.length, note: res.cacheNote }
 }
 
-/** Загрузить все включённые источники */
+/** Загрузить все включённые источники (источники в корзине не участвуют) */
 export async function fetchAllSources(origin = 'manual'): Promise<{ ok: number; failed: number; errors: string[] }> {
-  const sources = await db.source.findMany({ where: { enabled: true }, orderBy: { priority: 'asc' } })
+  const sources = await db.source.findMany({ where: { enabled: true, deletedAt: null }, orderBy: { priority: 'asc' } })
   let ok = 0
   let failed = 0
   const errors: string[] = []
@@ -248,7 +256,7 @@ export async function buildFinal(origin = 'manual'): Promise<{
 }> {
   const settings = await getSettings()
   const sources = await db.source.findMany({
-    where: { enabled: true },
+    where: { enabled: true, deletedAt: null },
     orderBy: { priority: 'asc' },
     include: { rules: true },
   })
@@ -267,8 +275,34 @@ export async function buildFinal(origin = 'manual'): Promise<{
       contentHash: r.contentHash,
       suricataOk: r.suricataOk,
       compatNotes: r.compatNotes,
+      clsType: r.clsType,
     })),
   }))
+
+  // Фильтр категорий и пользовательских исключений правил (раздел «Категории»):
+  // правила включённых источников дополнительно проходят через выключенные
+  // категории и персональные выключатели (RuleOverride, sid → enabled).
+  const catPrefs = await db.category.findMany()
+  const overrides = await db.ruleOverride.findMany()
+  const catEnabled = new Map(catPrefs.map((c) => [c.name, c.enabled]))
+  const ruleEnabled = new Map(overrides.map((o) => [o.sid, o.enabled]))
+  let excludedByCategory = 0
+  let excludedByRule = 0
+  if (catPrefs.some((c) => !c.enabled) || overrides.some((o) => !o.enabled)) {
+    let total = 0
+    for (const s of srcRules) {
+      const { kept, excludedByCategory: byCat, excludedByRule: byRule } = applyCategoryAndRuleFilter(
+        s.rules.map((r) => ({ ...r, sourceName: s.sourceName })),
+        catEnabled,
+        ruleEnabled,
+      )
+      s.rules = kept.map(({ sourceName: _sn, ...r }) => r)
+      excludedByCategory += byCat
+      excludedByRule += byRule
+      total += s.rules.length
+    }
+    await log('info', 'build', `Фильтр категорий/правил: исключено по категориям ${excludedByCategory}, по правилам ${excludedByRule}; осталось ${total} правил на входе слияния`)
+  }
 
   const policy: Partial<DedupPolicy> = {
     sidStrategy: settings.dedupSidStrategy as DedupPolicy['sidStrategy'],
@@ -279,6 +313,8 @@ export async function buildFinal(origin = 'manual'): Promise<{
   }
 
   const { rules: merged, stats } = mergeSources(srcRules, policy)
+  stats.excludedByCategory = excludedByCategory
+  stats.excludedByRule = excludedByRule
 
   // Гейт Clear NDR: правила-близнецы (совпадают после снятия sid/reference:*)
   // роняют импорт с «conflicting SID in same source». Убираем их ВСЕГДА,
@@ -356,7 +392,8 @@ export async function buildFinal(origin = 'manual'): Promise<{
     },
   })
   const archiveNote = stats.archive ? `; архив по источникам: ${stats.archive.fileName} (${stats.archive.files.length} файл(ов), ${(stats.archive.sizeBytes / 1e6).toFixed(1)} МБ)` : ''
-  await log('success', 'build', `Собран итоговый набор: ${sanitized.rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}; адаптировано под парсер Clear NDR: ${sanitized.rewritten}${archiveNote}`)
+  const catNote = stats.excludedByCategory || stats.excludedByRule ? `; исключено: по категориям ${stats.excludedByCategory ?? 0}, по правилам ${stats.excludedByRule ?? 0}` : ''
+  await log('success', 'build', `Собран итоговый набор: ${sanitized.rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}; адаптировано под парсер Clear NDR: ${sanitized.rewritten}${catNote}${archiveNote}`)
   return { ok: true, buildId: build.id, total: sanitized.rules.length, fileName }
 }
 

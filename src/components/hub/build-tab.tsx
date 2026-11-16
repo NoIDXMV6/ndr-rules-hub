@@ -109,11 +109,13 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
                   </a>
                 ) : null}
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
                 <MiniStat label={t.build.statInput} value={b.stats.totalInputRules?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.build.statDupSid} value={b.stats.duplicateBySid?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.build.statDupContent} value={b.stats.duplicateByContent?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.build.statIncompat} value={b.stats.incompatibleDropped?.toLocaleString(loc) ?? '—'} />
+                <MiniStat label={t.build.statExcludedCat} value={b.stats.excludedByCategory?.toLocaleString(loc) ?? '0'} />
+                <MiniStat label={t.build.statExcludedRule} value={b.stats.excludedByRule?.toLocaleString(loc) ?? '0'} />
                 <MiniStat label={t.build.statFinal} value={b.stats.uniqueSids?.toLocaleString(loc) ?? '—'} />
               </div>
               <div className="rounded-lg border border-border overflow-x-auto max-h-80 overflow-y-auto">

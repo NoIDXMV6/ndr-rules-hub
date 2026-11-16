@@ -19,16 +19,17 @@ export async function GET() {
     const wg = await wgStatus()
     return NextResponse.json({
       sources: {
-        total: sources.length,
-        enabled: sources.filter((s) => s.enabled).length,
-        ok: sources.filter((s) => s.status === 'ok').length,
-        error: sources.filter((s) => s.status === 'error').length,
+        total: sources.filter((s) => !s.deletedAt).length,
+        enabled: sources.filter((s) => s.enabled && !s.deletedAt).length,
+        ok: sources.filter((s) => s.status === 'ok' && !s.deletedAt).length,
+        error: sources.filter((s) => s.status === 'error' && !s.deletedAt).length,
+        trash: sources.filter((s) => s.deletedAt).length,
         list: sources.map((s) => ({
           id: s.id, name: s.name, category: s.category, kind: s.kind, url: s.url,
           authType: s.authType, enabled: s.enabled, priority: s.priority,
           status: s.status, lastFetchAt: s.lastFetchAt, lastError: s.lastError,
           ruleCount: s.ruleCount, sizeBytes: s.sizeBytes, badge: s.badge, notes: s.notes,
-          builtin: s.builtin, extraJson: s.extraJson,
+          builtin: s.builtin, extraJson: s.extraJson, deletedAt: s.deletedAt,
         })),
       },
       rules: { inDb: ruleAgg._count._all, inBuild: builds?.totalRules ?? 0 },

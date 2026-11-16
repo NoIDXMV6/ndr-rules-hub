@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { fetchSourceById } from '@/lib/engine/service'
+import { fetchSourceById, log, getSetting, setSetting } from '@/lib/engine/service'
 import { apiError } from '@/lib/api-error'
 
 export const dynamic = 'force-dynamic'
@@ -23,14 +23,38 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/**
+ * DELETE /api/sources/:id            — в корзину (soft delete: deletedAt, enabled=false)
+ * DELETE /api/sources/:id?purge=1    — удалить навсегда (вместе с правилами)
+ */
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    const purge = req.nextUrl.searchParams.get('purge') === '1' || req.nextUrl.searchParams.get('purge') === 'true'
     const src = await db.source.findUnique({ where: { id } })
     if (!src) return NextResponse.json({ error: 'не найден' }, { status: 404 })
-    if (src.builtin) return NextResponse.json({ error: 'встроенный источник нельзя удалить — его можно отключить' }, { status: 400 })
-    await db.source.delete({ where: { id } })
-    return NextResponse.json({ ok: true })
+
+    if (purge) {
+      // имя builtin запоминается, чтобы «докатка» каталога не создала его заново
+      if (src.builtin) {
+        const purged = new Set<string>(JSON.parse((await getSetting('purgedBuiltinSources')) || '[]') as string[])
+        purged.add(src.name)
+        await setSetting('purgedBuiltinSources', JSON.stringify([...purged]))
+        await log('warn', 'system', `builtin-источник «${src.name}» удалён навсегда — каталог больше не будет его восстанавливать`)
+      }
+      await db.rule.deleteMany({ where: { sourceId: id } })
+      await db.source.delete({ where: { id } })
+      await log('info', 'system', `Источник «${src.name}» удалён навсегда (правила: ${src.ruleCount})`)
+      return NextResponse.json({ ok: true, purged: true })
+    }
+
+    // в корзину: выключаем и помечаем (правила остаются в БД для восстановления)
+    await db.source.update({
+      where: { id },
+      data: { deletedAt: new Date(), enabled: false },
+    })
+    await log('info', 'system', `Источник «${src.name}» перемещён в корзину (правила сохранены, восстановление — в разделе «Источники» → «Корзина»)`)
+    return NextResponse.json({ ok: true, trashed: true })
   } catch (e) {
     return apiError(e)
   }

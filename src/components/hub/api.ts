@@ -27,6 +27,7 @@ export interface SourceItem {
   badge: string | null
   notes: string | null
   builtin: boolean
+  deletedAt: string | null
 }
 
 export interface WgPeer {
@@ -69,12 +70,49 @@ export interface BuildStats {
   renumbered: number
   conflictingRemoved?: number
   sanitizedForScirius?: number
+  excludedByCategory?: number
+  excludedByRule?: number
   archive?: { fileName: string; filePath: string; sizeBytes: number; files: Array<{ name: string; rules: number; sha256: string }> }
   perSource: Record<string, { total: number; kept: number; droppedSid: number; droppedContent: number; droppedCompat: number }>
 }
 
+export interface CategoryItem {
+  id: string | null
+  name: string
+  label: string | null
+  enabled: boolean
+  hidden: boolean
+  rules: number
+  sources: number
+  known: boolean
+}
+
+export interface CategoriesState {
+  categories: CategoryItem[]
+  totalRules: number
+  activeSources: number
+  overridesOff: number
+  overridesAll: number
+  uncategorized: string
+  categoriesRows: number
+}
+
+export interface CategoryRuleRow {
+  id: number
+  sid: number
+  rev: number
+  action: string
+  proto: string
+  msg: string | null
+  raw: string
+  suricataOk: boolean
+  compatNotes: string | null
+  sourceName: string
+  overrideEnabled: boolean | null
+}
+
 export interface Dashboard {
-  sources: { total: number; enabled: number; ok: number; error: number; list: SourceItem[] }
+  sources: { total: number; enabled: number; ok: number; error: number; trash: number; list: SourceItem[] }
   rules: { inDb: number; inBuild: number }
   lastBuild: null | {
     id: string
@@ -115,7 +153,9 @@ export const api = {
   fetchSource: (id: string) => fetch(`/api/sources/${id}/fetch`, { method: 'POST' }).then((r) => j<{ ok: boolean; count: number; error?: string; note?: string }>(r)),
   patchSource: (id: string, data: Partial<SourceItem>) =>
     fetch(`/api/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ source: SourceItem }>(r)),
-  deleteSource: (id: string) => fetch(`/api/sources/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
+  deleteSource: (id: string) => fetch(`/api/sources/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean; trashed?: boolean; purged?: boolean }>(r)),
+  restoreSource: (id: string) => fetch(`/api/sources/${id}/restore`, { method: 'POST' }).then((r) => j<{ ok: boolean }>(r)),
+  purgeSource: (id: string) => fetch(`/api/sources/${id}?purge=1`, { method: 'DELETE' }).then((r) => j<{ ok: boolean; purged?: boolean }>(r)),
   createSource: (data: Record<string, unknown>) =>
     fetch('/api/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ source: SourceItem }>(r)),
   build: (exportAfter: boolean) =>
@@ -123,6 +163,16 @@ export const api = {
   exportPush: () => fetch('/api/export', { method: 'POST' }).then((r) => j<{ ok: boolean; error?: string; detail?: string; pushedTo?: string }>(r)),
   exportFiles: () => fetch('/api/export', { method: 'PUT' }).then((r) => j<{ files: Array<{ name: string; size: number; mtime: string }> }>(r)),
   rules: (params: string) => fetch(`/api/rules?${params}`, { cache: 'no-store' }).then((r) => j<{ total: number; rules: RuleRow[] }>(r)),
+  categories: () => fetch('/api/categories', { cache: 'no-store' }).then((r) => j<CategoriesState>(r)),
+  categoriesScan: () => fetch('/api/categories', { method: 'POST' }).then((r) => j<{ ok: boolean; added: number; categories: number; totalRules: number; rows: number }>(r)),
+  categoriesBulk: (enabled: boolean) =>
+    fetch('/api/categories', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }).then((r) => j<{ ok: boolean; updated: number }>(r)),
+  patchCategory: (id: string, data: { enabled?: boolean; label?: string | null; hidden?: boolean }) =>
+    fetch(`/api/categories/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ category: { id: string; name: string; label: string | null; enabled: boolean; hidden: boolean } }>(r)),
+  categoryRules: (id: string, params: string) =>
+    fetch(`/api/categories/${id}/rules?${params}`, { cache: 'no-store' }).then((r) => j<{ total: number; page: number; perPage: number; category: { id: string; name: string; label: string | null; enabled: boolean }; rules: CategoryRuleRow[] }>(r)),
+  setRuleOverride: (categoryId: string, sid: number, enabled: boolean) =>
+    fetch(`/api/categories/${categoryId}/rules`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sid, enabled }) }).then((r) => j<{ ok: boolean; override: { sid: number; enabled: boolean } }>(r)),
   settings: () => fetch('/api/settings', { cache: 'no-store' }).then((r) => j<{ settings: Record<string, string> }>(r)),
   saveSettings: (data: Record<string, string>) =>
     fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ settings: Record<string, string> }>(r)),

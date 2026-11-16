@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api, Dashboard, fmtTime, SourceItem } from '@/components/hub/api'
 import { useI18n, type Dictionary } from '@/lib/i18n'
-import { ChevronDown, FileUp, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronDown, FileUp, Pencil, Plus, RefreshCw, Trash2, Undo2 } from 'lucide-react'
 
 type BadgeKey = keyof Dictionary['sources']['badges']
 
@@ -39,11 +39,14 @@ export function SourcesTab({ data, onChange }: { data: Dashboard | null; onChang
   const [search, setSearch] = useState('')
 
   const sources = useMemo(() => {
-    const list = data?.sources.list ?? []
+    // в основном списке — только активные (не в корзине)
+    const list = (data?.sources.list ?? []).filter((s) => !s.deletedAt)
     if (!search.trim()) return list
     const q = search.toLowerCase()
     return list.filter((s) => s.name.toLowerCase().includes(q) || (s.notes ?? '').toLowerCase().includes(q))
   }, [data, search])
+
+  const trash = useMemo(() => (data?.sources.list ?? []).filter((s) => !!s.deletedAt), [data])
 
   const toggle = async (s: SourceItem) => {
     setBusyId(s.id)
@@ -89,7 +92,33 @@ export function SourcesTab({ data, onChange }: { data: Dashboard | null; onChang
     setBusyId(s.id)
     try {
       await api.deleteSource(s.id)
-      setMsg(tr(t.messages.sourceDeleted, { name: s.name }))
+      setMsg(tr(t.messages.sourceTrashed, { name: s.name }))
+      onChange()
+    } catch (e) {
+      setMsg((e as Error).message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const restore = async (s: SourceItem) => {
+    setBusyId(s.id)
+    try {
+      await api.restoreSource(s.id)
+      setMsg(tr(t.messages.sourceRestored, { name: s.name }))
+      onChange()
+    } catch (e) {
+      setMsg((e as Error).message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const purge = async (s: SourceItem) => {
+    setBusyId(s.id)
+    try {
+      await api.purgeSource(s.id)
+      setMsg(tr(t.messages.sourcePurged, { name: s.name }))
       onChange()
     } catch (e) {
       setMsg((e as Error).message)
@@ -176,11 +205,18 @@ export function SourcesTab({ data, onChange }: { data: Dashboard | null; onChang
                             <RefreshCw className={`h-3.5 w-3.5 ${busyId === s.id ? 'animate-spin' : ''}`} />
                           </Button>
                           <EditSourceDialog source={s} onSaved={() => onChange()} />
-                          {!s.builtin && (
-                            <Button size="sm" variant="outline" className="h-8 border-red-300 text-red-600" onClick={() => remove(s)}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 border-red-300 text-red-600"
+                            title={t.sources.trash.moveToTrash}
+                            disabled={busyId === s.id}
+                            onClick={() => {
+                              if (window.confirm(tr(t.sources.trash.confirmMove, { name: s.name }))) void remove(s)
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -192,8 +228,99 @@ export function SourcesTab({ data, onChange }: { data: Dashboard | null; onChang
         </CardContent>
       </Card>
 
+      <TrashCard trash={trash} busyId={busyId} onRestore={restore} onPurge={purge} />
+
       <AnalysisCard />
     </div>
+  )
+}
+
+/** Корзина источников: восстановление и полное удаление */
+function TrashCard({
+  trash,
+  busyId,
+  onRestore,
+  onPurge,
+}: {
+  trash: SourceItem[]
+  busyId: string | null
+  onRestore: (s: SourceItem) => void
+  onPurge: (s: SourceItem) => void
+}) {
+  const { t, tr, lang, loc } = useI18n()
+  const [open, setOpen] = useState(false)
+  const trashT = t.sources.trash
+  if (trash.length === 0) return null
+  return (
+    <Card className="bg-card border-red-200">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="w-full text-left">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2 text-red-700">
+              <Trash2 className="h-4 w-4" />
+              {trashT.title}
+              <Badge variant="outline" className="border-red-300 text-red-600">{trash.length}</Badge>
+              <ChevronDown className={`h-4 w-4 ml-auto transition-transform ${open ? 'rotate-180' : ''}`} />
+            </CardTitle>
+            <CardDescription>{trashT.desc}</CardDescription>
+          </CardHeader>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <CardContent>
+            <div className="rounded-lg border border-border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border hover:bg-transparent">
+                    <TableHead className="text-muted-foreground">{trashT.colSource}</TableHead>
+                    <TableHead className="text-muted-foreground">{trashT.colRules}</TableHead>
+                    <TableHead className="text-muted-foreground">{trashT.colDeleted}</TableHead>
+                    <TableHead className="text-right text-muted-foreground">{trashT.colActions}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {trash.map((s) => (
+                    <TableRow key={s.id} className="border-border/60">
+                      <TableCell>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-foreground">{s.name}</span>
+                          {s.builtin && <Badge variant="outline" className="border-input text-muted-foreground">{t.sources.builtinBadge}</Badge>}
+                        </div>
+                      </TableCell>
+                      <TableCell className="tabular-nums text-foreground">{s.ruleCount.toLocaleString(loc)}</TableCell>
+                      <TableCell className="text-muted-foreground text-xs">{fmtTime(s.deletedAt, lang)}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 border-input text-foreground"
+                            disabled={busyId === s.id}
+                            onClick={() => onRestore(s)}
+                          >
+                            <Undo2 className="h-3.5 w-3.5 mr-1" /> {trashT.restore}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 border-red-300 text-red-600"
+                            disabled={busyId === s.id}
+                            onClick={() => {
+                              if (window.confirm(tr(trashT.confirmPurge, { name: s.name, n: s.ruleCount }))) void onPurge(s)
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1" /> {trashT.purge}
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </CollapsibleContent>
+      </Collapsible>
+    </Card>
   )
 }
 
