@@ -57,6 +57,10 @@ export interface ExtraCfg {
   // переопределение User-Agent (некоторые серверы блокируют не-браузерные UA,
   // например ptrules.com отвечает 403 на clearndr-rules-hub/…)
   userAgent?: string
+  // резервные URL (зеркала): если основной URL недоступен (сетевая ошибка,
+  // HTTP != 200, не-архив), пробуются зеркала по очереди — например, архив
+  // GitHub-репозитория, когда официальный сайт источника лежит (PAW Patrules)
+  mirrorUrls?: string[]
 }
 
 export function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): string {
@@ -180,6 +184,34 @@ export function notArchiveError(status: number, body: Buffer, extra: ExtraCfg, u
   return msg
 }
 
+/** Человекочитаемая причина сетевого сбоя Node fetch («fetch failed», причина — в cause.code) */
+export function netErrText(e: unknown, url: string): string {
+  const err = e as Error & { cause?: { code?: string; message?: string } }
+  let msg = err.message || 'ошибка загрузки'
+  if (/fetch failed/i.test(msg)) {
+    const code = err.cause?.code ?? ''
+    const cause = err.cause?.message ?? ''
+    msg = `сервер источника недоступен (fetch failed${code ? `, причина: ${code}` : ''}${cause ? ` — ${cause}` : ''})`
+    if (code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'UND_ERR_SOCKET' || /timeout|ETIMEDOUT|ECONNRESET/i.test(`${code} ${cause}`)) {
+      msg += ' — TCP-соединение не получило ответа: сервер источника перегружен/временно лежит; повторите «Обновить» позже. Для tarball-источников после первой удачной загрузки работает кэш-фолбэк'
+    } else if (/ENOTFOUND|EAI_AGAIN/i.test(`${code} ${cause}`)) {
+      msg += ' — домен не резолвится: проверьте URL источника и DNS'
+    } else if (/CERT|TLS|SSL/i.test(`${code} ${cause}`)) {
+      msg += ' — ошибка TLS-рукопожатия: сертификат сервера недействителен или цепочка неполна'
+    }
+    msg += `; URL: ${maskAuthKey(url)}`
+  }
+  return msg
+}
+
+/** Все URL (основной + зеркала) не ответили: сводная ошибка по попыткам */
+export function allAttemptsError(attemptErrors: string[], candidates: string[]): string {
+  if (attemptErrors.length === 0) return 'источник недоступен'
+  if (attemptErrors.length === 1) return attemptErrors[0]
+  const mirrors = candidates.length - 1
+  return `основной URL и ${mirrors > 1 ? 'зеркала' : 'зеркало'} недоступны (${attemptErrors.length} попытки):\n- ${attemptErrors.join('\n- ')}`
+}
+
 /** Короткая причина отказа tar (без «Command failed: tar -xzf /путь/...») */
 function tarErrDetail(e: unknown): string {
   const err = e as { stderr?: unknown; message?: string }
@@ -190,6 +222,9 @@ function tarErrDetail(e: unknown): string {
 }
 
 async function extractTarball(tarPath: string, destDir: string, subPath?: string): Promise<string[]> {
+  // чистим прошлую распаковку: при смене архива (обновление/зеркало с другой
+  // структурой) старые .rules не должны смешиваться с новыми
+  await fs.rm(destDir, { recursive: true, force: true })
   await fs.mkdir(destDir, { recursive: true })
   await execFileP('tar', ['-xzf', tarPath, '-C', destDir], { timeout: 180_000 })
   // ищем .rules файлы (опционально только в указанном подкаталоге архива)
@@ -282,8 +317,12 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
 
     // ── сетевые источники
     if (!cfg.url) return { ok: false, error: 'не задан URL', rules: [], sizeBytes: 0 }
-    const url = applyAuth(cfg.url, cfg, extra)
+    // основной URL + зеркала (extra.mirrorUrls): побеждает первый удачный ответ;
+    // зеркальные URL тоже проходят applyAuth (плейсхолдер %%AUTHKEY%% и т.п.)
+    const mirrors = (extra.mirrorUrls ?? []).map((m) => String(m).trim()).filter(Boolean)
+    const candidates = [cfg.url, ...mirrors]
     const isSnort = /snort\.org/i.test(cfg.url)
+    const attemptErrors: string[] = []
 
     if (cfg.kind === 'tarball') {
       const tarPath = path.join(CACHE_DIR, `src-${cfg.id}.tar.gz`)
@@ -303,92 +342,90 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
         }
       }
 
-      const res = await httpGet(url, extra)
-      if (res.status !== 200) {
-        const errText = isSnort
-          ? snortFetchError(res.status, res.body, extra, cfg.url)
-          : `HTTP ${res.status} при загрузке ${cfg.url}${bodyReason(res.body) ? ` — «${bodyReason(res.body)}»` : ''}`
-        // запасной путь: ранее скачанный архив — работаем от него, источник помечаем предупреждением
-        const cached = await extractCached(tarPath, destDir, extra.subPath)
-        if (cached) {
-          return {
-            ok: true, rules: cached.rules, sizeBytes: cached.sizeBytes, usedCache: true,
-            cacheNote: `${errText} — использован кэш архива от ${st?.mtime.toISOString() ?? '—'}`,
-          }
+      for (const cand of candidates) {
+        let res: Awaited<ReturnType<typeof httpGet>>
+        try {
+          res = await httpGet(applyAuth(cand, cfg, extra), extra)
+        } catch (e) {
+          attemptErrors.push(netErrText(e, cand))
+          continue
         }
-        return { ok: false, error: errText, rules: [], sizeBytes: res.body.length }
-      }
-      // HTTP 200, но тело — не gzip (HTML-страница лимита/ошибки, ссылка из личного кабинета и т.п.):
-      // раньше такое сохранялось как .tar.gz и ломало tar («not in gzip format»)
-      if (!isGzip(res.body)) {
-        const errText = notArchiveError(res.status, res.body, extra, cfg.url, isSnort)
-        const cached = await extractCached(tarPath, destDir, extra.subPath)
-        if (cached) {
-          return {
-            ok: true, rules: cached.rules, sizeBytes: cached.sizeBytes, usedCache: true,
-            cacheNote: `${errText} — использован кэш архива от ${st?.mtime.toISOString() ?? '—'}`,
-          }
+        if (res.status !== 200) {
+          attemptErrors.push(isSnort
+            ? snortFetchError(res.status, res.body, extra, cand)
+            : `HTTP ${res.status} при загрузке ${cand}${bodyReason(res.body) ? ` — «${bodyReason(res.body)}»` : ''}`)
+          continue
         }
-        return { ok: false, error: errText, rules: [], sizeBytes: res.body.length }
+        // HTTP 200, но тело — не gzip (HTML-страница лимита/ошибки, ссылка из личного кабинета и т.п.):
+        // раньше такое сохранялось как .tar.gz и ломало tar («not in gzip format»)
+        if (!isGzip(res.body)) {
+          attemptErrors.push(notArchiveError(res.status, res.body, extra, cand, isSnort))
+          continue
+        }
+        await fs.mkdir(CACHE_DIR, { recursive: true })
+        await fs.writeFile(tarPath, res.body)
+        let found: string[]
+        try {
+          found = await extractTarball(tarPath, destDir, extra.subPath)
+        } catch (te) {
+          return { ok: false, error: `архив скачан (${res.body.length} байт), но tar не смог его распаковать: ${tarErrDetail(te)}`, rules: [], sizeBytes: res.body.length }
+        }
+        let rules: ParsedRule[] = []
+        let size = 0
+        for (const f of found) {
+          const t = await fs.readFile(f, 'utf8')
+          size += t.length
+          rules.push(...parseRuleText(t))
+        }
+        return { ok: true, rules, sizeBytes: size }
       }
-      await fs.mkdir(CACHE_DIR, { recursive: true })
-      await fs.writeFile(tarPath, res.body)
-      let found: string[]
-      try {
-        found = await extractTarball(tarPath, destDir, extra.subPath)
-      } catch (te) {
-        return { ok: false, error: `архив скачан (${res.body.length} байт), но tar не смог его распаковать: ${tarErrDetail(te)}`, rules: [], sizeBytes: res.body.length }
+
+      // все URL недоступны: запасной путь — ранее скачанный архив,
+      // работаем от него, источник помечаем предупреждением
+      const cached = await extractCached(tarPath, destDir, extra.subPath)
+      if (cached) {
+        return {
+          ok: true, rules: cached.rules, sizeBytes: cached.sizeBytes, usedCache: true,
+          cacheNote: `${attemptErrors[attemptErrors.length - 1] ?? 'источник недоступен'} — использован кэш архива от ${st?.mtime.toISOString() ?? '—'}`,
+        }
       }
-      let rules: ParsedRule[] = []
-      let size = 0
-      for (const f of found) {
-        const t = await fs.readFile(f, 'utf8')
-        size += t.length
-        rules.push(...parseRuleText(t))
-      }
-      return { ok: true, rules, sizeBytes: size }
+      return { ok: false, error: allAttemptsError(attemptErrors, candidates), rules: [], sizeBytes: 0 }
     }
 
     // ruleset / список — обычный текст
-    const res = await httpGet(url, extra)
-    if (res.status !== 200) {
-      const errText = isSnort
-        ? snortFetchError(res.status, res.body, extra, cfg.url)
-        : `HTTP ${res.status} при загрузке ${cfg.url}${bodyReason(res.body) ? ` — «${bodyReason(res.body)}»` : ''}`
-      return { ok: false, error: errText, rules: [], sizeBytes: res.body.length }
-    }
-    const text = res.body.toString('utf8')
-    if (cfg.category === 'ip-list') {
-      const conv = convertIpList(text, convOpts(extra, cfg))
-      return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
-    }
-    if (cfg.category === 'domain-list') {
-      const conv = convertDomainList(text, convOpts(extra, cfg))
-      return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
-    }
-    if (cfg.category === 'url-list') {
-      const conv = convertUrlList(text, convOpts(extra, cfg))
-      return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
-    }
-    return { ok: true, rules: parseRuleText(text), sizeBytes: text.length }
-  } catch (e) {
-    const err = e as Error & { cause?: { code?: string; message?: string } }
-    let msg = err.message || 'ошибка загрузки'
-    // Node fetch сводит все сетевые сбои к «fetch failed»; причина — в cause.code
-    if (/fetch failed/i.test(msg)) {
-      const code = err.cause?.code ?? ''
-      const cause = err.cause?.message ?? ''
-      msg = `сервер источника недоступен (fetch failed${code ? `, причина: ${code}` : ''}${cause ? ` — ${cause}` : ''})`
-      if (code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'UND_ERR_SOCKET' || /timeout|ETIMEDOUT|ECONNRESET/i.test(`${code} ${cause}`)) {
-        msg += ' — TCP-соединение не получило ответа: сервер источника перегружен/временно лежит; повторите «Обновить» позже. Для tarball-источников после первой удачной загрузки работает кэш-фолбэк'
-      } else if (/ENOTFOUND|EAI_AGAIN/i.test(`${code} ${cause}`)) {
-        msg += ' — домен не резолвится: проверьте URL источника и DNS'
-      } else if (/CERT|TLS|SSL/i.test(`${code} ${cause}`)) {
-        msg += ' — ошибка TLS-рукопожатия: сертификат сервера недействителен или цепочка неполна'
+    for (const cand of candidates) {
+      let res: Awaited<ReturnType<typeof httpGet>>
+      try {
+        res = await httpGet(applyAuth(cand, cfg, extra), extra)
+      } catch (e) {
+        attemptErrors.push(netErrText(e, cand))
+        continue
       }
-      msg += `; URL: ${maskAuthKey(cfg.url ?? '')}`
+      if (res.status !== 200) {
+        attemptErrors.push(isSnort
+          ? snortFetchError(res.status, res.body, extra, cand)
+          : `HTTP ${res.status} при загрузке ${cand}${bodyReason(res.body) ? ` — «${bodyReason(res.body)}»` : ''}`)
+        continue
+      }
+      const text = res.body.toString('utf8')
+      if (cfg.category === 'ip-list') {
+        const conv = convertIpList(text, convOpts(extra, cfg))
+        return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
+      }
+      if (cfg.category === 'domain-list') {
+        const conv = convertDomainList(text, convOpts(extra, cfg))
+        return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
+      }
+      if (cfg.category === 'url-list') {
+        const conv = convertUrlList(text, convOpts(extra, cfg))
+        return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
+      }
+      return { ok: true, rules: parseRuleText(text), sizeBytes: text.length }
     }
-    return { ok: false, error: msg, rules: [], sizeBytes: 0 }
+    return { ok: false, error: allAttemptsError(attemptErrors, candidates), rules: [], sizeBytes: 0 }
+  } catch (e) {
+    // Node fetch сводит все сетевые сбои к «fetch failed»; причина — в cause.code
+    return { ok: false, error: netErrText(e, cfg.url ?? ''), rules: [], sizeBytes: 0 }
   }
 }
 

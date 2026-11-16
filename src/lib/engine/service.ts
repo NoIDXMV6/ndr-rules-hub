@@ -44,6 +44,16 @@ export async function setSetting(key: string, value: string) {
   await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } })
 }
 
+/** Заметки источника, который снова работает (ранее был с бейджем «недоступен») */
+function availableNotes(authType: string): string {
+  const auth = authType === 'authkey'
+    ? ' Авторизация: abuse.ch Auth-Key («Настройки → abuse.ch Auth-Key»).'
+    : authType === 'oinkcode'
+      ? ' Авторизация: oinkcode (поле «Настройки»).'
+      : ''
+  return `Выгрузка работает: успешная загрузка с текущего URL (ранее источник числился недоступным).${auth}`
+}
+
 export async function getSettings(): Promise<Record<string, string>> {
   const rows = await db.setting.findMany()
   const out: Record<string, string> = { ...DEFAULT_SETTINGS }
@@ -57,7 +67,12 @@ export async function getSettings(): Promise<Record<string, string>> {
  *  синхронизируются url/category/kind/badge/notes (enabled и priority —
  *  пользовательские, их не трогаем). Пользовательские источники не затрагиваются.
  *  Источники в корзине (deletedAt) не синхронизируются и не пересоздаются;
- *  имена удалённых навсегда builtin запоминаются в настройке purgedBuiltinSources. */
+ *  имена удалённых навсегда builtin запоминаются в настройке purgedBuiltinSources.
+ *  У источников, чья последняя загрузка прошла успешно (status=ok), каталог не
+ *  «оживляет» устаревшие пометки: бейдж «недоступен» снимается (работающий
+ *  источник не может быть недоступным), шаблонные заметки о сломанном
+ *  состоянии заменяются на актуальные; url/kind/category тоже не трогаются —
+ *  рабочий источник не должен ломаться докаткой каталога. */
 export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: string[]; catalogUpdated: string[] }> {
   const count = await db.source.count()
   const added: string[] = []
@@ -85,7 +100,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
     await log('info', 'system', `Каталог инициализирован: ${SEED_SOURCES.length} источников`)
   } else {
     const rows = await db.source.findMany({
-      select: { id: true, name: true, builtin: true, deletedAt: true, category: true, kind: true, url: true, badge: true, notes: true },
+      select: { id: true, name: true, builtin: true, deletedAt: true, category: true, kind: true, url: true, badge: true, notes: true, status: true, authType: true, extraJson: true },
     })
     const byName = new Map(rows.map((r) => [r.name, r]))
     for (const s of SEED_SOURCES) {
@@ -112,12 +127,30 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
       }
       if (cur.builtin && !cur.deletedAt) {
         // источник в корзине не синхронизируем — восстановит пользователь
-        const patch: { category?: string; kind?: string; url?: string; badge?: string | null; notes?: string } = {}
+        if (cur.status === 'ok') {
+          // Источник работает — каталог не должен «оживлять» устаревшие пометки:
+          // снимаем бейдж «недоступен» (после удачной загрузки он лжёт) и,
+          // если заметки не редактировались пользователем, заменяем шаблон
+          // «источник сломан» на актуальный текст. URL/kind/category рабочего
+          // источника не трогаем — докатка не должна ломать то, что работает.
+          if (cur.badge !== 'unavailable') continue
+          const fix: { badge?: string | null; notes?: string } = { badge: null }
+          if (s.notes && cur.notes === s.notes) fix.notes = availableNotes(cur.authType)
+          await db.source.update({ where: { id: cur.id }, data: fix })
+          updated.push(s.name)
+          continue
+        }
+        const patch: { category?: string; kind?: string; url?: string; badge?: string | null; notes?: string; authType?: string; extraJson?: string } = {}
         if (cur.category !== s.category) patch.category = s.category
         if (cur.kind !== s.kind) patch.kind = s.kind
         if (s.url && cur.url !== s.url) patch.url = s.url
         if ((s.badge ?? null) !== cur.badge) patch.badge = s.badge ?? null
         if (s.notes && cur.notes !== s.notes) patch.notes = s.notes
+        if ((s.authType ?? 'none') !== cur.authType) patch.authType = s.authType ?? 'none'
+        // extraJson докатывается, только если у источника его ещё нет —
+        // пользовательские настройки конвертеров/авторизации не перезаписываются
+        const curExtra = (cur.extraJson ?? '').trim()
+        if (s.extraJson && (curExtra === '' || curExtra === '{}')) patch.extraJson = s.extraJson
         if (Object.keys(patch).length) {
           await db.source.update({ where: { id: cur.id }, data: patch })
           updated.push(s.name)
@@ -214,16 +247,30 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     await db.rule.createMany({ data: rows.slice(i, i + 500) })
   }
 
-  await db.source.update({
-    where: { id: src.id },
-    data: {
-      status: 'ok',
-      lastError: null,
-      lastFetchAt: new Date(),
-      ruleCount: rows.length,
-      sizeBytes: res.sizeBytes,
-    },
-  })
+  const patch: {
+    status: string
+    lastError: null
+    lastFetchAt: Date
+    ruleCount: number
+    sizeBytes: number
+    badge?: string | null
+    notes?: string
+  } = {
+    status: 'ok',
+    lastError: null,
+    lastFetchAt: new Date(),
+    ruleCount: rows.length,
+    sizeBytes: res.sizeBytes,
+  }
+  // бейдж «недоступен» — свойство каталога на момент добавления; после удачной
+  // загрузки он лжёт: снимаем, а шаблонные заметки о сломанном состоянии
+  // (не редактировавшиеся пользователем) заменяем на актуальный текст
+  if (src.badge === 'unavailable') {
+    patch.badge = null
+    const seedEntry = SEED_SOURCES.find((s) => s.name === src.name)
+    if (seedEntry?.notes && src.notes === seedEntry.notes) patch.notes = availableNotes(src.authType)
+  }
+  await db.source.update({ where: { id: src.id }, data: patch })
   await log('success', 'fetch', `Загружено «${src.name}»: ${rows.length} правил (${dt} с)${res.cacheNote ? ' — ВНИМАНИЕ: работали от кэша' : ''}`)
   return { ok: true, count: rows.length, note: res.cacheNote }
 }
