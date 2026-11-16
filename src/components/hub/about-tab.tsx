@@ -8,7 +8,7 @@ import { TECH, TechItem } from './tech-logos'
 import { Rich } from './rich'
 import { useI18n, type Lang } from '@/lib/i18n'
 
-export const APP_VERSION = '1.12.0' // синхронно с релизом (package.json)
+export const APP_VERSION = '1.16.0' // синхронно с релизом (package.json)
 
 const REPO = 'https://github.com/NoIDXMV6/ndr-rules-hub'
 const AUTHOR_SITE = 'https://kozhevatov.ru'
@@ -92,14 +92,15 @@ function sections(lang: Lang, techNote: string): AboutSection[] {
         <div className="space-y-2 text-sm leading-relaxed">
           <p>
             {ru
-              ? 'Сервис объединяет, дедуплицирует и экспортирует наборы правил Snort/Suricata для импорта в Clear NDR: единый файл правил с гарантией отсутствия конфликтов SID, автоматизация обновлений по расписанию и опциональная загрузка через WireGuard.'
-              : 'The service merges, deduplicates and exports Snort/Suricata rulesets for import into Clear NDR: a single rule file guaranteed free of SID conflicts, scheduled update automation and optional WireGuard-based downloads.'}
+              ? 'Сервис автоматизирует полный цикл работы с наборами правил Snort/Suricata для Clear NDR: каталог из 36 преднастроенных источников, конвертация Snort 2/3 → Suricata, дедупликация и устранение конфликтов SID, фильтр совместимости, управление категориями и отдельными правилами, сборка с SHA-256 и доставкой в Clear NDR (вручную, PUSH через REST API, PULL по URL с tgz-архивом и токенами). Плюс: валидированный офлайн-пакет (цикл suricata -T), WireGuard VPN, наполнение дашбордов OpenSearch, обновление Clear NDR одним кликом и многопользовательский режим (Enterprise) с токенами скачивания и защитой от перебора.'
+              : 'The service automates the full cycle of working with Snort/Suricata rulesets for Clear NDR: a catalog of 36 preconfigured sources, Snort 2/3 → Suricata conversion, deduplication and SID conflict handling, a compatibility filter, category and per-rule management, builds with SHA-256 and delivery to Clear NDR (manual, PUSH via REST API, PULL by URL with a tgz archive and tokens). Plus: a validated offline package (suricata -T loop), WireGuard VPN, OpenSearch dashboards population, one-click Clear NDR updates, and a multi-user mode (Enterprise) with download tokens and brute-force protection.'}
           </p>
           <ul className="space-y-1">
             <Li>{ru ? 'исходный код и релизы: ' : 'source code and releases: '} <A href={REPO}>github.com/NoIDXMV6/ndr-rules-hub</A>;</Li>
             <Li>{ru ? 'текущая версия: ' : 'current version: '}{APP_VERSION} (<A href={`${REPO}/releases`}>{ru ? 'страница релизов' : 'releases page'}</A>);</Li>
-            <Li>{ru ? <>поставка: Docker-образ (<code className="font-mono text-[0.85em]">docker compose up -d --build</code>), данные — в томе <code className="font-mono text-[0.85em]">./data</code>;</> : <>delivery: Docker image (<code className="font-mono text-[0.85em]">docker compose up -d --build</code>), data lives in the <code className="font-mono text-[0.85em]">./data</code> volume;</>}</Li>
-            <Li>{ru ? 'стек: Next.js + React + TypeScript, Prisma/SQLite, Tailwind CSS + shadcn/ui — полный список ниже.' : 'stack: Next.js + React + TypeScript, Prisma/SQLite, Tailwind CSS + shadcn/ui — full list below.'}</Li>
+            <Li>{ru ? <>поставка: Docker-образ (<code className="font-mono text-[0.85em]">docker compose up -d --build</code>), данные — в томе <code className="font-mono text-[0.85em]">./data</code>, редакция — переменной <code className="font-mono text-[0.85em]">NDR_EDITION</code>;</> : <>delivery: Docker image (<code className="font-mono text-[0.85em]">docker compose up -d --build</code>), data lives in the <code className="font-mono text-[0.85em]">./data</code> volume, edition selected by the <code className="font-mono text-[0.85em]">NDR_EDITION</code> variable;</>}</Li>
+            <Li>{ru ? 'стек: Next.js + React + TypeScript, Prisma/SQLite, Tailwind CSS + shadcn/ui, Vitest — полный список ниже.' : 'stack: Next.js + React + TypeScript, Prisma/SQLite, Tailwind CSS + shadcn/ui, Vitest — full list below.'}</Li>
+            <Li>{ru ? 'документация: интеграция с Clear NDR, обновление, дашборды и архитектура — в каталоге docs/ и на вкладке «Помощь».' : 'documentation: Clear NDR integration, update, dashboards and architecture — in the docs/ directory and on the “Help” tab.'}</Li>
           </ul>
         </div>
       ),
@@ -133,8 +134,8 @@ function sections(lang: Lang, techNote: string): AboutSection[] {
             <div className="font-medium text-foreground">{ru ? 'Источники правил' : 'Rule feed providers'}</div>
             <p className="text-muted-foreground">
               {ru
-                ? 'Cisco Talos (snort.org), Emerging Threats, PT Attack Detection Team, Quadrant Information Security, OISF (Suricata), abuse.ch, CINS Score, Blocklist.de, Spamhaus, Phishing Army — спасибо за открытые фиды.'
-                : 'Cisco Talos (snort.org), Emerging Threats, PT Attack Detection Team, Quadrant Information Security, OISF (Suricata), abuse.ch, CINS Score, Blocklist.de, Spamhaus, Phishing Army — thank you for the open feeds.'}
+                ? 'Cisco Talos (snort.org), Emerging Threats, Positive Technologies (Attack Detection Team и PT Open Ruleset), Quadrant Information Security, OISF (Suricata), abuse.ch, Stamus Networks, Daffainfo, PAW Patrules, The Hunters Ledger, AntiPhishing Ruleset (julioliraup), Stalkerware IOC (Echap), Threat Hunting Rules (travisbgreen), NMAP Scan Detection (aleksibovellan), IPFire DBL, Etnetera, CINS Score, Blocklist.de, Spamhaus, Phishing Army, индекс EveBox Rules — спасибо за открытые фиды.'
+                : 'Cisco Talos (snort.org), Emerging Threats, Positive Technologies (Attack Detection Team and PT Open Ruleset), Quadrant Information Security, OISF (Suricata), abuse.ch, Stamus Networks, Daffainfo, PAW Patrules, The Hunters Ledger, AntiPhishing Ruleset (julioliraup), Stalkerware IOC (Echap), Threat Hunting Rules (travisbgreen), NMAP Scan Detection (aleksibovellan), IPFire DBL, Etnetera, CINS Score, Blocklist.de, Spamhaus, Phishing Army, the EveBox Rules index — thank you for the open feeds.'}
             </p>
           </div>
         </div>
@@ -191,8 +192,8 @@ export function AboutTab() {
               <CardTitle className="text-lg">NDR Rules Hub</CardTitle>
               <CardDescription className="mt-0.5">
                 {lang === 'ru'
-                  ? 'Управление источниками правил Snort/Suricata и сборка наборов для Clear NDR'
-                  : 'Managing Snort/Suricata rule sources and building rulesets for Clear NDR'}
+                  ? 'Полный цикл работы с правилами Snort/Suricata: источники, категории, сборка и доставка наборов в Clear NDR'
+                  : 'The full Snort/Suricata rules cycle: sources, categories, building and delivering rulesets to Clear NDR'}
               </CardDescription>
               <div className="flex gap-2 mt-2">
                 <Badge variant="outline" className="border-input text-foreground">{tr(t.about.version, { v: APP_VERSION })}</Badge>

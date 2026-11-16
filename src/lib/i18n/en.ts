@@ -659,7 +659,7 @@ PersistentKeepalive = 25
   help: {
     title: 'Help',
     intro:
-      'System goals and objectives, pipeline principles and hints for typical situations. Developer info and acknowledgements are on the “About” tab.',
+      'System goals and objectives, the rules processing pipeline, categories and rules, Clear NDR integration (PUSH/PULL), Clear NDR updates, OpenSearch dashboards, editions and tokens, troubleshooting. Developer info and acknowledgements are on the “About” tab.',
     repoLabel: 'Project repository:',
     authorSiteLabel: "author's site:",
   },

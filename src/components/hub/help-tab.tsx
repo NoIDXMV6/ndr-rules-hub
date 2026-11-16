@@ -60,12 +60,16 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**NDR Rules Hub** — вспомогательный сервис для системы **Clear NDR** (Stamus Networks): он автоматизирует полный цикл работы с наборами правил Snort/Suricata, которые питают сетевое обнаружение.',
       ],
       items: [
-        'собрать в одном месте проверенные источники правил — от официальных наборов Talos до открытых фидов;',
-        'загружать их по расписанию с учётом лимитов и авторизации (oinkcode, auth-key);',
+        'собрать в одном месте проверенные источники правил — в каталоге уже 36 преднастроенных наборов, от официальных правил Talos до открытых фидов, плюс свои источники по URL/архиву/локальному файлу;',
+        'загружать их по расписанию с учётом лимитов и авторизации (oinkcode, abuse.ch Auth-Key, basic), с кэшем и зеркалами на случай сбоя основного URL;',
         'устранять дубликаты и конфликты SID, из-за которых импорт в Clear NDR отказывает;',
-        'конвертировать списки индикаторов (IP/домены/URL) в правила Suricata;',
-        'собрать один итоговый файл и доставить его в Clear NDR — вручную, через REST API, по pull-схеме или из локального каталога;',
-        'при необходимости загружать правила через WireGuard VPN, не теряя доступ к самому сервису.',
+        'конвертировать списки индикаторов (IP/домены/URL) в правила Suricata и фильтровать несовместимые с Suricata конструкции;',
+        'управлять итоговым набором через категории (classtype) и отдельные правила — выключатель SID переживает обновление источников;',
+        'собрать один итоговый файл и доставить его в Clear NDR — вручную, через REST API (PUSH), по pull-схеме с токенами или из локального каталога;',
+        'наполнять пустые разделы OpenSearch Dashboards (Alerting, Anomaly, Security Analytics) дашбордами по данным EVE;',
+        'обновлять сам Clear NDR до новой версии одним запуском — с бэкапами и автооткатом;',
+        'при необходимости загружать правила через WireGuard VPN, не теряя доступ к самому сервису;',
+        'в редакции Enterprise — работать нескольким пользователям с регистрацией, верификацией и персональными токенами скачивания.',
       ],
     },
     {
@@ -73,30 +77,42 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       steps: [
         {
           title: '1. Источники',
-          text: 'Каталог источников (вкладка «Источники»): официальные наборы snort.org (registered по oinkcode, community), ET Open, PT Attack Detection, Quadrant, OISF Traffic ID, фиды abuse.ch, конвертеры списков IP/доменов и локальные архивы. У каждого источника — тип авторизации (oinkcode / auth-key / basic / без авторизации), приоритет и флаг включения.',
+          text: 'Каталог источников (вкладка «Источники», 36 преднастроенных): официальные наборы snort.org (registered по oinkcode, community), ET Open, PT Open Ruleset и PT Attack Detection, Quadrant, OISF Traffic ID, фиды abuse.ch, наборы из индекса EveBox Rules (PAW Patrules, The Hunters Ledger, AntiPhishing и др.), конвертеры списков IP/доменов и локальные архивы. У каждого источника — тип авторизации (oinkcode / auth-key / basic / без авторизации), приоритет, флаг включения и свои источники пользователей (Enterprise). Удалённые источники попадают в корзину: правила сохраняются, источник можно восстановить.',
         },
         {
           title: '2. Загрузка',
-          text: 'HTTP(S)-загрузка с авторизацией: для snort.org ссылки приводятся к канонической форме `/reg-rules/<файл>/<oinkcode>`, архив проверяется по magic-байтам gzip, поддерживается кэш (`cacheTtlMinutes`) и работа от ранее скачанного архива при сбоях. Учитывайте лимиты snort.org: registered — не чаще раза в 15 минут.',
+          text: 'HTTP(S)-загрузка с авторизацией: для snort.org ссылки приводятся к канонической форме `/reg-rules/<файл>/<oinkcode>`, архив проверяется по magic-байтам gzip, поддерживаются кэш (`cacheTtlMinutes`), свой User-Agent и зеркала (`extra.mirrorUrls` — при сетевой ошибке или не-200 основном URL по очереди пробуются зеркала). При сбое используется ранее скачанный архив. Учитывайте лимиты snort.org: registered — не чаще раза в 15 минут.',
         },
         {
           title: '3. Парсинг и конвертация',
-          text: 'Правила разбираются на атрибуты (SID, rev, msg, classtype, протокол, направление), проверяется совместимость с Suricata. Списки индикаторов (IP, домены, URL) конвертируются в правила Suricata с SID из приватного диапазона — с настройками sidStart, msgPrefix, perRule, maxRules.',
+          text: 'Правила разбираются на атрибуты (SID, rev, msg, classtype, протокол, направление) и проверяются на совместимость с Suricata. Списки индикаторов (IP, домены, URL) конвертируются в правила Suricata с SID из приватного диапазона — с настройками sidStart, msgPrefix, perRule, maxRules.',
         },
         {
           title: '4. Дедупликация',
           text: 'Внутри источника и между источниками устраняются дубликаты: по SID (стратегии highest-rev / source-priority / renumber-private) и по содержимому правила (content hash). Отдельно гасится конфликт «conflicting SID» — причина отказов импорта в Clear NDR.',
         },
         {
-          title: '5. Сборка',
-          text: 'Итоговый файл собирается из всех правил с фильтром совместимости (dropIncompatible — отбросить несовместимые с Suricata конструкции), опционально скрываются отключённые правила (dropDisabledMsg). Результат: файл с именем из настроек, SHA-256 и статистикой.',
+          title: '5. Фильтр совместимости и сборка',
+          text: 'Несовместимые с Suricata конструкции (Snort 2: preproc, react, rawbytes…; Snort 3: keystore, pkt_trace…) отсекаются на этапе сборки (dropIncompatible), опционально скрываются отключённые правила (dropDisabledMsg). Итог: файл с именем из настроек, SHA-256 и статистикой. Готовый офлайн-пакет (каталог dist/) дополнительно проходит цикл валидации реальным движком `suricata -T` до нуля ошибок.',
         },
         {
           title: '6. Экспорт',
-          text: 'Четыре способа доставки в Clear NDR: 1) скачать файл и импортировать вручную (вкладка «Сборка и экспорт» → «Скачать итоговый файл»); 2) Clear NDR REST — нативная интеграция: Hub сам находит/создаёт источник и загружает файл через REST API Scirius (upload → update_push_all), нужен API-токен Clear NDR (меню пользователя → Edit Token); 3) pull — Clear NDR сам забирает файл по URL Hub (/api/export) и обновляется по встроенному расписанию (Suricata → Update → Recurrence); 4) HTTP POST на произвольный эндпоинт или копирование в каталог volume. Автоматизация — по расписанию (cron в «Настройках») или кнопкой «Полный цикл». Пошаговая инструкция с командами — docs/clearndr-integration.md.',
+          text: 'Четыре способа доставки в Clear NDR: 1) скачать файл и импортировать вручную (вкладка «Сборка и экспорт» → «Скачать итоговый файл»); 2) Clear NDR REST — нативная интеграция: Hub сам находит/создаёт источник и загружает файл через REST API Scirius (upload → update_push_all), нужен API-токен Clear NDR (меню пользователя → Edit Token); 3) pull — Clear NDR сам забирает файл по URL Hub (/api/export) и обновляется по встроенному расписанию (Suricata → Update → Recurrence); 4) HTTP POST на произвольный эндпоинт или копирование в каталог volume. Отдача по URL — единым файлом или tgz-архивом по источникам, с опциональным ключом и персональными токенами. Автоматизация — по расписанию (cron в «Настройках») или кнопкой «Полный цикл». Пошаговая инструкция с командами — docs/clearndr-integration.md.',
         },
       ],
-      footnote: 'Все шаги видны в «Журнале»; состояния источников (ОК/ошибка/кэш) — на вкладке «Источники».',
+      footnote: 'Все шаги видны в «Журнале»; состояния источников (ОК/ошибка/кэш) — на вкладке «Источники»; состав итогового набора — на вкладках «Категории» и «Правила».',
+    },
+    {
+      trigger: 'Категории, правила и корзина источников',
+      paragraphs: [
+        'Итоговый набор управляется дважды: сначала включёнными источниками, затем фильтром категорий и правил: **итоговый сет = включённые источники ∩ включённые категории ∩ не отключённые правила**.',
+      ],
+      items: [
+        '**Категории** — правила включённых источников группируются по `classtype`: категорию можно включить/выключить в сборке, переименовать или скрыть;',
+        '**Правила** — вкладка «Правила»: поиск по SID, тексту и источнику, просмотр тела правила; выключатель отдельного SID (в карточке правила из «Категорий») сохраняется в базе и переживает перезагрузку источников и пересборку;',
+        '**Корзина источников** — удаление с сохранением правил в базе, восстановление и полное удаление; имена удалённых builtin-источников не восстанавливаются «докаткой» каталога;',
+        '**Докатка каталога** — при обновлении Hub новые преднастроенные источники появляются автоматически, без пересоздания БД; пользовательские настройки (вкл/выкл, приоритет, заметки) не перезаписываются.',
+      ],
     },
     {
       trigger: 'Интеграция с Clear NDR: токен и схемы доставки',
@@ -175,6 +191,51 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       },
     },
     {
+      trigger: 'Обновление Clear NDR на новую версию',
+      paragraphs: [
+        'Вкладка «Обновление Clear NDR» обновляет сам Clear NDR Community (docker-стек под управлением `stamusctl`) до новой версии, не теряя ни одной настройки: источники, наборы, включённые категории, remap SID, пороги/подавления, пользователи и API-токены, конфигурация Suricata/nginx и сертификаты.',
+      ],
+      steps: [
+        {
+          title: 'Как это работает',
+          text: 'Вкладка определяет установленную версию → находит последний релиз stamusctl-templates → при наличии более новой предлагает выбрать опции (сохранение данных OpenSearch/PostgreSQL, бэкапы, обновление CLI stamusctl) и запускает обновление одним кликом. Скрипт `scripts/clearndr-update.sh` выполняется на хосте (SSH или local — когда хаб в контейнере на хосте с Clear NDR), лог идёт в реальном времени, при сбое — автооткат, после — проверки: контейнеры, web UI, REST API.',
+        },
+        {
+          title: 'Защита данных',
+          text: 'Анализ совместимости данных ДО остановки стека (смена мажорной версии OpenSearch/PostgreSQL — с выбором: сохранить, показать шаги ручной конвертации или обновиться с чистыми данными); три уровня бэкапов; бэкап-гейт и защита отката; самовосстановление пропавшего `config/docker-compose.yaml`, валидация `docker compose config`, автопатч секции `networks` (гэп шаблонов 3.3.x); интеграция mikrocata2selks (MikroTik) с восстановлением `suricata.interfaces`.',
+        },
+        {
+          title: 'Ремонт повреждённого config/',
+          text: 'Отдельный скрипт `scripts/clearndr-repair-stack.sh` реконструирует compose-стек из работающих контейнеров и восстанавливает bind-файлы — когда `config/` инстанса повреждён или потерян.',
+        },
+      ],
+      outroLink: {
+        before: 'Подробная инструкция: как устроено обновление, что сохраняется, аварийные пути —',
+        label: 'docs/clearndr-update.md',
+        after: '',
+        href: REPO + '/blob/main/docs/clearndr-update.md',
+      },
+    },
+    {
+      trigger: 'Дашборды OpenSearch',
+      paragraphs: [
+        'Раздел наполняет пустые «с завода» разделы OpenSearch Dashboards (OSD) — **Alerting**, **Anomaly Detection**, **Security Analytics** — данными Suricata EVE (`logstash-*`) и добавляет каталог дополнительных pack-дашбордов (HTTP, TLS, files и др.).',
+      ],
+      items: [
+        '**Alerting** — мониторы с префиксом «NDR ·»: критические алерты Suricata, всплески severity 2, DNS-флуд, активность fileinfo, всплеск потоков; срабатывания пишутся в индекс аудита `ndr-alerts-audit` (работает без SMTP/Slack);',
+        '**Anomaly Detection** — ML-детекторы аномалий объёма трафика и DNS-запросов по источникам;',
+        '**Автоподбор index-pattern по данным** — паттерн выбирается/создаётся по фактическому индексу с EVE-событиями, поля синхронизируются из `_field_caps` (включая keyword-поля для агрегаций) — иначе OSD отвечает «Could not locate that index-pattern-field»;',
+        '**Режимы** — импорт, проверка (--check: данные/поля/паттерны без изменений), удаление (--remove — по точным id, с бэкапами); прогоны видны во вкладке с живым логом, зависший прогон можно остановить;',
+        '**Пустой OSD 3.x** — если OSD отвечает пустым экраном, скрипт починит `workspace.enabled=false` (правка bind-файла + restart).',
+      ],
+      outroLink: {
+        before: 'Состав мониторов, детекторов и дашбордов —',
+        label: 'docs/osd-analytics.md',
+        after: '',
+        href: REPO + '/blob/main/docs/osd-analytics.md',
+      },
+    },
+    {
       trigger: 'Источники правил и лимиты snort.org',
       paragraphs: [
         'Рекомендуемый базовый набор — **Snort Registered Ruleset** (обновляется Talos ежедневно) плюс **ET Open**. Community-наборы snort.org — подмножества registered, включайте их только без oinkcode.',
@@ -183,6 +244,9 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'registered-архивы загружаются по oinkcode из «Настроек» (snort.org → Preferences → Oinkcode, 40 hex-символов);',
         'лимит snort.org: registered — не чаще **1 загрузки в 15 минут**; community — ограничение по IP;',
         'задайте `cacheTtlMinutes` в extra источника, чтобы не перекачивать архив чаще лимита;',
+        'зеркала (`extra.mirrorUrls`) — при сетевой ошибке или не-200 ответе основного URL по очереди пробуются зеркала; в зеркала тоже подставляется авторизация (`%%AUTHKEY%%`);',
+        'свой User-Agent (`userAgent` в extra) — некоторые серверы (например, ptrules.com) блокируют не-браузерный UA;',
+        'фиды abuse.ch (ThreatFox, URLhaus) требуют бесплатный Auth-Key: auth.abuse.ch → Create Key → вставить в «Настройках»; без ключа сервер отвечает HTTP 401/410;',
         'локальные архивы (data/archives) — запасной путь при недоступности snort.org.',
       ],
     },
@@ -198,12 +262,33 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       ],
     },
     {
+      trigger: 'Редакции Community и Enterprise: пользователи и токены',
+      paragraphs: [
+        'Один и тот же Docker-образ работает в двух редакциях: **Community** (по умолчанию) — всё доступно без входа, как раньше; **Enterprise** (`NDR_EDITION=enterprise`) — многопользовательский режим с регистрацией и персональными токенами.',
+      ],
+      items: [
+        '**Регистрация и верификация** — пользователь регистрируется на экране входа; аккаунт активирует администратор (без верификации кабинет недоступен); первый зарегистрированный становится администратором; регистрацию можно закрыть в разделе «Пользователи»;',
+        '**Кабинет пользователя** — урезанный набор вкладок: Обзор, Источники, Категории, Правила, Сборка и экспорт, Обновление Clear NDR, Дашборды OpenSearch, Помощь, О системе; VPN, Настройки, Журнал и Пользователи — только у администратора; свои источники (ownerId) видны владельцу и админу;',
+        '**Токены скачивания** — персональные токены `ndrt_…` для PULL-схемы: добавить к URL (`?token=…`) или в поле authkey источника Clear NDR (scirius передаст его в заголовке Authorization); в БД только SHA-256 — полный токен виден один раз; есть срок действия, отзыв и статистика скачиваний (вкладка «Сборка и экспорт» → «Токены скачивания правил»);',
+        '**Защита** — rate limit по IP на всех эндпоинтах (429 + Retry-After); анти-брутфорс: вход (по IP, email и блок учётной записи) и ключи/токены отдачи (10 неудач за 5 мин → блок 15 мин); очередь тяжёлых операций (сборка/загрузка/отдача — 429 при переполнении); троттлинг канала отдачи (`downloadBandwidthKbps`); CSRF-проверки (Sec-Fetch-Site/Origin); пароли scrypt, SHA-256 токенов, security-заголовки;',
+        '**Журнал событий безопасности** — раздел «Пользователи» показывает последние 100 событий: входы, блокировки, верификации.',
+      ],
+      outroLink: {
+        before: 'Архитектура многопользовательского режима и REST-спецификация —',
+        label: 'docs/developer.md · openapi.json',
+        after: '',
+        href: REPO + '/blob/main/docs/developer.md',
+      },
+    },
+    {
       trigger: 'Диагностика типовых проблем',
       items: [
         '**HTTP 422** у snort.org — почти всегда «Invalid oinkcode»: проверьте код в «Настройках» (40 символов, без пробелов);',
         '**HTTP 403 / 429** — дневной/частотный лимит загрузок: подождите 15–30 минут или включите кэш;',
+        '**HTTP 401/410 у abuse.ch** — нет или неверный Auth-Key: создайте ключ на auth.abuse.ch и вставьте в «Настройках»;',
         '**«not in gzip format»** — исправлено с v1.5.0: архив теперь проверяется по magic-байтам, а ссылки личного кабинета snort.org автоматически приводятся к каноническому виду;',
         '**«Ошибка связи с API»** — бэкенд недоступен: смотрите `docker logs ndr-rules-hub` и `GET /api/health`;',
+        '**зависший прогон OSD/обновления** — вкладка реанимирует запуск после пересоздания контейнера (проверка pid по возрасту процесса); экстренное снятие блокировки — rc=143 («остановлен»), описано в docs/clearndr-update.md;',
         'схема БД восстанавливается автоматически: при расхождении с манифестом образа недостающие таблицы/колонки докатываются в живую базу без потери данных (бэкап перед изменениями — `data/hub.db.preheal-*`); если база нечитаема — она бэкапится в `data/hub.db.bak-*` и создаётся заново;',
         '**P2022 «column … does not exist»** — устаревшая схема БД тома: перезапустите контейнер (`docker compose restart ndr-rules-hub`) — entrypoint сам докатит схему;',
         '**«database disk image is malformed»** — файл БД повреждён (часто после аварийного выключения сервера или заполненного диска): перезапустите контейнер — `db-heal` сначала проверяет базу целиком (`PRAGMA integrity_check`), при провале восстанавливает её из последнего здорового снимка (`hub.db.preheal-*`/`hub.db.bak-*`), и только если снимков нет — бэкапит файл и создаёт базу заново (ключ abuse.ch вводится повторно).',
@@ -222,7 +307,8 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**source-priority** — выигрывает источник с меньшим числом приоритета;',
         '**renumber-private** — конфликтующие SID переводятся в приватный диапазон (privateSidStart);',
         '**dedupContent** — удаляет правила с одинаковым содержимым, но разными SID;',
-        '**dropIncompatible** — не включает в сборку конструкции, несовместимые с Suricata (replace, rawbytes и др.).',
+        '**dropIncompatible** — не включает в сборку конструкции, несовместимые с Suricata (replace, rawbytes и др.); несовместимое правило помечается флагом совместимости и в итоговый набор не попадает;',
+        'офлайн-пакет dist/ дополнительно проходит цикл валидации движком `suricata -T` до нуля ошибок — невалидированный набор не публикуется.',
       ],
     },
   ],
@@ -233,12 +319,16 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**NDR Rules Hub** is a companion service for the **Clear NDR** system (Stamus Networks): it automates the full cycle of working with Snort/Suricata rulesets that feed network detection.',
       ],
       items: [
-        'bring proven rule sources together in one place — from official Talos rulesets to open feeds;',
-        'download them on a schedule, respecting rate limits and authentication (oinkcode, auth-key);',
+        'bring proven rule sources together in one place — the catalog already ships 36 preconfigured sets, from official Talos rules to open feeds, plus your own sources by URL/archive/local file;',
+        'download them on a schedule, respecting rate limits and authentication (oinkcode, abuse.ch Auth-Key, basic), with caching and mirrors as a fallback for the primary URL;',
         'eliminate duplicates and SID conflicts that make Clear NDR imports fail;',
-        'convert indicator lists (IP/domains/URLs) into Suricata rules;',
-        'produce a single final file and deliver it to Clear NDR — manually, via the REST API, a pull scheme, or from a local directory;',
-        'when needed, download rules through a WireGuard VPN without losing access to the service itself.',
+        'convert indicator lists (IP/domains/URLs) into Suricata rules and filter Suricata-incompatible constructs;',
+        'manage the final ruleset through categories (classtype) and individual rules — a per-SID toggle survives source refreshes;',
+        'produce a single final file and deliver it to Clear NDR — manually, via the REST API (PUSH), a pull scheme with tokens, or from a local directory;',
+        'populate the empty OpenSearch Dashboards sections (Alerting, Anomaly, Security Analytics) with EVE-data dashboards;',
+        'update Clear NDR itself to a new version in one run — with backups and automatic rollback;',
+        'when needed, download rules through a WireGuard VPN without losing access to the service itself;',
+        'in the Enterprise edition — work with multiple users, registration, verification and personal download tokens.',
       ],
     },
     {
@@ -246,11 +336,11 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       steps: [
         {
           title: '1. Sources',
-          text: 'Source catalog (the “Sources” tab): official snort.org rulesets (registered via oinkcode, community), ET Open, PT Attack Detection, Quadrant, OISF Traffic ID, abuse.ch feeds, IP/domain list converters and local archives. Each source has an auth type (oinkcode / auth-key / basic / none), a priority and an enable flag.',
+          text: 'Source catalog (the “Sources” tab, 36 preconfigured): official snort.org rulesets (registered via oinkcode, community), ET Open, PT Open Ruleset and PT Attack Detection, Quadrant, OISF Traffic ID, abuse.ch feeds, sets from the EveBox Rules index (PAW Patrules, The Hunters Ledger, AntiPhishing and more), IP/domain list converters and local archives. Each source has an auth type (oinkcode / auth-key / basic / none), a priority, an enable flag and per-user sources (Enterprise). Deleted sources go to the trash bin: rules are kept and the source can be restored.',
         },
         {
           title: '2. Fetching',
-          text: 'Authenticated HTTP(S) download: snort.org links are normalized to the canonical `/reg-rules/<file>/<oinkcode>` form, the archive is verified by gzip magic bytes, caching (`cacheTtlMinutes`) and falling back to a previously downloaded archive are supported. Mind the snort.org limits: registered — no more than once every 15 minutes.',
+          text: 'Authenticated HTTP(S) download: snort.org links are normalized to the canonical `/reg-rules/<file>/<oinkcode>` form, the archive is verified by gzip magic bytes; caching (`cacheTtlMinutes`), a custom User-Agent and mirrors (`extra.mirrorUrls` — on a network error or non-200 of the primary URL the mirrors are tried one by one) are supported. On failure a previously downloaded archive is used. Mind the snort.org limits: registered — no more than once every 15 minutes.',
         },
         {
           title: '3. Parsing and conversion',
@@ -261,15 +351,27 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
           text: 'Duplicates are removed within and across sources: by SID (highest-rev / source-priority / renumber-private strategies) and by rule content (content hash). The “conflicting SID” problem — a common cause of failed Clear NDR imports — is handled separately.',
         },
         {
-          title: '5. Build',
-          text: 'The final file is assembled from all rules with the compatibility filter (dropIncompatible — drop Suricata-incompatible constructs) and, optionally, disabled rules hidden (dropDisabledMsg). The result: a file named per settings, with SHA-256 and statistics.',
+          title: '5. Compatibility filter and build',
+          text: 'Constructs absent in Suricata (Snort 2: preproc, react, rawbytes…; Snort 3: keystore, pkt_trace…) are excluded at build time (dropIncompatible), disabled rules can be hidden (dropDisabledMsg). The result: a file named per settings, with SHA-256 and statistics. The ready offline package (dist/ directory) additionally passes a validation loop with the real `suricata -T` engine until zero errors.',
         },
         {
           title: '6. Export',
-          text: 'Four delivery paths to Clear NDR: 1) download the file and import it manually (“Build & Export” tab → “Download final file”); 2) Clear NDR REST — native integration: the Hub itself finds/creates the source and uploads the file through the Scirius REST API (upload → update_push_all); a Clear NDR API token is required (user menu → Edit Token); 3) pull — Clear NDR fetches the file from the Hub URL (/api/export) and updates itself on a built-in schedule (Suricata → Update → Recurrence); 4) HTTP POST to any endpoint or copying to a volume directory. Automation — by schedule (cron in “Settings”) or the “Full cycle” button. Step-by-step guide with commands — docs/clearndr-integration.en.md.',
+          text: 'Four delivery paths to Clear NDR: 1) download the file and import it manually (“Build & Export” tab → “Download final file”); 2) Clear NDR REST — native integration: the Hub itself finds/creates the source and uploads the file through the Scirius REST API (upload → update_push_all); a Clear NDR API token is required (user menu → Edit Token); 3) pull — Clear NDR fetches the file from the Hub URL (/api/export) and updates itself on a built-in schedule (Suricata → Update → Recurrence); 4) HTTP POST to any endpoint or copying to a volume directory. URL serving — a single file or a per-source tgz archive, with an optional key and personal tokens. Automation — by schedule (cron in “Settings”) or the “Full cycle” button. Step-by-step guide with commands — docs/clearndr-integration.en.md.',
         },
       ],
-      footnote: 'All steps are visible in the “Logs” tab; source states (OK/error/cache) are on the “Sources” tab.',
+      footnote: 'All steps are visible in the “Logs” tab; source states (OK/error/cache) are on the “Sources” tab; the final ruleset composition — on the “Categories” and “Rules” tabs.',
+    },
+    {
+      trigger: 'Categories, rules and the source trash bin',
+      paragraphs: [
+        'The final ruleset is managed twice: first by enabled sources, then by the category/rule filter: **final set = enabled sources ∩ enabled categories ∩ not disabled rules**.',
+      ],
+      items: [
+        '**Categories** — rules of enabled sources are grouped by `classtype`: a category can be enabled/disabled in the build, renamed or hidden;',
+        '**Rules** — the “Rules” tab: search by SID, text and source, rule body view; a per-SID toggle (in the rule card on the “Categories” tab) is stored in the database and survives source refreshes and rebuilds;',
+        '**Source trash bin** — delete with rules kept in the database, restore and permanent deletion; names of deleted builtin sources are not re-created by the catalog backfill;',
+        '**Catalog backfill** — when the Hub is updated, new preconfigured sources appear automatically, without recreating the DB; user settings (enabled/disabled, priority, notes) are not overwritten.',
+      ],
     },
     {
       trigger: 'Clear NDR integration: token and delivery schemes',
@@ -345,6 +447,51 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       },
     },
     {
+      trigger: 'Updating Clear NDR to a new version',
+      paragraphs: [
+        'The “Clear NDR Update” tab upgrades Clear NDR Community itself (the docker stack managed by `stamusctl`) to a new version without losing a single setting: sources, rulesets, enabled categories, SID remap, thresholds/suppressions, users and API tokens, Suricata/nginx configuration and certificates.',
+      ],
+      steps: [
+        {
+          title: 'How it works',
+          text: 'The tab detects the installed version → finds the latest stamusctl-templates release → if a newer one exists, offers options (keeping OpenSearch/PostgreSQL data, backups, updating the stamusctl CLI) and starts the update in one click. The `scripts/clearndr-update.sh` script runs on the host (SSH or local — when the Hub runs in a container on the host with Clear NDR), the log streams in real time, failures trigger an automatic rollback, followed by checks: containers, web UI, REST API.',
+        },
+        {
+          title: 'Data protection',
+          text: 'Data compatibility analysis BEFORE stopping the stack (a major version change of OpenSearch/PostgreSQL offers: keep the data, show manual conversion steps, or update with clean data); three backup levels; a backup gate and rollback protection; self-restoration of a missing `config/docker-compose.yaml`, `docker compose config` validation, automatic patching of the `networks` section (a 3.3.x template gap); mikrocata2selks (MikroTik) integration with `suricata.interfaces` restoration.',
+        },
+        {
+          title: 'Repairing a damaged config/',
+          text: 'A separate `scripts/clearndr-repair-stack.sh` script reconstructs the compose stack from running containers and restores bind files — when the instance’s `config/` is damaged or lost.',
+        },
+      ],
+      outroLink: {
+        before: 'Detailed guide: how the update works, what is preserved, emergency paths —',
+        label: 'docs/clearndr-update.en.md',
+        after: '',
+        href: REPO + '/blob/main/docs/clearndr-update.en.md',
+      },
+    },
+    {
+      trigger: 'OpenSearch Dashboards',
+      paragraphs: [
+        'The section populates the factory-empty OpenSearch Dashboards (OSD) sections — **Alerting**, **Anomaly Detection**, **Security Analytics** — with Suricata EVE data (`logstash-*`) and adds a catalog of extra pack dashboards (HTTP, TLS, files and more).',
+      ],
+      items: [
+        '**Alerting** — monitors prefixed “NDR ·”: critical Suricata alerts, severity 2 spikes, DNS floods, fileinfo activity, flow bursts; findings are written to the `ndr-alerts-audit` audit index (works without SMTP/Slack);',
+        '**Anomaly Detection** — ML detectors for traffic volume and DNS query anomalies per source;',
+        '**Data-driven index-pattern selection** — the pattern is picked/created from the index that actually holds EVE events, fields are synced from `_field_caps` (including keyword sub-fields for aggregations) — otherwise OSD answers “Could not locate that index-pattern-field”;',
+        '**Modes** — import, check (--check: data/fields/patterns without changes), removal (--remove — by exact ids, with backups); runs are visible in the tab with a live log, a stuck run can be stopped;',
+        '**Empty OSD 3.x** — if OSD shows a blank screen, the script fixes `workspace.enabled=false` (bind-file edit + restart).',
+      ],
+      outroLink: {
+        before: 'The full set of monitors, detectors and dashboards —',
+        label: 'docs/osd-analytics.md',
+        after: '',
+        href: REPO + '/blob/main/docs/osd-analytics.md',
+      },
+    },
+    {
       trigger: 'Rule sources and snort.org limits',
       paragraphs: [
         'The recommended base set is the **Snort Registered Ruleset** (updated daily by Talos) plus **ET Open**. snort.org community sets are subsets of registered — enable them only if you have no oinkcode.',
@@ -353,6 +500,9 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'registered archives are downloaded with the oinkcode from “Settings” (snort.org → Preferences → Oinkcode, 40 hex characters);',
         'snort.org limit: registered — no more than **1 download per 15 minutes**; community — IP-based limit;',
         'set `cacheTtlMinutes` in the source extra so the archive is not re-downloaded more often than the limit;',
+        'mirrors (`extra.mirrorUrls`) — on a network error or non-200 response of the primary URL the mirrors are tried one by one; authorization (`%%AUTHKEY%%`) is substituted in mirrors as well;',
+        'a custom User-Agent (`userAgent` in extra) — some servers (e.g. ptrules.com) block non-browser user agents;',
+        'abuse.ch feeds (ThreatFox, URLhaus) require a free Auth-Key: auth.abuse.ch → Create Key → paste it in “Settings”; without the key the server answers HTTP 401/410;',
         'local archives (data/archives) are the fallback path when snort.org is unreachable.',
       ],
     },
@@ -368,13 +518,36 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       ],
     },
     {
+      trigger: 'Community and Enterprise editions: users and tokens',
+      paragraphs: [
+        'The same Docker image ships in two editions: **Community** (default) — everything is available without signing in, as before; **Enterprise** (`NDR_EDITION=enterprise`) — multi-user mode with registration and personal tokens.',
+      ],
+      items: [
+        '**Registration and verification** — a user registers on the sign-in screen; an administrator activates the account (without verification the cabinet is unavailable); the first registered account becomes the administrator; registration can be closed in the “Users” section;',
+        '**User cabinet** — a reduced set of tabs: Overview, Sources, Categories, Rules, Build & Export, Clear NDR Update, OpenSearch Dashboards, Help, About; VPN, Settings, Logs and Users are administrator-only; own sources (ownerId) are visible to the owner and admins;',
+        '**Download tokens** — personal `ndrt_…` tokens for the PULL scheme: append to the URL (`?token=…`) or put into the authkey field of a Clear NDR source (scirius sends it as the Authorization header); only the SHA-256 is stored — the full token is shown once; expiry, revocation and download statistics are available (“Build & Export” tab → “Rule download tokens”);',
+        '**Protection** — per-IP rate limit on every endpoint (429 + Retry-After); brute-force protection: sign-in (by IP, email and account lock) and serving keys/tokens (10 failures per 5 min → 15 min block); a queue for heavy operations (build/fetch/serving — 429 when saturated); serving bandwidth throttling (`downloadBandwidthKbps`); CSRF checks (Sec-Fetch-Site/Origin); scrypt passwords, SHA-256 token hashing, security headers;',
+        '**Security event log** — the “Users” section shows the last 100 events: sign-ins, lockouts, verifications.',
+      ],
+      outroLink: {
+        before: 'Multi-user architecture and the REST specification —',
+        label: 'docs/developer.md · openapi.json',
+        after: '',
+        href: REPO + '/blob/main/docs/developer.md',
+      },
+    },
+    {
       trigger: 'Troubleshooting common problems',
       items: [
         '**HTTP 422** from snort.org — almost always “Invalid oinkcode”: check the code in “Settings” (40 characters, no spaces);',
         '**HTTP 403 / 429** — daily/rate limit on downloads: wait 15–30 minutes or enable caching;',
+        '**HTTP 401/410 from abuse.ch** — a missing or wrong Auth-Key: create a key at auth.abuse.ch and paste it in “Settings”;',
         '**“not in gzip format”** — fixed since v1.5.0: the archive is now verified by magic bytes, and snort.org personal-cabinet links are automatically normalized to the canonical form;',
         '**“API communication error”** — the backend is unreachable: check `docker logs ndr-rules-hub` and `GET /api/health`;',
-        'the DB schema is restored automatically: on a version mismatch the old database is backed up to `data/hub.db.bak-*`.',
+        '**stuck OSD/update run** — the tab revives a run after the container was recreated (pid checked against process age); emergency lock removal — rc=143 (“stopped”), described in docs/clearndr-update.md;',
+        'the DB schema heals itself: on a mismatch with the image manifest the missing tables/columns are added to the live database without data loss (a backup is taken first — `data/hub.db.preheal-*`); if the database is unreadable it is backed up to `data/hub.db.bak-*` and recreated;',
+        '**P2022 “column … does not exist”** — an outdated volume DB schema: restart the container (`docker compose restart ndr-rules-hub`) — the entrypoint heals the schema;',
+        '**“database disk image is malformed”** — the DB file is corrupted (usually after a power loss or a full disk): restart the container — `db-heal` first runs a full `PRAGMA integrity_check`; on failure it restores the database from the latest healthy snapshot (`hub.db.preheal-*`/`hub.db.bak-*`), and only if no snapshots exist it backs up the file and creates a fresh database (the abuse.ch key must be entered again).',
       ],
       outroLink: {
         before: 'Detailed instructions are in the repository README:',
@@ -390,7 +563,8 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**source-priority** — the source with the lower priority number wins;',
         '**renumber-private** — conflicting SIDs are moved into the private range (privateSidStart);',
         '**dedupContent** — removes rules with identical content but different SIDs;',
-        '**dropIncompatible** — excludes Suricata-incompatible constructs from the build (replace, rawbytes, etc.).',
+        '**dropIncompatible** — excludes Suricata-incompatible constructs from the build (replace, rawbytes, etc.); a rule with an incompatible construct is flagged and does not reach the final set;',
+        'the offline dist/ package additionally passes a validation loop with the `suricata -T` engine until zero errors — an unvalidated set is never published.',
       ],
     },
   ],
