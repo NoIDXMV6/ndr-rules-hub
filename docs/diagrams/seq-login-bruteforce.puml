@@ -1,0 +1,49 @@
+' ─────────────────────────────────────────────────────────────────────────────
+' NDR Rules Hub — динамическая диаграмма: анти-брутфорс входа.
+' Три независимых слоя: лимит IP, лимит email, блокировка учётной записи.
+' ─────────────────────────────────────────────────────────────────────────────
+@startuml seq-login-bruteforce
+title Вход в систему и защита от перебора (POST /api/auth/login)
+skinparam responseMessageBelowArrow true
+
+actor "Клиент" as C
+participant "POST /api/auth/login" as L
+participant "ratelimit.ts" as R
+database "SQLite (User)" as DB
+
+C -> L: {email, password}
+L -> R: peekBlocked(login:ip:<ip>)
+alt IP заблокирован
+  L --> C: 429 «повторите через N мин» + Retry-After
+end
+L -> R: peekBlocked(login:email:<email>)
+alt email под перебором (атака с разных IP)
+  L --> C: 429
+end
+L -> DB: User(email)
+alt email неизвестен
+  L -> L: verifyPassword vs фиктивный хеш (выравнивание времени)
+  L -> R: recordFailure(ip) + recordFailure(email)
+  L -> DB: AuthEvent(login_fail)
+  L --> C: 401 «Неверный email или пароль» (не раскрываем наличие email)
+else пользователь найден
+  L -> DB: lockedUntil > now ?
+  alt учётная запись заблокирована
+    L --> C: 429 «Вход временно заблокирован…» + AuthEvent(login_lock)
+  else
+    L -> L: verifyPassword (scrypt, timingSafeEqual)
+    alt пароль неверен
+      L -> DB: failedLogins+1; при ≥5 → lockedUntil = now+15мин
+      L -> R: recordFailure(ip) + recordFailure(email)
+      L -> DB: AuthEvent(login_fail / login_lock)
+      L --> C: 401 «Неверный email или пароль»
+    else пароль верный
+      L -> DB: status=pending → 403 (AuthEvent login_pending)\nstatus=disabled → 403 (AuthEvent login_disabled)
+      L -> R: resetRate(ip) + resetRate(email) — успех обнуляет счётчики
+      L -> DB: failedLogins=0, lockedUntil=null, lastLoginAt
+      L -> DB: Session(tokenHash=SHA-256, ip, userAgent, expiresAt)
+      L --> C: 200 + cookie ndrh_sid (HttpOnly, SameSite=Lax, Secure)
+    end
+  end
+end
+@enduml

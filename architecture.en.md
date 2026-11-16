@@ -445,10 +445,48 @@ Mechanics:
 | `GET/PUT /api/settings` | settings |
 | `GET/POST/PUT/DELETE /api/vpn` | WireGuard: status, actions, profiles |
 | `GET/POST/PUT /api/clearndr-update` | Clear NDR update: status/actions (probe, start, cancel, sync-script)/settings; `?log=<runId>` — run log |
-| `GET /api/logs` | log |
+| `GET /api/logs` | log (administrator only in Enterprise) |
+| `POST /api/auth/register · login · logout`, `GET /api/auth/me` | registration (first user becomes admin), sign-in/out, UI state — Enterprise |
+| `GET/PATCH /api/auth/users`, `PATCH/DELETE /api/auth/users/:id`, `GET /api/auth/events` | users: verification, disabling, roles, deletion, security journal — Enterprise, admin only |
+| `GET/POST /api/tokens`, `DELETE /api/tokens/:id` | personal download tokens — Enterprise |
 
 API errors are returned as `{"error": "…"}` with the real cause (not an opaque HTTP 500) and
 duplicated into container logs.
+
+## 11.1 Community / Enterprise editions and the protection layer
+
+The edition is the `NDR_EDITION` environment variable (`src/lib/edition.ts`); one image for
+both. **Community** (default) — previous behavior: no authentication. **Enterprise** —
+multi-user mode: User/Session/DownloadToken/AuthEvent tables (db-heal migrates the volume DB
+automatically), registration (the first user becomes the bootstrap admin), administrator
+verification (`pending → active`; the cabinet stays closed until verified), roles (the user
+cabinet: Overview, Sources, Categories, Rules, Build & Export, Clear NDR Update, OpenSearch
+Dashboards, Help, About; the administrator additionally gets Users, VPN, Settings, Logs),
+“own sources” (Source.ownerId), personal download tokens.
+
+The protection layer — `src/lib/security/` (details in [docs/developer.md](docs/developer.md),
+C4 diagrams in [docs/diagrams/](docs/diagrams/)):
+
+- `guard.ts` — the gateway of every API route: rate limit → CSRF (Sec-Fetch-Site/Origin) →
+  session → role; in Community everyone passes;
+- `ratelimit.ts` — per-IP sliding window + `recordFailure/peekBlocked` for brute-force
+  protection;
+- `session.ts` — cookie `ndrh_sid` (HttpOnly, SameSite=Lax, Secure), only the SHA-256 is
+  stored, sliding TTL (`sessionTtlHours`);
+- `password.ts` — scrypt (N=16384) + `timingSafeEqual`; 5 consecutive failures lock the
+  account for 15 minutes; 10 failures per IP/per email within 5 minutes block the IP;
+- `download-token.ts` — personal `ndrt_…` tokens (SHA-256 in DB, shown once, revoke/expiry/
+  statistics); serving-key brute force — 10 failures/5 min → 15 min IP block;
+- `queue.ts` — queues for heavy operations: download 2/16/20s, build and fetch 1/4/5s —
+  overflow returns an honest 429 + Retry-After (burst and resource-exhaustion protection);
+- `throttle.ts` — the total `/api/export` serving speed is capped by a token bucket
+  (`downloadBandwidthKbps`) — channel utilization balancing;
+- `audit.ts` — the AuthEvent security journal (the “Users” tab);
+- settings secrets and VPN status are redacted for non-administrators; security headers in
+  `next.config.ts`; injections are closed by parameterized Prisma queries and script
+  whitelists.
+
+The REST specification — [openapi.json](openapi.json).
 
 ### Request lifecycle
 

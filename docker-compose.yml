@@ -20,6 +20,9 @@ services:
       - RULES_DATA_DIR=/app/data
       - WG_CONFIG_DIR=/app/data/wireguard
       - TZ=${TZ:-Europe/Moscow}
+      # Редакция: community (по умолчанию, без аутентификации) | enterprise
+      # (многопользовательский режим: регистрация, верификация, личный кабинет)
+      - NDR_EDITION=${NDR_EDITION:-community}
     volumes:
       # данные сервиса: БД, кэш архивов, итоговые файлы, WireGuard-конфиги,
       # метаданные прогонов обновления Clear NDR

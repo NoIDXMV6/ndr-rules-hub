@@ -33,10 +33,13 @@ model Source {
   badge      String?  // recommended | duplicate | legacy | paid | converter
   notes      String?  // анализ источника
   builtin    Boolean  @default(false)
+  ownerId    String?  // Enterprise: пользователь-владелец («свои источники»); null — общий/каталог
   deletedAt  DateTime? // не null — источник в корзине (не участвует в загрузке/сборке)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   rules      Rule[]
+
+  @@index([ownerId])
 }
 
 // Правило конкретного источника
@@ -124,4 +127,75 @@ model VpnProfile {
   lastStatusJson String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ── Многопользовательский режим (только редакция Enterprise) ─────────────────
+// Community-редакция этих таблиц не использует: аутентификации нет, весь
+// функционал доступен как раньше. Первая регистрация в Enterprise получает
+// роль admin (bootstrap), остальные — pending до верификации администратором.
+
+// Пользователь системы
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  displayName  String
+  passwordHash String    // scrypt$N$r$p$salt$hash — см. src/lib/security/password.ts
+  role         String    @default("user")  // admin | user
+  status       String    @default("pending") // pending | active | disabled
+  verifiedAt   DateTime?
+  verifiedBy   String?   // id администратора, выполнившего верификацию
+  failedLogins Int       @default(0)  // счётчик неудач подряд (анти-брутфорс)
+  lockedUntil  DateTime? // до этого времени вход заблокирован (анти-брутфорс)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+  tokens       DownloadToken[]
+}
+
+// Сессия веб-интерфейса (cookie ndrh_sid). В БД хранится только SHA-256 токена.
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt  DateTime
+  @@index([userId])
+}
+
+// Персональный токен скачивания правил (GET /api/export, ?token= / Authorization).
+// В БД — только SHA-256; полный токен показывается пользователю один раз.
+model DownloadToken {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  tokenHash     String    @unique
+  prefix        String    // первые 12 символов для отображения в кабинете
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime?
+  revokedAt     DateTime?
+  lastUsedAt    DateTime?
+  lastIp        String?
+  downloadCount Int       @default(0)
+  bytesServed   Int       @default(0)
+  @@index([userId])
+}
+
+// Журнал событий безопасности: регистрации, входы/отказы, верификации,
+// срабатывания лимитов и очередей. Доступен администратору (вкладка «Пользователи»).
+model AuthEvent {
+  id     Int      @id @default(autoincrement())
+  ts     DateTime @default(now())
+  kind   String   // register | login_ok | login_fail | login_lock | login_pending | login_disabled | logout | verify | disable | enable | role_change | delete_user | token_create | token_revoke | download | download_denied | ratelimit | queue_full
+  email  String?
+  userId String?
+  ip     String?
+  detail String?
+  @@index([ts])
+  @@index([kind])
 }

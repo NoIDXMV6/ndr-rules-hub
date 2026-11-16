@@ -1,0 +1,40 @@
+' ─────────────────────────────────────────────────────────────────────────────
+' NDR Rules Hub — C4 Component (уровень C3): слой безопасности.
+' Каждый API-роут проходит шлюз guard(): rate limit → CSRF (origin) → сессия →
+' роль; тяжёлые операции — через очередь; отдача файлов — через ведёрко канала.
+' ─────────────────────────────────────────────────────────────────────────────
+@startuml c3-security
+!include <C4/C4_Component>
+title NDR Rules Hub — C3. Компоненты слоя безопасности (src/lib/security)
+
+Container(api, "API-роуты Next.js", "Route Handlers")
+ContainerDb(db, "SQLite (Prisma)", "Session / DownloadToken / AuthEvent / User / Setting")
+
+Boundary(sec, "src/lib/security") {
+  Component(guard, "guard.ts", "TypeScript", "Шлюз роута: rateLimit → sameOriginOk (анти-CSRF) → getSession → роль; в Community пропускает всех (user=null, роль admin); requireMultiUser() — гейт Enterprise")
+  Component(ratelimit, "ratelimit.ts", "TypeScript", "Скользящее окно в памяти: rateLimit(key), recordFailure/peekBlocked/resetRate; clientIp из X-Forwarded-For")
+  Component(queue, "queue.ts", "TypeScript", "Очереди с лимитом параллельности: download 2/16/20с, build 1/4/5с, fetch 1/4/5с; переполнение → QueueFullError (429 + Retry-After)")
+  Component(throttle, "throttle.ts", "TypeScript", "Ведёрко канала Bandwidth (глобальное, downloadBandwidthKbps) + throttledStream: отдача правил без выедания канала")
+  Component(session, "session.ts", "TypeScript", "Сессии: cookie ndrh_sid (HttpOnly, SameSite=Lax, Secure), в БД SHA-256, слайдинг-TTL, проверка статуса пользователя")
+  Component(password, "password.ts", "TypeScript", "scrypt N=16384/r=8/p=1, timingSafeEqual; политика пароля (8+, буквы+цифры)")
+  Component(ids, "ids.ts", "TypeScript", "randomToken (base64url 32Б), sha256hex, safeEqual (константное сравнение)")
+  Component(dltoken, "download-token.ts", "TypeScript", "Персональные токены ndrt_*: SHA-256 в БД, prefix для UI, отзыв/срок, анти-перебор dlfail:<ip> (10/5мин → блок 15мин), статистика скачиваний")
+  Component(audit, "audit.ts", "TypeScript", "Журнал AuthEvent (fire-and-forget): register/login_*/verify/download*/ratelimit; подрезка >20k")
+}
+
+Rel(api, guard, "await guard(req, {admin, rate, allowAnonymous})")
+Rel(guard, ratelimit, "лимит scope:ip")
+Rel(guard, session, "getSession(req)")
+Rel(guard, audit, "ratelimit")
+Rel(session, db, "Session + User.status")
+Rel(ratelimit, db, "—")
+Rel(session, password, "—")
+Rel(api, dltoken, "POST/DELETE /api/tokens, GET /api/export")
+Rel(dltoken, ids, "randomToken/sha256/safeEqual")
+Rel(dltoken, db, "DownloadToken, User.status")
+Rel(dltoken, ratelimit, "dlfail:<ip>")
+Rel(api, queue, "withQueue('build'|'fetch'|'download')")
+Rel(api, throttle, "throttledStream при downloadBandwidthKbps>0")
+Rel(api, audit, "события безопасности")
+Rel(audit, db, "AuthEvent")
+@enduml

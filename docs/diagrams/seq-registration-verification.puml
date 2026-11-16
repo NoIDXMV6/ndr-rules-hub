@@ -1,0 +1,42 @@
+' ─────────────────────────────────────────────────────────────────────────────
+' NDR Rules Hub — динамическая диаграмма: регистрация и верификация (Enterprise).
+' Только после верификации администратором пользователь получает доступ в кабинет.
+' Первый зарегистрированный становится администратором (bootstrap).
+' ─────────────────────────────────────────────────────────────────────────────
+@startuml seq-registration
+title Регистрация и верификация пользователя (Enterprise)
+skinparam responseMessageBelowArrow true
+
+actor "Пользователь" as U
+participant "Web UI\n(AuthScreen)" as UI
+participant "POST /api/auth/register" as REG
+participant "POST /api/auth/login" as LOG
+database "SQLite (User)" as DB
+actor "Администратор" as A
+participant "PATCH /api/auth/users/:id" as VER
+
+U -> UI: вводит email, имя, пароль
+UI -> REG: POST {email, displayName, password}
+REG -> REG: гейт редакции (NDR_EDITION)\nrate limit register:<ip> (5/час)\nCSRF (origin) — анти-подмена
+REG -> DB: user.count()==0 ?\n  да → role=admin, status=active (bootstrap)\n  нет → role=user, status=pending
+REG -> DB: passwordHash = scrypt(пароль, соль)
+REG -> DB: AuthEvent(register)
+REG --> UI: ok + сообщение («ожидайте верификации»)
+
+UI -> LOG: попытка входа (status=pending)
+LOG -> DB: User(email)
+LOG --> UI: 403 «Учётная запись ожидает верификации» + AuthEvent(login_pending)
+
+A -> VER: {action: "verify"} (только admin)
+VER -> DB: status=active, verifiedAt, verifiedBy
+VER -> DB: AuthEvent(verify)
+VER --> A: ок
+
+U -> LOG: повторный вход
+LOG -> LOG: IP-лимит (10/5мин → блок 15мин)\nemail-лимит (распределённый перебор)\nlockedUntil (5 неудач подряд → блок)
+LOG -> LOG: verifyPassword (scrypt, timingSafeEqual)
+LOG -> DB: failedLogins=0, lastLoginAt
+LOG -> DB: Session(SHA-256 токена)
+LOG --> U: cookie ndrh_sid (HttpOnly, SameSite=Lax, Secure)
+U -> UI: личный кабинет (табы по роли)
+@enduml

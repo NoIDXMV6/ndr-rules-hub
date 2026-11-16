@@ -443,10 +443,47 @@ index.tsx    I18nProvider (useSyncExternalStore поверх localStorage) + use
 | `GET/PUT /api/settings` | настройки |
 | `GET/POST/PUT/DELETE /api/vpn` | WireGuard: статус, действия, профили |
 | `GET/POST/PUT /api/clearndr-update` | обновление Clear NDR: статус/действия (probe, start, cancel, sync-script)/настройки; `?log=<runId>` — лог прогона |
-| `GET /api/logs` | журнал |
+| `GET /api/logs` | журнал (только администратор в Enterprise) |
+| `POST /api/auth/register · login · logout`, `GET /api/auth/me` | регистрация (первый пользователь — админ), вход/выход, состояние UI — Enterprise |
+| `GET/PATCH /api/auth/users`, `PATCH/DELETE /api/auth/users/:id`, `GET /api/auth/events` | пользователи: верификация, отключение, роли, удаление, журнал безопасности — Enterprise, только админ |
+| `GET/POST /api/tokens`, `DELETE /api/tokens/:id` | персональные токены скачивания — Enterprise |
 
 Ошибки API возвращаются как `{"error": "…"}` с реальной причиной (не безликий HTTP 500) и
 дублируются в контейнерные логи.
+
+## 11.1 Редакции Community / Enterprise и слой защиты
+
+Редакция — переменная окружения `NDR_EDITION` (`src/lib/edition.ts`), один образ для обеих.
+**Community** (по умолчанию) — прежнее поведение: без аутентификации. **Enterprise** —
+многопользовательский режим: таблицы User/Session/DownloadToken/AuthEvent (докатываются на
+БД тома db-heal автоматически), регистрация (первый пользователь — bootstrap-админ),
+верификация администратором (`pending → active`, без неё кабинет закрыт), роли
+(кабинет пользователя: Обзор, Источники, Категории, Правила, Сборка и экспорт, Обновление
+Clear NDR, Дашборды OpenSearch, Помощь, О системе; у админа дополнительно Пользователи,
+VPN, Настройки, Журнал), «свои источники» (Source.ownerId), персональные токены скачивания.
+
+Слой защиты — `src/lib/security/` (детально в [docs/developer.md](docs/developer.md),
+C4-диаграммы в [docs/diagrams/](docs/diagrams/)):
+
+- `guard.ts` — шлюз каждого API-роута: rate limit → CSRF (Sec-Fetch-Site/Origin) →
+  сессия → роль; в Community пропускает всех;
+- `ratelimit.ts` — скользящее окно по IP + `recordFailure/peekBlocked` для анти-брутфорса;
+- `session.ts` — cookie `ndrh_sid` (HttpOnly, SameSite=Lax, Secure), в БД SHA-256,
+  слайдинг-TTL (`sessionTtlHours`);
+- `password.ts` — scrypt (N=16384) + `timingSafeEqual`; 5 неудач подряд → блок учётной
+  записи на 15 минут; 10 неудач с IP/на email за 5 минут → блок IP;
+- `download-token.ts` — персональные токены `ndrt_…` (SHA-256 в БД, показ один раз,
+  отзыв/срок/статистика); перебор ключей отдачи — 10 неудач/5 мин → блок 15 мин;
+- `queue.ts` — очереди тяжёлых операций: download 2/16/20с, build и fetch 1/4/5с —
+  переполнение даёт честный 429 + Retry-After (защита от всплесков и вымывания ресурсов);
+- `throttle.ts` — суммарная скорость отдачи `/api/export` ограничивается ведёрком
+  (`downloadBandwidthKbps`) — балансировка утилизации канала;
+- `audit.ts` — журнал событий безопасности AuthEvent (вкладка «Пользователи»);
+- санитизация секретов настроек и VPN-статуса для не-администраторов; security-заголовки
+  в `next.config.ts`; инъекции закрыты параметризованными запросами Prisma и белыми
+  списками значений скриптов.
+
+REST-спецификация — [openapi.json](openapi.json).
 
 ### Жизненный цикл запроса
 

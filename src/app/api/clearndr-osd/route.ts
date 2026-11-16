@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiError } from '@/lib/api-error'
+import { guard } from '@/lib/security/guard'
 import {
   loadUpdateSettings,
   maskSecrets,
@@ -33,6 +34,8 @@ function normWhat(raw: unknown): OsdApplyKind {
 
 /** GET /api/clearndr-osd — статус раздела (или лог прогона: ?log=<runId>) */
 export async function GET(req: NextRequest) {
+  const g = await guard(req, { rate: { key: 'osd', rule: { limit: 120, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const runId = req.nextUrl.searchParams.get('log')
     const cfg = await loadUpdateSettings()
@@ -76,6 +79,8 @@ export async function GET(req: NextRequest) {
 
 /** POST /api/clearndr-osd — действия: probe | sync-scripts | start | cancel */
 export async function POST(req: NextRequest) {
+  const g = await guard(req, { rate: { key: 'osd', rule: { limit: 30, windowMs: 60_000, blockMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const body = await req.json().catch(() => ({}))
     const action = body?.action

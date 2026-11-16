@@ -28,6 +28,7 @@ export interface SourceItem {
   notes: string | null
   builtin: boolean
   deletedAt: string | null
+  ownerId?: string | null
 }
 
 export interface WgPeer {
@@ -195,6 +196,25 @@ export const api = {
   osdRun: (runId: string, tail = 24000) => fetch(`/api/clearndr-osd?log=${encodeURIComponent(runId)}&tail=${tail}`, { cache: 'no-store' }).then((r) => j<OsdRunStatus>(r)),
   osdAction: (body: Record<string, unknown>) =>
     fetch('/api/clearndr-osd', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
+  // многопользовательский режим (Enterprise)
+  me: () => fetch('/api/auth/me', { cache: 'no-store' }).then((r) => j<Me>(r)),
+  register: (data: { email: string; displayName: string; password: string }) =>
+    fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; message?: string; user?: Me['user'] }>(r)),
+  login: (data: { email: string; password: string }) =>
+    fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; user?: Me['user'] }>(r)),
+  logout: () => fetch('/api/auth/logout', { method: 'POST' }).then((r) => j<{ ok: boolean }>(r)),
+  users: () => fetch('/api/auth/users', { cache: 'no-store' }).then((r) => j<{ users: UserItem[]; registrationOpen: boolean }>(r)),
+  userAction: (id: string, action: string) =>
+    fetch(`/api/auth/users/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }).then((r) => j<{ ok: boolean; user?: UserItem }>(r)),
+  userDelete: (id: string) =>
+    fetch(`/api/auth/users/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
+  registrationOpen: (open: boolean) =>
+    fetch('/api/auth/users', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ registrationOpen: open }) }).then((r) => j<{ ok: boolean; registrationOpen: boolean }>(r)),
+  authEvents: (take = 100) => fetch(`/api/auth/events?take=${take}`, { cache: 'no-store' }).then((r) => j<{ events: AuthEventItem[] }>(r)),
+  tokens: () => fetch('/api/tokens', { cache: 'no-store' }).then((r) => j<{ tokens: DownloadTokenItem[] }>(r)),
+  createToken: (data: { name: string; ttlDays?: number }) =>
+    fetch('/api/tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; token?: { id: string; token: string; name: string; prefix: string; expiresAt: string | null }; error?: string }>(r)),
+  revokeToken: (id: string) => fetch(`/api/tokens/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
 }
 
 // ── Раздел «Обновление Clear NDR» ────────────────────────────────────────────
@@ -375,6 +395,58 @@ export interface RuleRow {
   suricataOk: boolean
   compatNotes: string | null
   sourceName: string
+}
+
+// ── Многопользовательский режим (Enterprise): аутентификация, токены ─────────
+
+export interface Me {
+  edition: 'community' | 'enterprise'
+  multiUser: boolean
+  authenticated: boolean
+  user: { id: string; email: string; displayName: string; role: 'admin' | 'user'; status: 'pending' | 'active' | 'disabled' } | null
+  needsBootstrap?: boolean
+  registrationOpen?: boolean
+}
+
+export interface UserItem {
+  id: string
+  email: string
+  displayName: string
+  role: 'admin' | 'user'
+  status: 'pending' | 'active' | 'disabled'
+  verifiedAt: string | null
+  verifiedBy: string | null
+  lastLoginAt: string | null
+  createdAt: string
+  lockedUntil: string | null
+  activeSessions?: number
+  tokens?: number
+}
+
+export interface AuthEventItem {
+  id: number
+  ts: string
+  kind: string
+  email: string | null
+  userId: string | null
+  ip: string | null
+  detail: string | null
+}
+
+export interface DownloadTokenItem {
+  id: string
+  name: string
+  prefix: string
+  createdAt: string
+  expiresAt: string | null
+  revokedAt: string | null
+  lastUsedAt: string | null
+  lastIp: string | null
+  downloadCount: number
+  bytesServed: number
+  owner?: string
+  ownerName?: string
+  own: boolean
 }
 
 // lang — язык интерфейса (единицы и формат даты); по умолчанию ru — для совместимости

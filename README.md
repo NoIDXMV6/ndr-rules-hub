@@ -38,6 +38,20 @@
 | **Журнал** | Все события загрузок/сборок/экспорта/VPN с уровнями и фильтрами |
 | **Двуязычный интерфейс** | Русский и английский через файлы локализации (`src/lib/i18n/`). Язык определяется по строкам браузера (`navigator.languages`), переключатель RU/EN в шапке, выбор запоминается в `localStorage`. Favicon (`public/favicon.ico`, 16–256 px) и логотип — в комплекте |
 | **Помощь и «О системе»** | Вкладки с целями/принципами работы, данными разработчика, благодарностями и списком технологий — раскрывающиеся аккордеоны, тоже на двух языках. В «Помощи» — подробная инструкция по интеграции с Clear NDR (токен, схемы PUSH/PULL, автообновление) с диаграммами процессов |
+| **Многопользовательский режим (Enterprise)** | Регистрация с верификацией администратором (первый зарегистрированный становится админом), личный кабинет с урезанным набором вкладок, персональные **токены скачивания правил** (`ndrt_…`, SHA-256 в БД, отзыв/срок/статистика), «свои источники» (ownerId), журнал событий безопасности. См. [docs/developer.md](docs/developer.md) |
+| **Защита** | Rate limit по IP на всех эндпоинтах (429 + Retry-After); анти-брутфорс: вход (IP+email+блок учётной записи), ключи отдачи и токены (10 неудач/5 мин → блок 15 мин); очередь тяжёлых операций (сборка/загрузка/отдача — 429 при переполнении); троттлинг канала отдачи (`downloadBandwidthKbps`); CSRF (Sec-Fetch-Site/Origin); scrypt-пароли, SHA-256 токенов, константные сравнения; security-заголовки; санитизация секретов для не-админов |
+
+## Редакции
+
+| | **Community** (по умолчанию) | **Enterprise** (`NDR_EDITION=enterprise`) |
+|---|---|---|
+| Аутентификация | нет — всё доступно как раньше | вход по сессиям, пароли scrypt |
+| Регистрация и верификация | — | есть; только после верификации администратором открывается личный кабинет |
+| Кабинет пользователя | — | Обзор, Источники, Категории, Правила, Сборка и экспорт, Обновление Clear NDR, Дашборды OpenSearch, Помощь, О системе |
+| Дополнительно у администратора | весь интерфейс | + Пользователи (верификация), VPN, Настройки, Журнал |
+| Токены скачивания | глобальный ключ serveToken | глобальный ключ + персональные токены на пользователя |
+
+Один и тот же Docker-образ: переключение редакции — переменной окружения `NDR_EDITION` в docker-compose (см. [.env.example](.env.example)). Таблицы пользователей добавляются в БД тома автоматически (db-heal при старте). Подробности архитектуры и защиты — [docs/developer.md](docs/developer.md), REST-спецификация — [openapi.json](openapi.json), C4-диаграммы (PlantUML) — [docs/diagrams/](docs/diagrams/).
 
 ## Валидированный пакет правил для Clear NDR
 
@@ -130,6 +144,24 @@ bunx vitest run        # тесты движка
 | `RULES_DATA_DIR` | каталог данных (кэш, экспорт, архивы) | `/app/data` |
 | `WG_CONFIG_DIR` | где хранить WireGuard-конфиги | `/app/data/wireguard` |
 | `TZ` | часовой пояс cron | `Europe/Moscow` |
+| `NDR_EDITION` | редакция: `community` (без аутентификации) / `enterprise` (многопользовательский режим) | `community` |
+
+Настройки защиты — в UI «Настройки»/«Сборка»: `downloadBandwidthKbps` (суммарная скорость отдачи /api/export, 0 — без ограничения), `registrationOpen` (вкладка «Пользователи»), `sessionTtlHours` (срок сессии).
+
+## Защита (attack surface и что сделано)
+
+| Угроза | Механизм |
+|---|---|
+| Перебор пароля/ключей/токенов | rate limit по IP (скользящее окно) на всех эндпоинтах; вход: 10 неудач/5 мин с IP и на email, 5 неудач подряд → блок учётной записи на 15 мин; ключи отдачи/токены: 10 неудач/5 мин → блок IP на 15 мин; успешный вход/скачивание обнуляет счётчик |
+| DDoS / всплески | очередь тяжёлых операций с лимитом параллельности и честным 429 + Retry-After (отдача 2 одновременно, сборка/загрузка — по 1); rate limit всплесков скачиваний (60/мин с IP); сетевой уровень — Caddy/nftables перед контейнером |
+| Утилизация канала | троттлинг отдачи: настройка `downloadBandwidthKbps` — суммарная скорость всех скачиваний (ведёрко с токенами) |
+| Инъекции | доступ к БД — только Prisma с параметризованными запросами; действия clearndr-update/OSD — белые списки значений; ключи настроек фильтруются (`UPDATE_SETTING_KEYS`) |
+| Подмена (XSS/CSRF/угон сессии) | cookie HttpOnly + SameSite=Lax + Secure(HTTPS); CSRF-проверка Sec-Fetch-Site/Origin; security-заголовки (nosniff, DENY iframe, referrer-policy); в БД только SHA-256 токенов, константные сравнения, scrypt-пароли |
+| Подделка IP-лимитов | IP из `X-Forwarded-For`, который ставит Caddy; порт приложения наружу не выставлять мимо прокси |
+| Разглашение секретов | не-администратор не видит serveToken/oinkcode/Auth-Key/токен Scirius и статус VPN; полный токен скачивания показывается один раз |
+| Аудит | журнал AuthEvent (регистрации, входы/отказы, верификации, срабатывания лимитов) — вкладка «Пользователи» |
+
+Диаграммы процессов защиты (PlantUML, C4): [docs/diagrams/](docs/diagrams/) — анти-брутфорс входа, PULL-скачивание с очередью/троттлингом, регистрация+верификация.
 
 ## WireGuard в контейнере
 
@@ -315,8 +347,11 @@ HTML-страницу (лимит загрузок, ссылка из лично
 | `POST /api/sources/:id/fetch` | загрузить правила источника |
 | `POST /api/fetch-all` | обновить все включённые |
 | `POST /api/build` | сборка `{ "export": true }` — с экспортом |
-| `GET /api/export` | итоговый набор для URL-источника Clear NDR (PULL): файл (datatype `sig`) или `?archive=1` — tgz по источникам (datatype `sigs`); защита — настройка serveToken (`?token=` или заголовок Authorization) |
+| `GET /api/export` | итоговый набор для URL-источника Clear NDR (PULL): файл (datatype `sig`) или `?archive=1` — tgz по источникам (datatype `sigs`); аутентификация — персональный токен `ndrt_…`/serveToken (`?token=` или заголовок Authorization) или сессия; очередь загрузок + троттлинг канала |
 | `POST /api/export` | выгрузить в Clear NDR настроенным способом |
+| `POST /api/auth/register` · `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` | регистрация (первый пользователь — админ), вход/выход (cookie-сессия), состояние для UI — только Enterprise |
+| `GET/PATCH /api/auth/users` · `PATCH/DELETE /api/auth/users/:id` · `GET /api/auth/events` | пользователи: список, верификация/отключение/роли/удаление, журнал безопасности — только администратор, только Enterprise |
+| `GET/POST /api/tokens` · `DELETE /api/tokens/:id` | персональные токены скачивания (админ видит все): создание (токен показывается один раз), отзыв — только Enterprise |
 | `GET /api/rules?sid=&q=&sourceId=&page=` | просмотр базы правил |
 | `GET/PUT /api/settings` | настройки (oinkcode, политики, cron, экспорт) |
 | `GET/POST/PUT/DELETE /api/vpn` | статус/действия/сохранение профилей WireGuard |
@@ -328,16 +363,20 @@ HTML-страницу (лимит загрузок, ссылка из лично
 ## Структура
 
 ```
-prisma/schema.prisma        # Source, Rule, Build, Setting, LogEntry, VpnProfile
+prisma/schema.prisma        # Source(+ownerId), Rule, Build, Setting, LogEntry, VpnProfile,
+                            # User, Session, DownloadToken, AuthEvent (Enterprise)
 src/lib/engine/
   parser.ts                 # парсер правил Snort2/Snort3/Suricata (+многострочные)
   convert.ts                # конвертеры IP/домены/URL → правила
   fetcher.ts                # загрузка (url/tarball/local, oinkcode/auth-key/basic)
   build.ts                  # mergeSources: дедуп по SID/содержимому, перенумерация
   exporter.ts               # файл · Clear NDR REST (upload → apply) · HTTP POST · каталог
+  serve.ts                  # PULL-отдача: serveToken / персональные токены / сессия
   vpn.ts                    # wg-quick: конфиг, up/down, status, проверка окружения
   service.ts                # оркестрация: fetch → build → export, cron, сид каталога
   seed.ts                   # каталог 36 источников + настройки по умолчанию
+src/lib/security/           # guard, ratelimit, queue, throttle, session, password,
+                            # download-token, audit, ids — см. docs/developer.md
 src/lib/i18n/
   detect.ts                 # тип Lang, detectLang (строки браузера), tr(), localeOf
   ru.ts / en.ts             # словари интерфейса (en типизирован как Dictionary = typeof ru)

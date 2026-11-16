@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { log } from '@/lib/engine/service'
 import { ruleCategory, UNCATEGORIZED } from '@/lib/engine/categories'
 import { apiError } from '@/lib/api-error'
+import { guard } from '@/lib/security/guard'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -11,7 +12,9 @@ export const maxDuration = 300
  * GET /api/categories — раздел «Категории»: предпочтения пользователя + живая
  * статистика по правилам активных (не в корзине) источников.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const g = await guard(req, { rate: { key: 'categories', rule: { limit: 120, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const [rules, catRows, overridesOff, overridesAll] = await Promise.all([
       db.rule.findMany({
@@ -73,7 +76,9 @@ export async function GET() {
  * по категориям: создаются новые Category-строки (скрытые не трогаются),
  * classtype нормализуется (lower/trim) и в БД правил.
  */
-export async function POST() {
+export async function POST(req: NextRequest) {
+  const g = await guard(req, { rate: { key: 'categories', rule: { limit: 20, windowMs: 60_000, blockMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const rules = await db.rule.findMany({
       where: { source: { deletedAt: null } },
@@ -103,6 +108,8 @@ export async function POST() {
 
 /** PUT /api/categories — массовое включение/выключение всех категорий: { enabled: boolean } */
 export async function PUT(req: NextRequest) {
+  const g = await guard(req, { rate: { key: 'categories', rule: { limit: 60, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const body = await req.json().catch(() => null)
     if (!body || typeof body.enabled !== 'boolean') {

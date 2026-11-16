@@ -88,6 +88,9 @@ ENV DATABASE_URL="file:/app/data/hub.db"
 ENV RULES_DATA_DIR=/app/data
 ENV WG_CONFIG_DIR=/app/data/wireguard
 ENV NEXT_TELEMETRY_DISABLED=1
+# Редакция по умолчанию — community (enterprise включается через
+# docker-compose: NDR_EDITION=enterprise — многопользовательский режим)
+ENV NDR_EDITION=community
 
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static

@@ -14,17 +14,23 @@ import { UpdateTab } from '@/components/hub/update-tab'
 import { OsdTab } from '@/components/hub/osd-tab'
 import { SettingsTab } from '@/components/hub/settings-tab'
 import { LogsTab } from '@/components/hub/logs-tab'
+import { UsersTab } from '@/components/hub/users-tab'
 import { HelpTab } from '@/components/hub/help-tab'
 import { AboutTab } from '@/components/hub/about-tab'
-import { api, Dashboard, fmtSize, fmtTime } from '@/components/hub/api'
+import { AuthScreen } from '@/components/hub/auth-screen'
+import { api, Dashboard, fmtSize, fmtTime, type Me } from '@/components/hub/api'
 import { useI18n, type Lang } from '@/lib/i18n'
+import { editionLabel } from '@/lib/edition'
 import {
-  Activity, Database, Download, Globe, Layers, RefreshCw, Wifi,
+  Activity, Database, Download, Globe, Layers, LogOut, RefreshCw, Wifi,
 } from 'lucide-react'
+
+type Role = 'admin' | 'user' | 'anon'
 
 export default function Home() {
   const { t, tr, lang, loc } = useI18n()
   const [data, setData] = useState<Dashboard | null>(null)
+  const [me, setMe] = useState<Me | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
@@ -38,6 +44,20 @@ export default function Home() {
       setError((e as Error).message)
     }
   }, [])
+
+  const refreshMe = useCallback(async () => {
+    try {
+      setMe(await api.me())
+    } catch {
+      setMe((m) => m) // при сбое /api/auth/me держим прежнее состояние
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshMe()
+    const t = setInterval(() => void refreshMe(), 30000)
+    return () => clearInterval(t)
+  }, [refreshMe])
 
   useEffect(() => {
     void refresh()
@@ -66,6 +86,25 @@ export default function Home() {
     }
   }
 
+  // Экран входа загружается (короткая вспышка при первом открытии)
+  if (!me) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background text-muted-foreground">
+        <RefreshCw className="h-5 w-5 mr-2 animate-spin" /> {t.auth.splash}
+      </div>
+    )
+  }
+
+  // Enterprise: не верифицирован / не вошёл — экран входа и ожидания верификации
+  if (me.multiUser && (!me.authenticated || me.user?.status === 'pending')) {
+    return <AuthScreen me={me} onAuthed={() => void refreshMe()} />
+  }
+
+  // Роль: в Community — полные права без аутентификации (как раньше)
+  const role: Role = me.multiUser && me.user ? me.user.role : 'admin'
+  const isAdmin = role === 'admin'
+  const showUsersTab = me.multiUser && role === 'admin'
+
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <header className="border-b border-border bg-card/95 backdrop-blur sticky top-0 z-40">
@@ -76,9 +115,10 @@ export default function Home() {
               <h1 className="text-lg font-bold leading-tight">NDR Rules Hub</h1>
               <p className="text-xs text-muted-foreground leading-tight">{t.header.subtitle}</p>
             </div>
+            <Badge variant="outline" className="border-input text-muted-foreground hidden sm:inline-flex">{tr(t.header.editionBadge, { ed: editionLabel() })}</Badge>
           </div>
           <div className="ml-auto flex items-center gap-2 flex-wrap">
-            {data && (
+            {data && isAdmin && (
               <>
                 <Badge variant="outline" className="border-input text-foreground">
                   <Database className="h-3 w-3 mr-1" />
@@ -94,11 +134,18 @@ export default function Home() {
                 </Badge>
               </>
             )}
+            {data && !isAdmin && (
+              <Badge variant="outline" className="border-input text-foreground">
+                <Database className="h-3 w-3 mr-1" />
+                {tr(t.header.rulesInDb, { n: data.rules.inDb.toLocaleString(loc) })}
+              </Badge>
+            )}
             <Button onClick={runCycle} disabled={busy !== null} className="bg-primary hover:bg-primary/90 text-primary-foreground">
               <RefreshCw className={`h-4 w-4 mr-1.5 ${busy === 'cycle' ? 'animate-spin' : ''}`} />
               {t.header.fullCycle}
             </Button>
             <LangSwitch />
+            {me.multiUser && me.user && <UserMenu me={me} onLogout={() => void refreshMe()} />}
           </div>
         </div>
         {message && (
@@ -121,20 +168,29 @@ export default function Home() {
             <TabsTrigger value="categories" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.categories}</TabsTrigger>
             <TabsTrigger value="rules" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.rules}</TabsTrigger>
             <TabsTrigger value="build" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.build}</TabsTrigger>
-            <TabsTrigger value="vpn" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.vpn}</TabsTrigger>
+            {isAdmin && (
+              <TabsTrigger value="vpn" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.vpn}</TabsTrigger>
+            )}
             <TabsTrigger value="update" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.update}</TabsTrigger>
             <TabsTrigger value="osd" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.osd}</TabsTrigger>
-            <TabsTrigger value="settings" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.settings}</TabsTrigger>
-            <TabsTrigger value="logs" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.logs}</TabsTrigger>
+            {isAdmin && (
+              <>
+                <TabsTrigger value="settings" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.settings}</TabsTrigger>
+                <TabsTrigger value="logs" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.logs}</TabsTrigger>
+              </>
+            )}
+            {showUsersTab && (
+              <TabsTrigger value="users" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.users}</TabsTrigger>
+            )}
             <TabsTrigger value="help" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.help}</TabsTrigger>
             <TabsTrigger value="about" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">{t.tabs.about}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-4">
-            <Overview data={data} onRefresh={refresh} />
+            <Overview data={data} onRefresh={refresh} role={role} />
           </TabsContent>
           <TabsContent value="sources" className="mt-4">
-            <SourcesTab data={data} onChange={refresh} />
+            <SourcesTab data={data} onChange={refresh} role={role} selfId={me.user?.id} />
           </TabsContent>
           <TabsContent value="categories" className="mt-4">
             <CategoriesTab data={data} onChange={refresh} />
@@ -143,23 +199,34 @@ export default function Home() {
             <RulesTab data={data} />
           </TabsContent>
           <TabsContent value="build" className="mt-4">
-            <BuildTab data={data} onChange={refresh} />
+            <BuildTab data={data} onChange={refresh} role={role} />
           </TabsContent>
-          <TabsContent value="vpn" className="mt-4">
-            <VpnTab data={data} onChange={refresh} />
-          </TabsContent>
+          {isAdmin && (
+            <TabsContent value="vpn" className="mt-4">
+              <VpnTab data={data} onChange={refresh} />
+            </TabsContent>
+          )}
           <TabsContent value="update" className="mt-4">
             <UpdateTab data={data} onChange={refresh} />
           </TabsContent>
           <TabsContent value="osd" className="mt-4">
             <OsdTab data={data} onChange={refresh} />
           </TabsContent>
-          <TabsContent value="settings" className="mt-4">
-            <SettingsTab data={data} onChange={refresh} />
-          </TabsContent>
-          <TabsContent value="logs" className="mt-4">
-            <LogsTab />
-          </TabsContent>
+          {isAdmin && (
+            <>
+              <TabsContent value="settings" className="mt-4">
+                <SettingsTab data={data} onChange={refresh} />
+              </TabsContent>
+              <TabsContent value="logs" className="mt-4">
+                <LogsTab />
+              </TabsContent>
+            </>
+          )}
+          {showUsersTab && (
+            <TabsContent value="users" className="mt-4">
+              <UsersTab selfId={me.user?.id ?? ''} />
+            </TabsContent>
+          )}
           <TabsContent value="help" className="mt-4">
             <HelpTab />
           </TabsContent>
@@ -181,6 +248,36 @@ export default function Home() {
           <span className="ml-auto">{t.footer.export}</span>
         </div>
       </footer>
+    </div>
+  )
+}
+
+/** Меню пользователя в шапке: имя, роль, выход */
+function UserMenu({ me, onLogout }: { me: Me; onLogout: () => void }) {
+  const { t } = useI18n()
+  const u = me.user
+  if (!u) return null
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-input px-2 py-1">
+      <div className="text-right leading-tight">
+        <p className="text-xs font-medium text-foreground">{u.displayName}</p>
+        <p className="text-[10px] text-muted-foreground">{u.email}</p>
+      </div>
+      <Badge variant="outline" className={u.role === 'admin' ? 'border-primary text-primary' : 'border-input text-muted-foreground'}>
+        {u.role === 'admin' ? t.users.roleAdmin : t.users.roleUser}
+      </Badge>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-7 px-2 text-muted-foreground hover:text-foreground"
+        title={t.header.logout}
+        onClick={async () => {
+          await api.logout().catch(() => undefined)
+          onLogout()
+        }}
+      >
+        <LogOut className="h-3.5 w-3.5" />
+      </Button>
     </div>
   )
 }
@@ -226,7 +323,7 @@ function StatCard({ title, value, sub, icon }: { title: string; value: string; s
   )
 }
 
-function Overview({ data, onRefresh }: { data: Dashboard | null; onRefresh: () => void }) {
+function Overview({ data, onRefresh, role }: { data: Dashboard | null; onRefresh: () => void; role: Role }) {
   const { t, tr, lang, loc } = useI18n()
   if (!data) {
     return (
@@ -277,32 +374,35 @@ function Overview({ data, onRefresh }: { data: Dashboard | null; onRefresh: () =
           </CardContent>
         </Card>
 
-        <Card className="bg-card border-border">
-          <CardHeader>
-            <CardTitle className="text-base">{t.overview.vpn}</CardTitle>
-            <CardDescription>{t.overview.vpnDesc}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {data.vpn.available ? (
-              data.vpn.interfaces.length > 0 ? (
-                <div className="space-y-2">
-                  {data.vpn.interfaces.map((i) => (
-                    <div key={i.name} className="text-sm flex flex-wrap gap-x-4">
-                      <span className="font-mono text-emerald-700">{i.name}</span>
-                      <span className="text-muted-foreground">{tr(t.overview.port, { n: i.listeningPort ?? '—' })}</span>
-                      <span className="text-muted-foreground">{tr(t.overview.peers, { n: i.peers.length })}</span>
-                      {i.peers.some((p) => p.online) && <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-300">{t.overview.handshakeActive}</Badge>}
-                    </div>
-                  ))}
-                </div>
+        {/* VPN-карточка — только администратору */}
+        {role === 'admin' && (
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-base">{t.overview.vpn}</CardTitle>
+              <CardDescription>{t.overview.vpnDesc}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {data.vpn.available ? (
+                data.vpn.interfaces.length > 0 ? (
+                  <div className="space-y-2">
+                    {data.vpn.interfaces.map((i) => (
+                      <div key={i.name} className="text-sm flex flex-wrap gap-x-4">
+                        <span className="font-mono text-emerald-700">{i.name}</span>
+                        <span className="text-muted-foreground">{tr(t.overview.port, { n: i.listeningPort ?? '—' })}</span>
+                        <span className="text-muted-foreground">{tr(t.overview.peers, { n: i.peers.length })}</span>
+                        {i.peers.some((p) => p.online) && <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-300">{t.overview.handshakeActive}</Badge>}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">{t.overview.wgOkNoTunnels}</p>
+                )
               ) : (
-                <p className="text-sm text-muted-foreground">{t.overview.wgOkNoTunnels}</p>
-              )
-            ) : (
-              <p className="text-sm text-muted-foreground">{tr(t.overview.vpnStatusUnavailable, { err: data.vpn.error ?? 'wg' })}</p>
-            )}
-          </CardContent>
-        </Card>
+                <p className="text-sm text-muted-foreground">{tr(t.overview.vpnStatusUnavailable, { err: data.vpn.error ?? 'wg' })}</p>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <Card className="bg-card border-border">

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiError } from '@/lib/api-error'
+import { guard } from '@/lib/security/guard'
 import {
   UPDATE_SETTING_KEYS,
   UPDATE_OPTIONS_DEFAULTS,
@@ -23,6 +24,8 @@ const MASK = '********'
 
 /** GET /api/clearndr-update — статус раздела (или лог прогона: ?log=<runId>) */
 export async function GET(req: NextRequest) {
+  const g = await guard(req, { rate: { key: 'update', rule: { limit: 120, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const runId = req.nextUrl.searchParams.get('log')
     const cfg = await loadUpdateSettings()
@@ -70,6 +73,8 @@ export async function GET(req: NextRequest) {
 
 /** POST /api/clearndr-update — действия: probe | start | cancel | sync-script */
 export async function POST(req: NextRequest) {
+  const g = await guard(req, { rate: { key: 'update', rule: { limit: 30, windowMs: 60_000, blockMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const body = await req.json().catch(() => ({}))
     const action = body?.action
@@ -103,8 +108,10 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** PUT /api/clearndr-update — сохранить настройки подключения/параметров */
+/** PUT /api/clearndr-update — сохранить настройки подключения/параметров (только администратор) */
 export async function PUT(req: NextRequest) {
+  const g = await guard(req, { admin: true, rate: { key: 'update', rule: { limit: 60, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const body = await req.json().catch(() => null)
     if (!body || typeof body !== 'object') return NextResponse.json({ error: 'нужен объект {key: value}' }, { status: 400 })

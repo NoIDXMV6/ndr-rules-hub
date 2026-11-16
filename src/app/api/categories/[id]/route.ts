@@ -2,11 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { log } from '@/lib/engine/service'
 import { apiError } from '@/lib/api-error'
+import { guard } from '@/lib/security/guard'
 
 export const dynamic = 'force-dynamic'
 
 /** PATCH /api/categories/:id — { enabled?, label?, hidden? } */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const g = await guard(req, { rate: { key: 'categories', rule: { limit: 120, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const { id } = await params
     const body = await req.json().catch(() => ({}))
@@ -25,7 +28,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 /** DELETE /api/categories/:id — скрыть категорию из раздела (скан не воссоздаёт) */
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const g = await guard(req, { rate: { key: 'categories', rule: { limit: 120, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const { id } = await params
     const cat = await db.category.update({ where: { id }, data: { hidden: true } })

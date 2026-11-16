@@ -38,6 +38,20 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 | **Logs** | All fetch/build/export/VPN events with levels and filters |
 | **Bilingual UI** | Russian and English via localization files (`src/lib/i18n/`). Language detected from browser strings (`navigator.languages`), RU/EN switch in the header, choice persisted in `localStorage`. Favicon (`public/favicon.ico`, 16–256 px) and logo included |
 | **Help & “About”** | Tabs with goals/principles, developer info, acknowledgements and the technology list — collapsible accordions, also in both languages. The “Help” tab includes a detailed Clear NDR integration guide (token, PUSH/PULL schemes, auto-update) illustrated with process diagrams |
+| **Multi-user mode (Enterprise)** | Registration verified by an administrator (the first registered account becomes admin), a reduced personal cabinet, personal **rule download tokens** (`ndrt_…`, SHA-256 in DB, revoke/expiry/statistics), “own sources” (ownerId), security event journal. See [docs/developer.md](docs/developer.md) |
+| **Protection** | Per-IP rate limits on every endpoint (429 + Retry-After); brute-force protection: sign-in (IP + email + account lock), serving keys and tokens (10 failures/5 min → 15 min block); request queues for heavy operations (build/fetch/download — 429 on overflow); download bandwidth throttling (`downloadBandwidthKbps`); CSRF (Sec-Fetch-Site/Origin); scrypt passwords, SHA-256 token storage, constant-time comparisons; security headers; secrets redacted for non-admins |
+
+## Editions
+
+| | **Community** (default) | **Enterprise** (`NDR_EDITION=enterprise`) |
+|---|---|---|
+| Authentication | none — everything works as before | session sign-in, scrypt passwords |
+| Registration & verification | — | yes; the personal cabinet opens only after administrator verification |
+| User cabinet | — | Overview, Sources, Categories, Rules, Build & Export, Clear NDR Update, OpenSearch Dashboards, Help, About |
+| Administrator extras | full interface | + Users (verification), VPN, Settings, Logs |
+| Download tokens | global serveToken key | global key + per-user personal tokens |
+
+The same Docker image serves both editions — switch via the `NDR_EDITION` environment variable (see [.env.example](.env.example)). User tables are added to the volume DB automatically (db-heal at startup). Architecture and protection details — [docs/developer.md](docs/developer.md), REST spec — [openapi.json](openapi.json), C4 diagrams (PlantUML) — [docs/diagrams/](docs/diagrams/).
 
 ## Validated ruleset package for Clear NDR
 
@@ -153,6 +167,7 @@ bunx vitest run        # engine tests
 | `RULES_DATA_DIR` | data directory (cache, exports, archives) | `/app/data` |
 | `WG_CONFIG_DIR` | where to store WireGuard configs | `/app/data/wireguard` |
 | `TZ` | cron timezone | `Europe/Moscow` |
+| `NDR_EDITION` | edition: `community` (no authentication) / `enterprise` (multi-user mode) | `community` |
 
 ## WireGuard in the container
 
@@ -315,8 +330,11 @@ an archive (download limit, a personal-cabinet link with the oinkcode in the que
 | `POST /api/sources/:id/fetch` | fetch the source’s rules |
 | `POST /api/fetch-all` | update all enabled |
 | `POST /api/build` | build `{ "export": true }` — with export |
-| `GET /api/export` | the final set for a Clear NDR URL source (PULL): the file (datatype `sig`) or `?archive=1` — per-source tgz (datatype `sigs`); protection — the serveToken setting (`?token=` or the Authorization header) |
+| `GET /api/export` | the final set for a Clear NDR URL source (PULL): the file (datatype `sig`) or `?archive=1` — per-source tgz (datatype `sigs`); authentication — a personal `ndrt_…` token / serveToken (`?token=` or the Authorization header) or a session; download queue + bandwidth throttling |
 | `POST /api/export` | push to Clear NDR using the configured method |
+| `POST /api/auth/register` · `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` | registration (the first user becomes admin), sign-in/out (cookie session), UI state — Enterprise only |
+| `GET/PATCH /api/auth/users` · `PATCH/DELETE /api/auth/users/:id` · `GET /api/auth/events` | users: list, verification/disable/roles/delete, security journal — administrator only, Enterprise only |
+| `GET/POST /api/tokens` · `DELETE /api/tokens/:id` | personal download tokens (admin sees all): creation (the token is shown once), revocation — Enterprise only |
 | `GET /api/rules?sid=&q=&sourceId=&page=` | browse the rule database |
 | `GET/PUT /api/settings` | settings (oinkcode, policies, cron, export) |
 | `GET/POST/PUT/DELETE /api/vpn` | WireGuard status/actions/profiles |
@@ -328,7 +346,8 @@ an archive (download limit, a personal-cabinet link with the oinkcode in the que
 ## Structure
 
 ```
-prisma/schema.prisma        # Source, Rule, Build, Setting, LogEntry, VpnProfile
+prisma/schema.prisma        # Source(+ownerId), Rule, Build, Setting, LogEntry, VpnProfile,
+                            # User, Session, DownloadToken, AuthEvent (Enterprise)
 src/lib/engine/
   parser.ts                 # Snort2/Snort3/Suricata rule parser (+multiline)
   convert.ts                # IP/domain/URL → rule converters

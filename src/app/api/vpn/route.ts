@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { wgFullTest, wgUp, wgDown, parseWgConfig, wgStatus, WgStatus } from '@/lib/engine/vpn'
 import { apiError } from '@/lib/api-error'
+import { guard } from '@/lib/security/guard'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,8 +36,10 @@ async function persistProfileStatus(
   }
 }
 
-/** GET /api/vpn — статус инструментов и туннелей */
-export async function GET() {
+/** GET /api/vpn — статус инструментов и туннелей (только администратор) */
+export async function GET(req: NextRequest) {
+  const g = await guard(req, { admin: true, rate: { key: 'vpn', rule: { limit: 120, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const res = await wgFullTest()
     const profiles = await db.vpnProfile.findMany()
@@ -54,6 +57,8 @@ export async function GET() {
 
 /** POST /api/vpn — действия: {action: 'up'|'down'|'test', id?, config?, name?} */
 export async function POST(req: NextRequest) {
+  const g = await guard(req, { admin: true, rate: { key: 'vpn', rule: { limit: 60, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const body = await req.json().catch(() => ({}))
     const action = body?.action
@@ -108,6 +113,8 @@ export async function POST(req: NextRequest) {
 
 /** PUT /api/vpn — сохранить/создать профиль {name, config} */
 export async function PUT(req: NextRequest) {
+  const g = await guard(req, { admin: true, rate: { key: 'vpn', rule: { limit: 60, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const body = await req.json().catch(() => null)
     if (!body?.name || !body?.config) return NextResponse.json({ error: 'нужны name и config' }, { status: 400 })
@@ -126,6 +133,8 @@ export async function PUT(req: NextRequest) {
 
 /** DELETE /api/vpn?id=... */
 export async function DELETE(req: NextRequest) {
+  const g = await guard(req, { admin: true, rate: { key: 'vpn', rule: { limit: 60, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const id = req.nextUrl.searchParams.get('id')
     if (!id) return NextResponse.json({ error: 'нужен id' }, { status: 400 })

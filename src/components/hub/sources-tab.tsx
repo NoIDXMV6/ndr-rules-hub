@@ -32,11 +32,14 @@ const BADGE_CLASSES: Record<BadgeKey, string> = {
   unavailable: 'border-red-300 text-red-600',
 }
 
-export function SourcesTab({ data, onChange }: { data: Dashboard | null; onChange: () => void }) {
+export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard | null; onChange: () => void; role?: 'admin' | 'user' | 'anon'; selfId?: string }) {
   const { t, tr, lang, loc } = useI18n()
   const [busyId, setBusyId] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // пользователь управляет только СВОИМИ источниками (ownerId = selfId);
+  // общие (ownerId = null) — только вкл/выкл и загрузка; админ — любой
+  const canManage = (s: SourceItem) => role !== 'user' || (!!s.ownerId && !!selfId && s.ownerId === selfId)
 
   const sources = useMemo(() => {
     // в основном списке — только активные (не в корзине)
@@ -204,19 +207,21 @@ export function SourcesTab({ data, onChange }: { data: Dashboard | null; onChang
                           <Button size="sm" variant="outline" className="h-8 border-input text-foreground" disabled={busyId === s.id} onClick={() => fetchOne(s)}>
                             <RefreshCw className={`h-3.5 w-3.5 ${busyId === s.id ? 'animate-spin' : ''}`} />
                           </Button>
-                          <EditSourceDialog source={s} onSaved={() => onChange()} />
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 border-red-300 text-red-600"
-                            title={t.sources.trash.moveToTrash}
-                            disabled={busyId === s.id}
-                            onClick={() => {
-                              if (window.confirm(tr(t.sources.trash.confirmMove, { name: s.name }))) void remove(s)
-                            }}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
+                          {canManage(s) && <EditSourceDialog source={s} onSaved={() => onChange()} />}
+                          {canManage(s) && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 border-red-300 text-red-600"
+                              title={t.sources.trash.moveToTrash}
+                              disabled={busyId === s.id}
+                              onClick={() => {
+                                if (window.confirm(tr(t.sources.trash.confirmMove, { name: s.name }))) void remove(s)
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>

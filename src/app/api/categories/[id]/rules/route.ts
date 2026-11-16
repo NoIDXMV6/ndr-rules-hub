@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { apiError } from '@/lib/api-error'
+import { guard } from '@/lib/security/guard'
 
 export const dynamic = 'force-dynamic'
 
 /** GET /api/categories/:id/rules — правила категории (страница + поиск + состояние override) */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const g = await guard(req, { rate: { key: 'categories', rule: { limit: 120, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     const { id } = await params
     const cat = await db.category.findUnique({ where: { id } })
@@ -73,6 +76,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
  * { sid: number, enabled: boolean }
  */
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const g = await guard(req, { rate: { key: 'categories', rule: { limit: 120, windowMs: 60_000 } } })
+  if (g instanceof NextResponse) return g
   try {
     await params // категория — контекст; override глобален по sid
     const body = await req.json().catch(() => null)

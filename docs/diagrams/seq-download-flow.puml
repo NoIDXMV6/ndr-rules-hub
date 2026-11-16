@@ -1,0 +1,47 @@
+' ─────────────────────────────────────────────────────────────────────────────
+' NDR Rules Hub — динамическая диаграмма: скачивание правил по URL (PULL-схема)
+' с защитой: rate limit → очередь загрузок → проверка ключа/токена → троттлинг
+' канала → статистика и журнал.
+' ─────────────────────────────────────────────────────────────────────────────
+@startuml seq-download
+title Скачивание правил по URL: Clear NDR ← /api/export (файл / ?archive=1)
+skinparam responseMessageBelowArrow true
+
+actor "Clear NDR (Scirius)\nURL-источник, celery" as SC
+participant "GET /api/export\n(?token= / Authorization)" as RT
+participant "ratelimit\nexport:<ip> 60/мин" as RL
+participant "queue 'download'\n(2 параллельно, 16 в очереди,\n20 с ожидания)" as Q
+participant "serveBuild\n(serve.ts)" as SB
+participant "download-token.ts" as TK
+database "SQLite" as DB
+participant "throttle.ts\nBandwidth (ведёрко)" as TH
+
+SC -> RT: GET /api/export?token=ndrt_…  (или «Authorization: <authkey>»)
+RT -> RL: лимит частоты с адреса
+RL --> RT: ok / 429 + Retry-After
+RT -> RT: getSession(req) — сессия кабинета тоже принимается
+RT -> Q: withQueue('download', serveBuild)
+alt очередь переполнена / время ожидания истекло
+  Q --> SC: 429 + Retry-After (честный отказ вместо деградации)
+end
+Q -> SB: serveBuild({token, ip, archive})
+SB -> SB: provided = ?token= или последний сегмент Authorization
+alt provided = ndrt_…
+  SB -> TK: verifyDownloadToken(token, ip)
+  TK -> DB: DownloadToken(SHA-256(provided))
+  TK -> TK: не отозван? не истёк? владелец active?
+  TK -> TK: dlfail:<ip>: 10 неудач/5мин → блок 15мин (анти-перебор)
+  TK -> DB: lastUsedAt/lastIp/downloadCount+1; AuthEvent(download)
+  TK --> SB: ok / denied (403 / 429 при блоке)
+else provided ≠ ndrt_
+  SB -> SB: глобальный serveToken (константное сравнение)\n→ сессия → serveToken пуст? (отдача открыта) → отказ
+  SB --> SC: 403 с внятным текстом / 429 при переборе
+end
+SB -> DB: последняя Build (файл / stats.archive)
+SB -> TH: Buffer → throttledStream (если downloadBandwidthKbps > 0)
+loop по чанкам 64 КБ
+  TH -> TH: bw.take(len): ждёт, пока ведро наполнится —\nсуммарная скорость всех скачиваний ≤ лимита
+end
+RT --> SC: 200, Content-Type, Content-Disposition,\nCache-Control: no-store (после сборки файл другой)
+note over SC: scirius не проверяет HTTP-статус и пишет тело в файл —\nпоэтому тексты ошибок здесь внятные и видны сразу
+@enduml
