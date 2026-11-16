@@ -14,6 +14,9 @@ skills
 scripts
 # скрипты обновления/восстановления нужны в образе (раздел «Обновление Clear NDR»)
 !scripts/clearndr-update.sh
+# генератор манифеста схемы (стадия builder) и лечение БД тома (runtime)
+!scripts/gen-schema-manifest.mjs
+!scripts/db-heal.cjs
 !scripts/clearndr-repair-stack.sh
 !scripts/clearndr-events-restore.sh
 !scripts/clearndr-osd-analytics-setup.sh

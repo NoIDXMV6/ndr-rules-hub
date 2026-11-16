@@ -43,7 +43,7 @@ export async function GET() {
     report.db = {
       ok: false,
       error: (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).replace(/\s+/g, ' ').trim(),
-      hint: 'если движок БД исправен — см. docker logs; частые причины: устаревшая схема БД (entrypoint пересоздаёт её автоматически) или недостающий query engine Prisma (binaryTargets в schema.prisma)',
+      hint: 'если движок БД исправен — см. docker logs; частые причины: устаревшая схема БД тома (entrypoint при старте докатывает недостающие таблицы/колонки автоматически — перезапустите контейнер) или недостающий query engine Prisma (binaryTargets в schema.prisma)',
     }
   }
 

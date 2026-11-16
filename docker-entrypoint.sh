@@ -6,29 +6,35 @@ mkdir -p /app/data/exports /app/data/cache /app/data/archives /app/data/wireguar
 # метаданные прогонов обновления Clear NDR (раздел «Обновление Clear NDR»)
 mkdir -p /app/data/clearndr-update/runs
 
-# ── БД: самовосстановление схемы ─────────────────────────────────────────────
-# Шаблон создаётся при сборке образа (prisma db push) и помечается версией
-# схемы (sha256 prisma/schema.prisma). Если БД в томе отсутствует или её
-# версия схемы отличается от шаблона — старый файл бэкапится и копируется
-# свежий шаблон. Без этого устаревшая БД от прошлых запусков давала
-# PrismaClientKnownRequestError P2022 ("column does not exist") и HTTP 500
-# на всех API-роутах.
+# ── БД: самовосстановление схемы БЕЗ потери данных ──────────────────────────
+# Шаблон БД (пустая, со схемой образа) и манифест схемы создаются при сборке
+# образа (prisma db push + scripts/gen-schema-manifest.mjs).
+# Если БД в томе отсутствует — копируется шаблон. Если БД есть — db-heal.cjs
+# сравнивает её структуру с манифестом и ДОКАТЫВАЕТ недостающие таблицы/
+# колонки/индексы, не трогая данные: обновление образа больше не требует
+# перекачки источников и не стирает настройки (oinkcode, abuse.ch Auth-Key,
+# историю сборок, категории, переопределения правил).
+# Раньше здесь сравнивался sidecar-файл .schema-version с шаблоном и БД
+# целиком заменялась: при рассинхроне самих версий (БД старой схемы с
+# «актуальным» маркером) проверка молча пропускалась, и Prisma падал с
+# P2022 «The column … does not exist in the current database» на всех API.
 TEMPLATE_VER=$(cat /app/db-template/.schema-version 2>/dev/null || echo unknown)
-DATA_VER=$(cat /app/data/.schema-version 2>/dev/null || echo none)
 
 if [ ! -f /app/data/hub.db ]; then
   echo "[entrypoint] инициализация БД /app/data/hub.db (схема ${TEMPLATE_VER})"
   cp /app/db-template/hub.db /app/data/hub.db
   echo "$TEMPLATE_VER" > /app/data/.schema-version
-elif [ "$DATA_VER" != "$TEMPLATE_VER" ]; then
+elif node /app/db-heal.cjs /app/data/hub.db /app/db-template/schema-manifest.json; then
+  echo "$TEMPLATE_VER" > /app/data/.schema-version
+else
+  # БД не открылась (повреждена) или лечение не удалось — прежний путь:
+  # бэкап старого файла и свежий шаблон (источники перекачиваются,
+  # oinkcode восстановится из OINKCODE, ключ abuse.ch нужно ввести заново)
   BAK="/app/data/hub.db.bak-$(date +%Y%m%d-%H%M%S)"
-  echo "[entrypoint] схема БД (v:${DATA_VER}) не совпадает с образцом образа (v:${TEMPLATE_VER})"
-  echo "[entrypoint] бэкап старой БД -> ${BAK}, создаётся новая (источники перекачиваются, oinkcode восстановится из OINKCODE)"
+  echo "[entrypoint] БД не читается или лечение не удалось — бэкап -> ${BAK}, создаётся новая из шаблона (v:${TEMPLATE_VER})"
   mv /app/data/hub.db "$BAK"
   cp /app/db-template/hub.db /app/data/hub.db
   echo "$TEMPLATE_VER" > /app/data/.schema-version
-else
-  echo "[entrypoint] БД соответствует схеме образа (v:${TEMPLATE_VER})"
 fi
 
 # Каталог для локальных архивов правил: пользователь кладёт сюда tar.gz

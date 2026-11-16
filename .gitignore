@@ -73,6 +73,9 @@ server.log
 !/scripts/clearndr-osd-dashboard-import.sh
 !/scripts/osd-pack-generator.py
 !/scripts/osd-packs
+# манифест схемы (builder) и лечение БД тома (runtime, docker-entrypoint.sh)
+!/scripts/gen-schema-manifest.mjs
+!/scripts/db-heal.cjs
 !/scripts/test-clearndr-osd-mock.sh
 !/scripts/test-clearndr-update-mock.sh
 !/scripts/test-clearndr-repair-mock.sh

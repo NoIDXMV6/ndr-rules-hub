@@ -26,6 +26,9 @@ RUN mkdir -p /app/db-template && \
     # версия схемы БД считается только по моделям (генератор исключён):
     # изменения binaryTargets и прочего в generator не должны стирать БД тома
     awk '/^generator/{g=1} g&&/^}/{g=0;next} !g' prisma/schema.prisma | sha256sum | cut -c1-12 > /app/db-template/.schema-version && \
+    # манифест схемы для db-heal.cjs (runtime): докатка недостающих таблиц/
+    # колонок в БД тома без потери данных — см. docker-entrypoint.sh
+    bun scripts/gen-schema-manifest.mjs /app/db-template/hub.db /app/db-template/schema-manifest.json && \
     bunx --bun next build
 
 # ── Этап 3: runtime — Next.js standalone + WireGuard-утилиты ─────────────────
@@ -98,8 +101,10 @@ COPY scripts/clearndr-events-restore.sh /app/scripts/clearndr-events-restore.sh
 COPY scripts/clearndr-osd-analytics-setup.sh /app/scripts/clearndr-osd-analytics-setup.sh
 COPY scripts/clearndr-osd-dashboard-import.sh /app/scripts/clearndr-osd-dashboard-import.sh
 COPY scripts/osd-packs/ /app/scripts/osd-packs/
+# самовосстановление схемы БД тома (докатка таблиц/колонок без потери данных)
+COPY scripts/db-heal.cjs /app/db-heal.cjs
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/clearndr-update.sh /app/scripts/clearndr-repair-stack.sh /app/scripts/clearndr-events-restore.sh /app/scripts/clearndr-osd-analytics-setup.sh /app/scripts/clearndr-osd-dashboard-import.sh && \
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/db-heal.cjs /app/scripts/clearndr-update.sh /app/scripts/clearndr-repair-stack.sh /app/scripts/clearndr-events-restore.sh /app/scripts/clearndr-osd-analytics-setup.sh /app/scripts/clearndr-osd-dashboard-import.sh && \
     mkdir -p /app/data/exports /app/data/cache /app/data/archives /app/data/wireguard /app/data/clearndr-update/runs /app/data/clearndr-osd/runs
 
 VOLUME ["/app/data"]
