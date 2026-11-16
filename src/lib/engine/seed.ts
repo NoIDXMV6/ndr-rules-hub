@@ -431,6 +431,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   privateSidStart: '1000000',
   buildFileName: 'clearndr-import.rules',
   buildFormat: 'file', // file | file+tgz (файл + архив с правилами по источникам)
+  serveToken: '', // ключ отдачи итогового набора по URL (PULL-схема): ?token= / authkey источника Clear NDR; пусто = без защиты
   clearndrExportMode: 'file', // file | clearndr | http | local-path | disabled
   clearndrExportUrl: '', // clearndr: базовый URL (например https://clearndr.local); http: полный адрес POST-эндпоинта
   clearndrExportToken: '', // API-токен Scirius (Clear NDR → меню пользователя → Edit Token)

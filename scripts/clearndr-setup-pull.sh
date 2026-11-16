@@ -6,6 +6,7 @@
 # Использование:
 #   CLEAR_NDR_URL=https://clearndr.local CLEAR_NDR_TOKEN=xxxx \
 #   HUB_URL=http://rules-hub.local:3080/api/export \
+#   [HUB_TOKEN=<ключ отдачи Hub>] \
 #   ./clearndr-setup-pull.sh
 #
 # Что делает (идемпотентно — безопасно перезапускать):
@@ -18,6 +19,10 @@
 # Переменные:
 #   CLEAR_NDR_URL, CLEAR_NDR_TOKEN  — см. clearndr-check.sh
 #   HUB_URL       — адрес итогового файла на Hub (по умолчанию http://127.0.0.1:3080/api/export)
+#   HUB_TOKEN     — ключ отдачи Hub (вкладка «Сборка» → «Отдача по URL»), если задан;
+#                   записывается в поле authkey источника — scirius сам отправит
+#                   его заголовком Authorization (можно вместо этого добавить
+#                   ключ прямо в HUB_URL как ?token=…)
 #   SOURCE_NAME   — имя источника в Clear NDR (по умолчанию «NDR Rules Hub»)
 #   RULESET_NAME  — имя набора в Clear NDR (по умолчанию «NDR Rules Hub»)
 #   CURL_INSECURE — 1 (по умолчанию) — добавить -k
@@ -34,6 +39,10 @@ RULESET_NAME="${RULESET_NAME:-NDR Rules Hub}"
 INSECURE="${CURL_INSECURE:-1}"
 KFLAG=""; [ "$INSECURE" = "1" ] && KFLAG="-k" || true
 AUTH="Authorization: Token ${TOKEN}"
+# Заголовок авторизации для Hub (нужен, если на Hub задан ключ отдачи и он НЕ
+# уже добавлен в HUB_URL как ?token=…): scirius принимает и сырой ключ, и
+# «Token <ключ>» — raw-передача совпадает с тем, как заголовок уйдёт из authkey
+HUB_AUTH=""; [ -n "${HUB_TOKEN:-}" ] && HUB_AUTH="Authorization: ${HUB_TOKEN}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -44,9 +53,10 @@ fail() { echo "ОШИБКА: $*" >&2; exit 1; }
 
 # 1. Hub доступен?
 echo "▶ 1/5 Проверка файла правил на Hub: ${HUB_URL}"
-HEAD=$(curl -sS -o /dev/null -w '%{http_code}' "$HUB_URL" || true)
+HEAD=$(curl -sS $KFLAG -o /dev/null -w '%{http_code}' ${HUB_AUTH:+-H "$HUB_AUTH"} "$HUB_URL" || true)
 case "$HEAD" in
   200) echo "  ✓ файл доступен (HTTP 200)" ;;
+  403) fail "Hub вернул 403 — задан ключ отдачи, но HUB_TOKEN не передан. Укажите HUB_TOKEN=<ключ отдачи> (вкладка «Сборка» → «Отдача по URL») или добавьте ключ в HUB_URL (?token=…)" ;;
   *) fail "Hub недоступен (HTTP ${HEAD}). Проверьте адрес (обычно http://<hub-host>:3080/api/export) и, что на Hub выполнена сборка" ;;
 esac
 
@@ -57,12 +67,21 @@ curl -sS $KFLAG -G "${BASE}/rest/rules/source/" -H "$AUTH" \
 SRCPK=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); r=(d.get("results") or [None])[0]; print(r["pk"] if r else "")' "$TMP/src.json")
 if [ -n "$SRCPK" ]; then
   echo "  ✓ найден (pk=${SRCPK})"
+  if [ -n "${HUB_TOKEN:-}" ]; then
+    HC=$(curl -sS $KFLAG -o /dev/null -w '%{http_code}' -X PATCH "${BASE}/rest/rules/source/${SRCPK}/" \
+      -H "$AUTH" -H 'Content-Type: application/json' -d "{\"authkey\": \"${HUB_TOKEN}\"}" || true)
+    case "$HC" in
+      200) echo "  ✓ ключ отдачи записан в authkey источника (scirius отправит его в Authorization)" ;;
+      *) echo "  ! не удалось обновить authkey источника (HTTP ${HC}) — задайте ключ вручную: источник → поле authkey" ;;
+    esac
+  fi
 else
   curl -sS $KFLAG -X POST "${BASE}/rest/rules/source/" -H "$AUTH" -H 'Content-Type: application/json' -d @- > "$TMP/created.json" <<JSON
-{"name": "${SOURCE_NAME}", "method": "http", "datatype": "sig", "uri": "${HUB_URL}", "use_sys_proxy": false, "comment": "итоговый набор правил NDR Rules Hub (pull)"}
+{"name": "${SOURCE_NAME}", "method": "http", "datatype": "sig", "uri": "${HUB_URL}", "authkey": "${HUB_TOKEN:-}", "use_sys_proxy": false, "comment": "итоговый набор правил NDR Rules Hub (pull)"}
 JSON
   SRCPK=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pk"])' "$TMP/created.json")
   echo "  ✓ создан HTTP-источник (pk=${SRCPK}) → ${HUB_URL}"
+  if [ -n "${HUB_TOKEN:-}" ]; then echo "  ✓ ключ отдачи записан в authkey источника — scirius отправит его в Authorization"; fi
 fi
 
 # 3. Набор правил

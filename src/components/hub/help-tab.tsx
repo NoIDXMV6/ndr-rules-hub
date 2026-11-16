@@ -135,7 +135,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         },
         {
           title: '3. PULL — настройка в Clear NDR (скрипт)',
-          text: 'Идемпотентный скрипт `scripts/clearndr-setup-pull.sh` (переменные `CLEAR_NDR_URL`, `CLEAR_NDR_TOKEN`, `HUB_URL=http://<hub>:3080/api/export`) создаст источник-URL, набор «NDR Rules Hub», включит категорию и применит набор — 5 шагов с проверками. Те же шаги вручную: Sources → Add source (Source type: URL, Data type: «Individual Signatures file») → Rulesets → Add ruleset → отметить категорию → Suricata → Update.',
+          text: 'Идемпотентный скрипт `scripts/clearndr-setup-pull.sh` (переменные `CLEAR_NDR_URL`, `CLEAR_NDR_TOKEN`, `HUB_URL=http://<hub>:3080/api/export`, `HUB_TOKEN` — ключ отдачи, если задан) создаст источник-URL, набор «NDR Rules Hub», включит категорию и применит набор — 5 шагов с проверками. Готовые URL и генерация ключа — на вкладке «Сборка» → «Отдача по URL». Те же шаги вручную: Sources → Add source (Source type: URL, Data type: «Individual Signatures file» для файла или «Signatures archive» для `?archive=1`) → Rulesets → Add ruleset → отметить категорию → Suricata → Update.',
         },
         {
           title: '4. PULL — автообновление',
@@ -157,6 +157,9 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         },
       ],
       items: [
+        '**PULL: ключ отдачи** — задайте его на вкладке «Сборка» → «Отдача по URL» и укажите в поле authkey источника Clear NDR (scirius отправит его в заголовке Authorization) или добавьте к URL `?token=…`; скрипт-настройщик сделает это сам через `HUB_TOKEN`;',
+        '**PULL: архив по источникам** — `GET /api/export?archive=1` отдаёт tgz для источника с datatype «sigs»: каждый `<источник>.rules` станет отдельной категорией (файлы в корне архива — так требует парсер tar scirius);',
+        '**PULL: scirius не проверяет HTTP-статус** — при ошибке отдачи (403/404) он записывает тело ответа в файл и источник падает на разборе правил; внятный текст ошибки хаба покажет причину (неверный ключ, нет сборки, нет архива);',
         '**HTTP 401 «Invalid token»** — токен неверен/перегенерирован: сгенерируйте заново (Edit Token → Regenerate); заголовок — именно `Token`, не `Bearer`;',
         '**HTTP 404 на /rest/…** — в базовый URL попал лишний путь: в настройках Hub только корень, `/rest` дописывается автоматически;',
         '**HTTP 400 «conflicting SID»** — в файле близнецы: включите дедупликацию в настройках сборки (dedupContent, dropIncompatible) и пересоберите;',

@@ -13,7 +13,7 @@
 | Кто инициирует | Clear NDR забирает файл с Hub сам | Hub отправляет файл в Clear NDR сам |
 | Доступ по сети | Clear NDR → Hub (HTTP 3080) | Hub → Clear NDR (HTTPS 443) |
 | Что настраивается в Clear NDR | источник типа «HTTP URL» + расписание | ничего (источник создаётся автоматически) |
-| Что настраивается в Hub | ничего | режим «Clear NDR REST», базовый URL, токен |
+| Что настраивается в Hub | ничего (опционально — ключ отдачи serveToken, вкладка «Сборка») | режим «Clear NDR REST», базовый URL, токен |
 | Автообновление | встроенный планировщик Clear NDR | встроенный cron Hub (или cron на Clear NDR) |
 | Когда выбирать | Hub и Clear NDR в одной сети | Hub недоступен с Clear NDR (DMZ, NAT) |
 
@@ -123,6 +123,22 @@ sequenceDiagram
 - на Hub выполнена хотя бы одна сборка (вкладка «Сборка и экспорт» → «Собрать»);
 - токен получен (раздел 2).
 
+### Ключ отдачи (защита URL) и формат «архив по источникам»
+
+Отдача `/api/export` может быть защищена ключом — настройка **serveToken**, вкладка «Сборка» → «Отдача по URL» (генерация, сохранение и готовые URL — там же; ключ пуст — URL открыт). Ключ передаётся одним из двух способов:
+
+- `GET /api/export?token=<ключ>` — параметр в URL;
+- поле **authkey** источника в Clear NDR — scirius отправит его заголовком `Authorization: <ключ>` (rules/models.py → `update_ruleset_http`).
+
+Оба формата отдачи работают как источники Clear NDR:
+
+| URL Hub | Data type источника | Что получит Clear NDR |
+| --- | --- | --- |
+| `GET /api/export` | `sig` («Individual Signatures file») | итоговый файл целиком — одна категория |
+| `GET /api/export?archive=1` | `sigs` («Signatures archive») | tgz по источникам: каждый `<источник>.rules` — отдельная категория (файлы в корне архива — так требует парсер tar scirius) |
+
+Внимание: scirius не проверяет HTTP-статус ответа URL-источника (`update_ruleset_http` пишет `resp.content` в файл как есть) — при ошибке отдачи (403/404) источник упадёт на разборе правил. Тексты ошибок Hub внятные: неверный ключ, нет сборки, нет архива — причина видна сразу.
+
 ### Автоматическая настройка (скрипт)
 
 Скрипт идемпотентен — можно запускать повторно:
@@ -132,6 +148,7 @@ cd scripts
 CLEAR_NDR_URL=https://clearndr.local \
 CLEAR_NDR_TOKEN=<токен> \
 HUB_URL=http://<hub-host>:3080/api/export \
+# HUB_TOKEN=<ключ отдачи>    # если на Hub задан ключ — скрипт запишет его в authkey источника \
 ./clearndr-setup-pull.sh
 ```
 
@@ -149,6 +166,7 @@ curl -sk -X POST "$BASE/rest/rules/source/" -H "$TOK" -H 'Content-Type: applicat
   "method": "http",
   "datatype": "sig",
   "uri": "http://<hub-host>:3080/api/export",
+  "authkey": "<ключ отдачи, если задан — scirius отправит его в Authorization>",
   "use_sys_proxy": false,
   "comment": "итоговый набор правил NDR Rules Hub"
 }'
@@ -339,6 +357,7 @@ curl -s http://127.0.0.1:8080/_stats | python3 -m json.tool
 | Источник обновился, но правил в наборе нет | Категория источника не включена в ruleset: `POST /rest/rules/category/<pk>/enable/` или отметьте её в UI Rulesets |
 | HTTP 403 на все запросы | У учётной записи нет прав `rules.source_edit` / `rules.ruleset_update_push` — используйте администратора или добавьте права |
 | Clear NDR не может скачать `/api/export` | Hub недоступен по сети/сборки нет. Проверьте `curl -sI http://<hub>:3080/api/export` с сервера Clear NDR |
+| Источник-URL падает с ошибкой разбора правил | Hub вернул ошибку, а scirius не проверяет HTTP-статус и записал её тело в файл: HTTP 403 — ключ отдачи не передан/неверен (authkey источника или `?token=`); 404 — нет сборки или архива. Проверьте URL curl'ом и содержимое authkey источника |
 | Конфликт с Stamus-правилами | SID-блок Hub — 1 000 000 000…1 099 999 999. Диапазон Stamus Networks — 1 000 000 000…1 002 899 999: не подключайте в один ruleset со «своими» правилами Stamus TI, либо используйте другой блок для конвертеров |
 | `https://`-Hub с самоподписанным сертификатом | Scirius проверяет сертификаты при pull (`cert_verif` только для чтения в API) — отдавайте файл по `http://` внутри доверенной сети или выпустите доверенный сертификат |
 

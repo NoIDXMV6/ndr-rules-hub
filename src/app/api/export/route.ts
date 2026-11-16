@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
 import { exportLatestBuild } from '@/lib/engine/service'
+import { serveBuild } from '@/lib/engine/serve'
 import { EXPORTS_DIR } from '@/lib/engine/fetcher'
 import { promises as fs } from 'fs'
 import path from 'path'
@@ -8,33 +8,26 @@ import { apiError } from '@/lib/api-error'
 
 export const dynamic = 'force-dynamic'
 
-/** GET /api/export — скачать последний итоговый файл; ?archive=1 — tgz-архив по источникам */
+/** GET /api/export — итоговый набор для URL-источника Clear NDR (PULL-схема).
+ *  По умолчанию — одиночный .rules файл (datatype «sig»), ?archive=1 —
+ *  tgz-архив по источникам (datatype «sigs»). Защита: настройка serveToken —
+ *  ключ в ?token= или заголовке Authorization (scirius отправляет authkey
+ *  источника). */
 export async function GET(req: NextRequest) {
   try {
-    const build = await db.build.findFirst({ orderBy: { createdAt: 'desc' } })
-    if (!build) return NextResponse.json({ error: 'нет сборок' }, { status: 404 })
-    try {
-      if (req.nextUrl.searchParams.get('archive')) {
-        const stats = JSON.parse(build.statsJson || '{}') as { archive?: { filePath: string; fileName: string } }
-        if (!stats.archive) return NextResponse.json({ error: 'в этой сборке нет архива — включите «Формат сборки: файл + tgz» в настройках и пересоберите' }, { status: 404 })
-        const content = await fs.readFile(stats.archive.filePath)
-        return new NextResponse(new Uint8Array(content), {
-          headers: {
-            'Content-Type': 'application/gzip',
-            'Content-Disposition': `attachment; filename="${stats.archive.fileName}"`,
-          },
-        })
-      }
-      const content = await fs.readFile(build.filePath)
-      return new NextResponse(new Uint8Array(content), {
-        headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Content-Disposition': `attachment; filename="${build.fileName}"`,
-        },
-      })
-    } catch {
-      return NextResponse.json({ error: `файл не найден на диске: ${build.filePath}` }, { status: 404 })
+    const sp = req.nextUrl.searchParams
+    const res = await serveBuild({
+      archive: !!sp.get('archive'),
+      token: sp.get('token') ?? undefined,
+      authHeader: req.headers.get('authorization'),
+    })
+    const headers: Record<string, string> = {
+      'Content-Type': res.contentType,
+      'Cache-Control': 'no-store', // после каждой сборки файл по этому же URL другой
     }
+    if (res.fileName) headers['Content-Disposition'] = `attachment; filename="${res.fileName}"`
+    const body = Buffer.isBuffer(res.body) ? new Uint8Array(res.body) : Buffer.from(res.body, 'utf8')
+    return new NextResponse(body, { status: res.status, headers })
   } catch (e) {
     return apiError(e)
   }

@@ -4,15 +4,30 @@ import { useCallback, useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { api, Dashboard, fmtSize, fmtTime } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
-import { Download, FileArchive, Hammer, Send } from 'lucide-react'
+import { Check, Copy, Download, FileArchive, Hammer, KeyRound, Link2, Save, Send } from 'lucide-react'
 
 export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange: () => void }) {
   const { t, tr, lang, loc } = useI18n()
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [files, setFiles] = useState<Array<{ name: string; size: number; mtime: string }>>([])
+  // PULL-схема: готовые URL отдачи + ключ serveToken (правится прямо здесь)
+  const [origin, setOrigin] = useState('')
+  const [serveToken, setServeToken] = useState('')
+  const [serveBusy, setServeBusy] = useState(false)
+  const [serveMsg, setServeMsg] = useState<string | null>(null)
+
+  useEffect(() => {
+    setOrigin(window.location.origin)
+  }, [])
+
+  useEffect(() => {
+    setServeToken(data?.settings?.serveToken ?? '')
+  }, [data?.settings?.serveToken])
 
   const loadFiles = useCallback(async () => {
     try {
@@ -65,6 +80,30 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
 
   const b = data?.lastBuild
   const mode = data?.settings.clearndrExportMode ?? 'file'
+
+  const tokenQs = serveToken ? `?token=${encodeURIComponent(serveToken)}` : ''
+  const fileUrl = `${origin}/api/export${tokenQs}`
+  const tgzUrl = serveToken ? `${origin}/api/export?archive=1&token=${encodeURIComponent(serveToken)}` : `${origin}/api/export?archive=1`
+
+  const genServeToken = () => {
+    const bytes = crypto.getRandomValues(new Uint8Array(16))
+    setServeToken(Array.from(bytes).map((v) => v.toString(16).padStart(2, '0')).join(''))
+    setServeMsg(null)
+  }
+
+  const saveServeToken = async () => {
+    setServeBusy(true)
+    setServeMsg(null)
+    try {
+      await api.saveSettings({ ...(data?.settings ?? {}), serveToken })
+      setServeMsg(t.build.serveTokenSaved)
+      onChange()
+    } catch (e) {
+      setServeMsg(tr(t.messages.fetchErr, { err: (e as Error).message }))
+    } finally {
+      setServeBusy(false)
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -156,6 +195,47 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
       <Card className="bg-card border-border">
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
+            <Link2 className="h-4 w-4 text-primary" /> {t.build.serveTitle}
+          </CardTitle>
+          <CardDescription>{t.build.serveDesc}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <ServeRow label={t.build.serveFile} url={fileUrl} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+          <ServeRow label={t.build.serveArchive} url={tgzUrl} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+          <div className="max-w-2xl">
+            <Label className="text-foreground">{t.build.serveToken}</Label>
+            <div className="mt-1 flex flex-wrap gap-2">
+              <Input
+                value={serveToken}
+                onChange={(e) => { setServeToken(e.target.value.trim()); setServeMsg(null) }}
+                className="bg-card border-input font-mono flex-1 min-w-56"
+                placeholder="32-hex…"
+              />
+              <Button variant="outline" className="border-input text-foreground shrink-0" onClick={genServeToken} title={t.build.serveTokenGen}>
+                <KeyRound className="h-4 w-4 mr-1.5" /> {t.build.serveTokenGen}
+              </Button>
+              <Button onClick={saveServeToken} disabled={serveBusy} className="bg-primary hover:bg-primary/90 text-primary-foreground shrink-0">
+                <Save className="h-4 w-4 mr-1.5" /> {t.build.serveTokenSave}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">{t.build.serveTokenEmpty}</p>
+            {serveMsg && <p className="text-xs text-emerald-700 mt-1">{serveMsg}</p>}
+          </div>
+          <div>
+            <p className="text-sm font-medium text-foreground mb-1">{t.build.serveStepsTitle}</p>
+            <ol className="list-decimal ml-5 space-y-1 text-sm text-muted-foreground">
+              <li>{t.build.serveStep1}</li>
+              <li>{t.build.serveStep2}</li>
+              <li>{t.build.serveStep3}</li>
+              <li>{t.build.serveStep4}</li>
+            </ol>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-card border-border">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
             <FileArchive className="h-4 w-4 text-primary" /> {t.build.filesTitle}
           </CardTitle>
           <CardDescription>{t.build.filesDesc}</CardDescription>
@@ -186,6 +266,28 @@ function MiniStat({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg border border-border bg-card/50 p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="text-lg font-semibold tabular-nums text-foreground">{value}</p>
+    </div>
+  )
+}
+
+function ServeRow({ label, url, copyLabel, copiedLabel }: { label: string; url: string; copyLabel: string; copiedLabel: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    if (!url) return
+    navigator.clipboard?.writeText(url).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => undefined)
+  }
+  return (
+    <div>
+      <Label className="text-foreground">{label}</Label>
+      <div className="mt-1 flex gap-2 items-center">
+        <code className="flex-1 min-w-0 truncate rounded-md border border-border bg-muted px-2 py-1.5 text-xs font-mono text-foreground" title={url}>{url || '…'}</code>
+        <Button size="sm" variant="outline" className="border-input text-foreground shrink-0" onClick={copy} disabled={!url}>
+          {copied ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <Copy className="h-3.5 w-3.5 mr-1.5" />} {copied ? copiedLabel : copyLabel}
+        </Button>
+      </div>
     </div>
   )
 }

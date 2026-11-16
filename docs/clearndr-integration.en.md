@@ -13,7 +13,7 @@ Exact instructions for automatic delivery of the final ruleset from **NDR Rules 
 | Who initiates | Clear NDR fetches the file from the Hub itself | The Hub pushes the file to Clear NDR itself |
 | Network access | Clear NDR → Hub (HTTP 3080) | Hub → Clear NDR (HTTPS 443) |
 | Configured in Clear NDR | a “HTTP URL” source + a schedule | nothing (the source is created automatically) |
-| Configured in the Hub | nothing | “Clear NDR REST” mode, base URL, token |
+| Configured in the Hub | nothing (optionally — a serving key serveToken, “Build” tab) | “Clear NDR REST” mode, base URL, token |
 | Auto-update | Clear NDR’s built-in scheduler | the Hub’s built-in cron (or a cron on Clear NDR) |
 | When to choose | Hub and Clear NDR on the same network | the Hub is unreachable from Clear NDR (DMZ, NAT) |
 
@@ -123,6 +123,22 @@ sequenceDiagram
 - at least one build exists in the Hub (“Build & Export” tab → “Build”);
 - the token has been obtained (section 2).
 
+### Serving key (URL protection) and the per-source archive format
+
+`/api/export` can be protected by a key — the **serveToken** setting, “Build” tab → “Serve by URL” (generation, saving and ready-made URLs live there; an empty key means the URL is open). The key is passed in one of two ways:
+
+- `GET /api/export?token=<key>` — a URL parameter;
+- the source’s **authkey** field in Clear NDR — scirius will send it as the `Authorization: <key>` header (rules/models.py → `update_ruleset_http`).
+
+Both serving formats work as Clear NDR sources:
+
+| Hub URL | Source data type | What Clear NDR gets |
+| --- | --- | --- |
+| `GET /api/export` | `sig` (“Individual Signatures file”) | the whole final file — one category |
+| `GET /api/export?archive=1` | `sigs` (“Signatures archive”) | a per-source tgz: every `<source>.rules` becomes a separate category (files at the archive root — a scirius tar-parser requirement) |
+
+Note: scirius does not check the HTTP status of a URL source (`update_ruleset_http` writes `resp.content` to the file as is) — if the serving side returns an error (403/404), the source will fail on rule parsing. Hub error texts are explicit: wrong key, no build, no archive — the cause is visible immediately.
+
 ### Automatic setup (script)
 
 The script is idempotent — it is safe to re-run:
@@ -132,6 +148,7 @@ cd scripts
 CLEAR_NDR_URL=https://clearndr.local \
 CLEAR_NDR_TOKEN=<token> \
 HUB_URL=http://<hub-host>:3080/api/export \
+# HUB_TOKEN=<serving key>   # if the Hub has a serving key — the script puts it into the source authkey \
 ./clearndr-setup-pull.sh
 ```
 
@@ -149,6 +166,7 @@ curl -sk -X POST "$BASE/rest/rules/source/" -H "$TOK" -H 'Content-Type: applicat
   "method": "http",
   "datatype": "sig",
   "uri": "http://<hub-host>:3080/api/export",
+  "authkey": "<serving key, if set — scirius sends it as the Authorization header>",
   "use_sys_proxy": false,
   "comment": "NDR Rules Hub final ruleset"
 }'
@@ -339,6 +357,7 @@ Base: `https://<clearndr>/rest/` · Auth: `Authorization: Token <token>` · List
 | The source updated but the ruleset has no new rules | The source category is not enabled in the ruleset: `POST /rest/rules/category/<pk>/enable/` or tick it in the Rulesets UI |
 | HTTP 403 on every request | The account lacks `rules.source_edit` / `rules.ruleset_update_push` — use an administrator or grant the rights |
 | Clear NDR cannot download `/api/export` | The Hub is unreachable / no build exists. Check `curl -sI http://<hub>:3080/api/export` from the Clear NDR server |
+| The URL source fails with a rule-parsing error | The Hub returned an error, and scirius does not check the HTTP status and wrote its body into the file: HTTP 403 — the serving key is missing/wrong (source authkey or `?token=`); 404 — no build or no archive. Check the URL with curl and the source’s authkey field |
 | Conflict with Stamus rules | The Hub’s SID block is 1 000 000 000…1 099 999 999. The Stamus Networks range is 1 000 000 000…1 002 899 999: do not enable Stamus TI custom rules in the same ruleset, or use a different block for converters |
 | `https://` Hub with a self-signed certificate | Scirius verifies certificates on pull (`cert_verif` is read-only via the API) — serve the file over `http://` inside a trusted network or install a trusted certificate |
 
