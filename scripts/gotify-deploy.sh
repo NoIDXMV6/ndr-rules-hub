@@ -145,7 +145,7 @@ cat > "${OUT}/README.md" <<EOF
 
 ## 2. Создание приложения и токена
 - Web UI → Apps → Create Application → скопируйте **Token** приложения.
-- Токен вставьте в NDR Rules Hub: Настройки → Уведомления → Gotify (URL + токен), включите канал и нажмите «Тест».
+- Токен вставьте в NDR Rules Hub: Интеграции → Уведомления и сервисы → Gotify (URL + токен), включите канал и нажмите «Тест».
 
 ## 3. Домен и DNS
 - Заведите A/AAAA-запись DNS на IP сервера (например \`gotify.example.com → 203.0.113.10\`).
@@ -166,4 +166,4 @@ cat > "${OUT}/README.md" <<EOF
 EOF
 
 echo "Файлы окружения записаны: ${OUT}/ (docker-compose.gotify.yml, CADDY.example, NGINX.example, README.md)"
-echo "Дальше: Настройки хаба → Уведомления → Gotify → URL + App-токен (Apps → Create Application) → «Тест»."
+echo "Дальше: Интеграции → Уведомления и сервисы → Gotify → URL + App-токен (Apps → Create Application) → «Тест»."

@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
   const rl = rateLimit(`account:${g.user!.id}`, ACTION_RULE)
   if (!rl.ok) return NextResponse.json({ error: 'Слишком много действий — повторите позже' }, { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } })
 
-  const body = await req.json().catch(() => ({})) as { action?: string; username?: string; code?: string; password?: string }
+  const body = await req.json().catch(() => ({})) as { action?: string; username?: string; code?: string; password?: string; clientNow?: number }
   const user = await db.user.findUnique({ where: { id: g.user!.id } })
   if (!user) return jsonError(404, 'Пользователь не найден')
 
@@ -127,12 +127,37 @@ export async function POST(req: NextRequest) {
 
     case 'switch-totp': {
       if (!user.totpSecret) return jsonError(400, 'Сначала настройте TOTP (создайте секрет)')
-      if (!verifyTotp(user.totpSecret, String(body.code ?? ''))) {
-        return NextResponse.json({ error: 'Неверный код TOTP. Проверьте: 1) в приложении именно текущий секрет (после «Пересоздать ключ» нужен повторный скан — нажмите «Показать QR» и сверьте ключ); 2) время на устройстве совпадает с серверным' }, { status: 401 })
+      const code = String(body.code ?? '')
+      // 1) Проверка по СЕРВЕРНОМУ времени (окно ±2 шага = ±60 c). Привязка возможна
+      //    только если код верен по серверным часам — иначе при входе (который всегда
+      //    проверяет по серверному времени) пользователь заблокирует сам себя.
+      if (verifyTotp(user.totpSecret, code)) {
+        await db.user.update({ where: { id: user.id }, data: { twoFactor: 'totp' } })
+        void audit('2fa_change', { email: user.email, userId: user.id, ip, detail: 'метод: totp' })
+        return NextResponse.json({ ok: true, twoFactor: 'totp', message: 'Двухфакторная аутентификация через TOTP включена' })
       }
-      await db.user.update({ where: { id: user.id }, data: { twoFactor: 'totp' } })
-      void audit('2fa_change', { email: user.email, userId: user.id, ip, detail: 'метод: totp' })
-      return NextResponse.json({ ok: true, twoFactor: 'totp', message: 'Двухфакторная аутентификация через TOTP включена' })
+      // 2) Диагностика расхождения часов: если код верен по времени УСТРОЙСТВА, но не
+      //    сервера — говорим ровно об этом (а не про «неверный код») и не включаем 2FA.
+      const serverNow = Date.now()
+      const clientNow = typeof body.clientNow === 'number' && Number.isFinite(body.clientNow) ? body.clientNow : null
+      if (
+        clientNow !== null &&
+        Math.abs(serverNow - clientNow) > 30_000 &&
+        verifyTotp(user.totpSecret, code, clientNow)
+      ) {
+        const driftSec = Math.round((clientNow - serverNow) / 1000)
+        const dir = driftSec > 0 ? 'спешат' : 'отстают'
+        void audit('2fa_change', { email: user.email, userId: user.id, ip, detail: `привязка TOTP отклонена: часы устройства ${dir} на ~${Math.abs(driftSec)} с` })
+        return NextResponse.json({
+          error: `Часы устройства, где запущено приложение-аутентификатор, ${dir} от серверных примерно на ${Math.abs(driftSec)} с. Включите в устройстве автоматическую синхронизацию времени (NTP) и повторите привязку — иначе вход по TOTP не будет работать.`,
+        }, { status: 401 })
+      }
+      // 3) Обычная ошибка: подсказка для сверки времени с точным серверным UTC
+      const serverUtc = new Date().toUTCString()
+      void audit('2fa_change', { email: user.email, userId: user.id, ip, detail: 'привязка TOTP: неверный код' })
+      return NextResponse.json({
+        error: `Неверный код TOTP. Сверьте: 1) время сервера (UTC): ${serverUtc} — время на устройстве с приложением должно совпадать с ним с точностью до минуты; 2) в приложении именно текущий секрет (после «Пересоздать ключ» нужен повторный скан — нажмите «Показать QR» и сверьте ключ вручную); 3) код должен быть самым свежим — подождите смены цифр и введите заново.`,
+      }, { status: 401 })
     }
 
     case 'disable-2fa': {

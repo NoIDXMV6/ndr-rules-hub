@@ -2,7 +2,7 @@
 // Telegram-бот хаба: долгий опрос getUpdates (поллер), привязка чатов
 // пользователей (/start), доставка кодов 2FA/верификации и рассылка
 // уведомлений о новых версиях.
-// Требуется: «Настройки → Уведомления» → включён Telegram и заполнен токен
+// Требуется: «Интеграции → Уведомления и сервисы» → включён Telegram и заполнен токен
 // бота. Прокси берётся тот же (tgProxy). Пользователь обязан один раз отправить
 // боту /start — иначе Telegram запрещает ботам инициировать переписку.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ async function tgMethod<T = Record<string, unknown>>(s: TgSettings, method: stri
 /** Отправить сообщение в конкретный чат (коды 2FA, привязка, рассылки) */
 export async function sendTelegramText(chatId: string, text: string): Promise<{ ok: boolean; error?: string }> {
   const s = await tgSettings()
-  if (!s) return { ok: false, error: 'токен бота не настроен (Настройки → Уведомления)' }
+  if (!s) return { ok: false, error: 'токен бота не настроен (Интеграции → Уведомления и сервисы)' }
   const r = await tgMethod(s, 'sendMessage', { chat_id: chatId, text: text.slice(0, 4000), disable_web_page_preview: true })
   return r.ok ? { ok: true } : { ok: false, error: r.error }
 }

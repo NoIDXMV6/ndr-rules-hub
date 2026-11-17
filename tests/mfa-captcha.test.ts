@@ -275,4 +275,62 @@ describe('аккаунт (route): show-totp-qr / setup-totp / switch-totp', () =
     const row = await db.user.findUnique({ where: { id: userId } })
     expect(row!.totpSecret).toBe(r.manualKey)
   })
+
+  it('switch-totp: код, сгенерированный устройством с дрейфом ±2 шага (±60 c), принимается (окно расширено с ±1)', async () => {
+    const secret = (await db.user.findUnique({ where: { id: userId } }))!.totpSecret!
+    // сброс 2FA, чтобы проверить привязку заново
+    await db.user.update({ where: { id: userId }, data: { twoFactor: 'none' } })
+    // часы устройства спешат на 55 c (меньше 2 шагов) — код из «будущего» устройства
+    const driftAhead = Date.now() + 55_000
+    const ahead = await post({ action: 'switch-totp', code: mfa.totpNow(secret, driftAhead), clientNow: driftAhead })
+    expect(ahead.status).toBe(200)
+    const r = await ahead.json()
+    expect(r.twoFactor).toBe('totp')
+    // часы устройства отстают на 55 c — код из «прошлого» устройства
+    await db.user.update({ where: { id: userId }, data: { twoFactor: 'none' } })
+    const driftBehind = Date.now() - 55_000
+    const behind = await post({ action: 'switch-totp', code: mfa.totpNow(secret, driftBehind), clientNow: driftBehind })
+    expect(behind.status).toBe(200)
+    await db.user.update({ where: { id: userId }, data: { twoFactor: 'none' } })
+  })
+
+  it('switch-totp: дрейф часов ~2.5 мин (3+ шага) — привязка отклонена с точным диагнозом, 2FA не включается', async () => {
+    const secret = (await db.user.findUnique({ where: { id: userId } }))!.totpSecret!
+    await db.user.update({ where: { id: userId }, data: { twoFactor: 'none' } })
+    const skewed = Date.now() + 150_000 // устройство спешит на 2.5 минуты
+    const res = await post({ action: 'switch-totp', code: mfa.totpNow(secret, skewed), clientNow: skewed })
+    expect(res.status).toBe(401)
+    const j = await res.json()
+    expect(j.error).toContain('спешат')
+    expect(j.error).toContain('150')
+    // 2FA осталась выключенной — иначе вход (по серверному времени) заблокировал бы пользователя
+    const row = await db.user.findUnique({ where: { id: userId } })
+    expect(row!.twoFactor).toBe('none')
+    // и зеркальный случай: устройство отстаёт
+    const skewed2 = Date.now() - 150_000
+    const res2 = await post({ action: 'switch-totp', code: mfa.totpNow(secret, skewed2), clientNow: skewed2 })
+    expect(res2.status).toBe(401)
+    expect((await res2.json()).error).toContain('отстают')
+  })
+
+  it('switch-totp: заведомо неверный код — 401 с серверным UTC-временем для сверки', async () => {
+    const res = await post({ action: 'switch-totp', code: '000000' === mfa.totpNow(mfa.generateTotpSecret()) ? '111111' : '000000' })
+    expect(res.status).toBe(401)
+    const j = await res.json()
+    expect(j.error).toContain('Неверный код TOTP')
+    expect(j.error).toMatch(/UTC/)
+    expect(j.error).toContain('Показать QR')
+  })
+})
+
+describe('mfa: окно TOTP ±2 шага на уровне verifyTotp', () => {
+  it('код соседних ±2 шагов принимается, ±3 — отвергается', () => {
+    const secret = mfa.generateTotpSecret()
+    const now = Date.now()
+    expect(mfa.verifyTotp(secret, mfa.totpNow(secret, now + 60_000), now)).toBe(true)
+    expect(mfa.verifyTotp(secret, mfa.totpNow(secret, now - 60_000), now)).toBe(true)
+    expect(mfa.verifyTotp(secret, mfa.totpNow(secret, now), now)).toBe(true)
+    expect(mfa.verifyTotp(secret, mfa.totpNow(secret, now + 95_000), now)).toBe(false)
+    expect(mfa.verifyTotp(secret, mfa.totpNow(secret, now - 95_000), now)).toBe(false)
+  })
 })

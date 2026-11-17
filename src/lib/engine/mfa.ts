@@ -123,16 +123,20 @@ export function totpNow(secretBase32: string, atMs = Date.now()): string {
 }
 
 /**
- * Проверить код TOTP с окном ±1 шаг (30 c) — компенсация расхождения часов.
- * Сравнение константное по всем трем кандидатам.
+ * Проверить код TOTP с окном ±windowSteps шагов (по умолчанию ±2 шага = ±60 c) —
+ * компенсация расхождения часов устройства с сервером: коды, показанные приложением
+ * «раньше» или «позже» текущего шага сервера, всё равно принимаются. Сравнение
+ * константное по всем кандидатам.
  */
-export function verifyTotp(secretBase32: string, code: string, atMs = Date.now()): boolean {
+export function verifyTotp(secretBase32: string, code: string, atMs = Date.now(), windowSteps = 2): boolean {
   if (!/^\d{6}$/.test(String(code ?? '').trim())) return false
   const secret = base32Decode(secretBase32)
   if (secret.length < 10) return false // < 80 бит — некорректный секрет
   const counter = Math.floor(atMs / 30_000)
   const provided = Buffer.from(String(code).trim())
-  for (const c of [counter - 1, counter, counter + 1]) {
+  for (let d = -windowSteps; d <= windowSteps; d++) {
+    const c = counter + d
+    if (c < 0) continue
     if (timingSafeEqual(Buffer.from(hotp(secret, c)), provided)) return true
   }
   return false

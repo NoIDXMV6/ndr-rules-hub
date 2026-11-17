@@ -13,6 +13,7 @@ import { mkdir, writeFile, readFile } from 'fs/promises'
 import { accessSync, constants as fsConstants } from 'fs'
 import path from 'path'
 import { request, Agent } from 'undici'
+import { db } from '@/lib/db'
 import { log } from './service'
 import { DATA_DIR } from './fetcher'
 
@@ -167,7 +168,7 @@ ${url ? `Адрес из контейнера хаба: ${url}\n` : ''}
 
 ## 2. Создание приложения и токена
 - Web UI → Apps → Create Application → скопируйте **Token** приложения.
-- Токен вставьте в NDR Rules Hub: Настройки → Уведомления → Gotify (URL + токен), включите канал и нажмите «Тест».
+- Токен вставьте в NDR Rules Hub: Интеграции → Уведомления и сервисы → Gotify (URL + токен), включите канал и нажмите «Тест».
 
 ## 3. Домен и DNS
 - Заведите A/AAAA-запись DNS на IP сервера (например \`gotify.example.com → 203.0.113.10\`).
@@ -201,8 +202,8 @@ export async function deployGotify(opts?: { port?: number; domain?: string }): P
   if (st.running) {
     const url = await detectGotifyUrl(port)
     instructions.push('Контейнер ndr-gotify уже запущен — повторное развёртывание не требуется.')
-    instructions.push(`Откройте web-интерфейс: ${url ?? `http://<адрес-сервера>:${port}`} и войдите (дефолт admin/admin — смените пароль).`)
-    instructions.push('Создайте приложение (Apps → Create Application) и вставьте токен в Настройки → Уведомления → Gotify.')
+    instructions.push('Откройте web-интерфейс: ' + (url ?? `http://<адрес-сервера>:${port}`) + ' и войдите (дефолт admin/admin — смените пароль).')
+    instructions.push('Создайте приложение (Apps → Create Application) и вставьте токен в «Интеграции → Уведомления и сервисы → Gotify» (URL + токен), затем нажмите «Тест» и «Сохранить».')
     return { ok: true, alreadyRunning: true, url, port, container: CONTAINER, instructions }
   }
   if (st.exists) {
@@ -248,7 +249,7 @@ export async function deployGotify(opts?: { port?: number; domain?: string }): P
   } catch { /* том только для чтения — инструкции останутся в ответе и в доке */ }
 
   instructions.push(`Откройте web-интерфейс Gotify: ${url ?? `http://<адрес-сервера>:${port}`} и войдите admin/admin — сразу смените пароль.`)
-  instructions.push('Apps → Create Application → скопируйте токен; вставьте его и URL сервера в Настройки → Уведомления → Gotify, включите канал и нажмите «Тест».')
+  instructions.push('Apps → Create Application → скопируйте токен; вставьте его и URL сервера в «Интеграции → Уведомления и сервисы → Gotify», включите канал и нажмите «Тест», затем «Сохранить».')
   instructions.push(`Для публикации в интернет: DNS A-запись на сервер + реверс-прокси с TLS. Шаблоны Caddy/nginx и полная инструкция сохранены в ${dir} (том данных хаба).`)
   if (!healthy) {
     instructions.push('ВНИМАНИЕ: /health не ответил за 45 с — проверьте docker logs ndr-gotify (контейнер запущен, возможно ещё инициализируется).')
@@ -273,9 +274,21 @@ export async function removeGotify(): Promise<{ ok: boolean; error?: string }> {
   }
 }
 
-/** Текущее состояние развёрнутого Gotify (для карточки в настройках) */
+/** Порт развёрнутого Gotify из настройки gotifyDeployPort (дефолт 8085) */
+async function gotifyPortFromSettings(): Promise<number> {
+  try {
+    const row = await db.setting.findUnique({ where: { key: 'gotifyDeployPort' } })
+    const parsed = parseInt(row?.value ?? '', 10)
+    if (Number.isFinite(parsed) && parsed >= 1024 && parsed <= 65535) return parsed
+  } catch { /* БД недоступна — дефолт */ }
+  return 8085
+}
+
+/** Текущее состояние развёрнутого Gotify (для карточки «Уведомления и сервисы»).
+ *  Порт берётся из настройки gotifyDeployPort: раньше он был жёстко 8085, и при
+ *  развёртывании на другом порту статус/URL показывались неверно. */
 export async function gotifyState(): Promise<{ containerRunning: boolean; url?: string; port: number }> {
-  const port = 8085
+  const port = await gotifyPortFromSettings()
   const st = await containerState().catch(() => ({ exists: false, running: false }))
   const url = st.running ? await detectGotifyUrl(port) : undefined
   return { containerRunning: st.running, url, port }

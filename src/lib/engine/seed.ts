@@ -471,7 +471,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   cleanupLargeFileMb: '500',
   cleanupFileKeepDays: '7',
   cleanupFilesDelete: 'false', // false — только отчёт; true — удалять найденное
-  // ── Уведомления (вкладка «Настройки» → «Уведомления») ────────────────────────
+  // ── Уведомления (вкладка «Интеграции» → «Уведомления и сервисы») ────────
   notifyTgEnabled: 'false',
   tgBotToken: '',
   tgChatId: '',

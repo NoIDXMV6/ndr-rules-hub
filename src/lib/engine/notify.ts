@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Уведомления: Telegram (с поддержкой прокси) и Gotify.
-// Настройки хранятся в таблице Setting (вкладка «Настройки» → «Уведомления»).
+// Настройки хранятся в таблице Setting (вкладка «Интеграции» → «Уведомления и сервисы»).
 // Модуль самодостаточен: читает настройки напрямую из БД (без цикла импортов
 // со service.ts), события приходят от движка (pipeline, vpn, disk).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -108,7 +108,7 @@ export async function sendTelegram(text: string, cfg?: { token?: string; chatId?
   const token = cfg?.token ?? s.tgBotToken
   const chatId = cfg?.chatId ?? s.tgChatId
   const apiBase = (cfg?.apiBase ?? s.tgApiBase).replace(/\/+$/, '')
-  if (!token || !chatId) return { ok: false, channel: 'telegram', error: 'не заданы токен бота или chat_id (Настройки → Уведомления)' }
+  if (!token || !chatId) return { ok: false, channel: 'telegram', error: 'не заданы токен бота или chat_id (Интеграции → Уведомления и сервисы)' }
   const url = `${apiBase}/bot${token}/sendMessage`
   try {
     const body = JSON.stringify({ chat_id: chatId, text: text.slice(0, 4000), disable_web_page_preview: true })
@@ -142,7 +142,7 @@ export async function sendGotify(title: string, message: string, cfg?: { url?: s
   const base = (cfg?.url ?? s.gotifyUrl).replace(/\/+$/, '')
   const token = cfg?.token ?? s.gotifyToken
   const priority = cfg?.priority ?? s.gotifyPriority
-  if (!base || !token) return { ok: false, channel: 'gotify', error: 'не заданы URL сервера Gotify или app-токен (Настройки → Уведомления)' }
+  if (!base || !token) return { ok: false, channel: 'gotify', error: 'не заданы URL сервера Gotify или app-токен (Интеграции → Уведомления и сервисы)' }
   try {
     const res = await request(`${base}/message`, {
       method: 'POST',

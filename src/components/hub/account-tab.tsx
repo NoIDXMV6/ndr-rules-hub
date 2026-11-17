@@ -232,7 +232,9 @@ export function AccountTab() {
                   autoComplete="one-time-code"
                 />
               </div>
-              <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={busy || totpCode.length !== 6} onClick={() => void act({ action: 'switch-totp', code: totpCode }).then(() => setTotpCode(''))}>
+              {/* clientNow — время устройства: сервер отличит «неверный код» от расхождения
+                  часов (частая причина невозможности привязать TOTP) и подскажет точную причину */}
+              <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={busy || totpCode.length !== 6} onClick={() => void act({ action: 'switch-totp', code: totpCode, clientNow: Date.now() }).then(() => setTotpCode(''))}>
                 {t.account.totpEnable}
               </Button>
             </div>

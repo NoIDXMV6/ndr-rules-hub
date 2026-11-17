@@ -13,6 +13,7 @@ import { BuildTab } from '@/components/hub/build-tab'
 import { VpnTab } from '@/components/hub/vpn-tab'
 import { UpdateTab } from '@/components/hub/update-tab'
 import { OsdTab } from '@/components/hub/osd-tab'
+import { IntegrationsTab } from '@/components/hub/integrations-tab'
 import { SettingsTab } from '@/components/hub/settings-tab'
 import { LogsTab } from '@/components/hub/logs-tab'
 import { UsersTab } from '@/components/hub/users-tab'
@@ -25,7 +26,7 @@ import { api, Dashboard, fmtSize, fmtTime, type Me } from '@/components/hub/api'
 import { useI18n, type Dictionary, type Lang } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import {
-  Activity, Blocks, ChartColumn, Check, ChevronDown, CircleHelp, Database,
+  Activity, Bell, Blocks, ChartColumn, Check, ChevronDown, CircleHelp, Database,
   Download, FolderTree, Globe, Info, Layers, LayoutDashboard, Library,
   LifeBuoy, LogOut, Network, Package, RefreshCw, ScrollText, Settings,
   Shield, UserRound, Users, Wifi, Wrench,
@@ -88,6 +89,7 @@ export default function Home() {
     if (me?.multiUser) allowed.add('account') // кабинет доступен всем вошедшим
     if (admin) {
       allowed.add('vpn')
+      allowed.add('integrations') // «Уведомления и сервисы» в меню «Интеграции»
       allowed.add('settings')
       allowed.add('logs')
       if (me?.multiUser) allowed.add('users')
@@ -231,6 +233,11 @@ export default function Home() {
             <OsdTab data={data} onChange={refresh} />
           </TabsContent>
           {isAdmin && (
+            <TabsContent value="integrations" className="mt-4">
+              <IntegrationsTab data={data} onChange={refresh} />
+            </TabsContent>
+          )}
+          {isAdmin && (
             <>
               <TabsContent value="settings" className="mt-4">
                 <SettingsTab data={data} onChange={refresh} />
@@ -312,7 +319,13 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAcco
       ],
     },
     { kind: 'direct', key: 'build', grow: 1.25, item: { value: 'build', label: t.tabs.build, icon: ico(Package) } },
-    { kind: 'dropdown', key: 'integrations', label: t.menu.integrations, icon: ico(Blocks), items: integrations },
+    {
+      kind: 'dropdown', key: 'integrations', label: t.menu.integrations, icon: ico(Blocks), items: [
+        // настройки уведомлений и сервисов уведомлений (Telegram/Gotify) — перенесены из «Настроек»
+        ...(isAdmin ? [{ value: 'integrations', label: t.tabs.notificationsServices, icon: ico(Bell) }] : []),
+        ...integrations,
+      ],
+    },
   ]
 
   if (isAdmin) {
