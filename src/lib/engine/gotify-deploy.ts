@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Автоматическое развёртывание собственного сервера Gotify.
-// Контейнер хаба (с монтированием docker.sock) сам запускает gotify/android
-// рядом на хосте: docker run -d -p PORT:80 -v gotify-data:/app/data gotify/android,
+// Контейнер хаба (с монтированием docker.sock) сам запускает официальный образ
+// gotify/server рядом на хосте: docker run -d -p PORT:80 -v ndr-gotify-data:/app/data gotify/server,
 // дожидается /health и складывает в data/gotify/ готовый набор для окружения:
 // docker-compose.gotify.yml, примеры реверс-прокси (Caddy/nginx) и README
 // с настройкой домена, DNS и TLS.
@@ -18,7 +18,18 @@ import { DATA_DIR } from './fetcher'
 
 const execFileP = promisify(execFile)
 const CONTAINER = 'ndr-gotify'
-const IMAGE = 'gotify/android'
+// Официальные образы Gotify (https://gotify.net/docs/install) публикуются ПОРОВНО:
+// gotify/server — amd64, gotify/server-arm64 — arm64, gotify/server-armv7 — armv7.
+// Мультиарх-манифеста у gotify/server нет, поэтому образ выбирается по архитектуре
+// хаб-процесса (контейнер хаба живёт на том же хосте, что и контейнер Gotify).
+// Историческая ошибка «gotify/android» — несуществующий образ, docker run падал с
+// «pull access denied for gotify/android, repository does not exist».
+const GOTIFY_IMAGE: Record<string, string> = {
+  arm64: 'gotify/server-arm64',
+  arm: 'gotify/server-armv7',
+  x64: 'gotify/server',
+}
+const IMAGE = GOTIFY_IMAGE[process.arch] ?? 'gotify/server'
 const DOCKER_SOCKET = '/var/run/docker.sock'
 
 export interface GotifyDeployResult {
@@ -208,7 +219,7 @@ export async function deployGotify(opts?: { port?: number; domain?: string }): P
       instructions.push(`Контейнер ${CONTAINER} создан (образ ${IMAGE}, порт хоста ${port}, данные — том ndr-gotify-data).`)
     } catch (e) {
       const err = e as { stderr?: string; message?: string }
-      return { ok: false, error: `docker run не удался: ${(err.stderr || err.message || '—').trim()}`, instructions }
+      return { ok: false, error: `docker run не удался: ${(err.stderr || err.message || '—').trim()} (образ ${IMAGE}, архитектура процесса хаба: ${process.arch})`, instructions }
     }
   }
   // дожидаемся /health (образ содержит HEALTHCHECK, ждём до ~45 c)

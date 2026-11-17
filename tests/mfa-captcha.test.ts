@@ -200,3 +200,79 @@ describe('mfa: HMAC-билет второго шага', () => {
     expect(await mfa.verifyMfaTicket(new Request('http://hub.local/'), 'login')).toBeNull()
   })
 })
+
+describe('аккаунт (route): show-totp-qr / setup-totp / switch-totp', () => {
+  // Анти-регрессия инцидента «TOTP не привязывается по QR»: любой повторный
+  // setup генерировал НОВЫЙ секрет — код из уже отсканированного приложения
+  // переставал подходить. Теперь «Показать QR» возвращает ТЕКУЩИЙ секрет без
+  // перевыпуска, а перевыпуск — только явный «Пересоздать ключ».
+  let accPOST: typeof import('@/app/api/auth/account/route').POST
+  let sessionMod: typeof import('@/lib/security/session')
+  let userId: string
+  let sid: string
+
+  const post = async (body: Record<string, unknown>): Promise<Response> => {
+    const req = new Request('http://hub.local/api/auth/account', {
+      method: 'POST',
+      headers: {
+        cookie: `${sessionMod.SESSION_COOKIE}=${sid}`,
+        origin: 'http://hub.local',
+        host: 'hub.local',
+        'content-type': 'application/json',
+        'x-forwarded-for': '10.9.2.1',
+      },
+      body: JSON.stringify(body),
+    })
+    return accPOST(req as never)
+  }
+
+  beforeAll(async () => {
+    accPOST = (await import('@/app/api/auth/account/route')).POST
+    sessionMod = await import('@/lib/security/session')
+    const u = await db.user.create({
+      data: { email: 'totp-acc@example.com', displayName: 'TOTP Каб', passwordHash: 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA==$' + 'A'.repeat(88), role: 'user', status: 'active' },
+    })
+    userId = u.id
+    sid = (await sessionMod.createSession(userId, '10.9.2.1', 'vitest', null)).token
+  })
+
+  it('show-totp-qr без секрета создаёт и сохраняет его; QR — data-url', async () => {
+    const res = await post({ action: 'show-totp-qr' })
+    expect(res.status).toBe(200)
+    const r = await res.json()
+    expect(r.ok).toBe(true)
+    expect(r.manualKey).toMatch(/^[A-Z2-7]{32}$/)
+    expect(r.qrDataUrl).toContain('data:image/png;base64,')
+    const row = await db.user.findUnique({ where: { id: userId } })
+    expect(row!.totpSecret).toBe(r.manualKey)
+  })
+
+  it('повторный show-totp-qr возвращает ТОТ ЖЕ секрет (отсканированный QR не ломается)', async () => {
+    const r1 = await (await post({ action: 'show-totp-qr' })).json()
+    const r2 = await (await post({ action: 'show-totp-qr' })).json()
+    expect(r2.manualKey).toBe(r1.manualKey)
+    expect(r2.message).toContain('текущего секрета')
+  })
+
+  it('switch-totp: неверный код → 401; верный код из приложения → 2FA=totp', async () => {
+    const saved = (await db.user.findUnique({ where: { id: userId } }))!.totpSecret!
+    const bad = await post({ action: 'switch-totp', code: '000000' === mfa.totpNow(saved) ? '111111' : '000000' })
+    expect(bad.status).toBe(401)
+    const good = await post({ action: 'switch-totp', code: mfa.totpNow(saved) })
+    expect(good.status).toBe(200)
+    const r = await good.json()
+    expect(r.ok).toBe(true)
+    expect(r.twoFactor).toBe('totp')
+    const row = await db.user.findUnique({ where: { id: userId } })
+    expect(row!.twoFactor).toBe('totp')
+  })
+
+  it('setup-totp после включения — явный перевыпуск: секрет меняется', async () => {
+    const before = (await db.user.findUnique({ where: { id: userId } }))!.totpSecret!
+    const r = await (await post({ action: 'setup-totp' })).json()
+    expect(r.ok).toBe(true)
+    expect(r.manualKey).not.toBe(before)
+    const row = await db.user.findUnique({ where: { id: userId } })
+    expect(row!.totpSecret).toBe(r.manualKey)
+  })
+})

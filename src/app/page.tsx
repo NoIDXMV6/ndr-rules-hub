@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -42,20 +42,13 @@ export default function Home() {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
   // Активная вкладка управляется меню-баром (прямые кнопки + drop-down группы)
   const [tab, setTab] = useState('overview')
-  // Липкое меню: высота шапки измеряется и подставляется в top — баннеры
-  // не ломают позиционирование при прокрутке
-  const headerRef = useRef<HTMLElement | null>(null)
-  const [headerH, setHeaderH] = useState(68)
-
-  useEffect(() => {
-    const el = headerRef.current
-    if (!el) return
-    const measure = () => setHeaderH(el.offsetHeight)
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+  // Липкость: хидер и меню-бар — ОДИН sticky-блок (CSS), высота адаптируется сама.
+  // Раньше top меню считался из JS-измерения высоты шапки (useState(68) + useEffect с
+  // пустыми deps + ResizeObserver), но эффект срабатывал на сплэше (шапки ещё нет,
+  // headerRef.current === null → ранний выход) и БОЛЬШЕ НЕ ЗАПУСКАЛСЯ: top навсегда
+  // оставался 68px. У пользователя с однострочным хидером (64px) это выглядело
+  // нормально, а у администратора хидер выше (бейджи переносятся, 113px) — меню
+  // уезжало ПОД шапку и выглядело «не прилепленным».
 
   const refresh = useCallback(async () => {
     try {
@@ -144,52 +137,62 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <header ref={headerRef} className="border-b border-border bg-card/95 backdrop-blur sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2.5">
-            <img src="/logo.svg" alt="NDR Rules Hub logo" className="h-9 w-9 rounded-lg border border-primary/30" />
-            <div>
-              <h1 className="text-lg font-bold leading-tight">NDR Rules Hub</h1>
-              <p className="text-xs text-muted-foreground leading-tight">{t.header.subtitle}</p>
+      {/* Хидер и меню-бар прилипают одним блоком: и у админа, и у пользователя,
+          при любой высоте шапки (перенос бейджей/кнопок на узких экранах) меню
+          остаётся сразу под шапкой — без JS-измерения высоты */}
+      <div className="sticky top-0 z-40">
+        <header className="border-b border-border bg-card/95 backdrop-blur">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2.5">
+              <img src="/logo.svg" alt="NDR Rules Hub logo" className="h-9 w-9 rounded-lg border border-primary/30" />
+              <div>
+                <h1 className="text-lg font-bold leading-tight">NDR Rules Hub</h1>
+                <p className="text-xs text-muted-foreground leading-tight">{t.header.subtitle}</p>
+              </div>
+              {/* редакция приходит от API (/api/auth/me): клиентский process.env.NDR_EDITION не виден в браузере */}
+              <Badge variant="outline" className="border-input text-muted-foreground hidden sm:inline-flex">{tr(t.header.editionBadge, { ed: me.edition === 'enterprise' ? 'Enterprise' : 'Community' })}</Badge>
             </div>
-            {/* редакция приходит от API (/api/auth/me): клиентский process.env.NDR_EDITION не виден в браузере */}
-            <Badge variant="outline" className="border-input text-muted-foreground hidden sm:inline-flex">{tr(t.header.editionBadge, { ed: me.edition === 'enterprise' ? 'Enterprise' : 'Community' })}</Badge>
-          </div>
-          <div className="ml-auto flex items-center gap-2 flex-wrap">
-            {data && isAdmin && (
-              <>
+            <div className="ml-auto flex items-center gap-2 flex-wrap">
+              {data && isAdmin && (
+                <>
+                  <Badge variant="outline" className="border-input text-foreground">
+                    <Database className="h-3 w-3 mr-1" />
+                    {tr(t.header.rulesInDb, { n: data.rules.inDb.toLocaleString(loc) })}
+                  </Badge>
+                  <Badge variant="outline" className={data.vpn.available && data.vpn.interfaces.length > 0 ? 'border-emerald-400 text-emerald-700' : 'border-input text-muted-foreground'}>
+                    <Wifi className="h-3 w-3 mr-1" />
+                    VPN: {data.vpn.available ? (data.vpn.interfaces.length ? tr(t.header.vpnIfaces, { n: data.vpn.interfaces.length }) : t.header.vpnNoTunnels) : t.header.vpnUnavailable}
+                  </Badge>
+                  <Badge variant="outline" className={data.sources.error > 0 ? 'border-amber-400 text-amber-700' : 'border-input text-muted-foreground'}>
+                    <Activity className="h-3 w-3 mr-1" />
+                    {tr(t.header.sourcesOk, { ok: data.sources.ok, enabled: data.sources.enabled })}
+                  </Badge>
+                </>
+              )}
+              {data && !isAdmin && (
                 <Badge variant="outline" className="border-input text-foreground">
                   <Database className="h-3 w-3 mr-1" />
                   {tr(t.header.rulesInDb, { n: data.rules.inDb.toLocaleString(loc) })}
                 </Badge>
-                <Badge variant="outline" className={data.vpn.available && data.vpn.interfaces.length > 0 ? 'border-emerald-400 text-emerald-700' : 'border-input text-muted-foreground'}>
-                  <Wifi className="h-3 w-3 mr-1" />
-                  VPN: {data.vpn.available ? (data.vpn.interfaces.length ? tr(t.header.vpnIfaces, { n: data.vpn.interfaces.length }) : t.header.vpnNoTunnels) : t.header.vpnUnavailable}
-                </Badge>
-                <Badge variant="outline" className={data.sources.error > 0 ? 'border-amber-400 text-amber-700' : 'border-input text-muted-foreground'}>
-                  <Activity className="h-3 w-3 mr-1" />
-                  {tr(t.header.sourcesOk, { ok: data.sources.ok, enabled: data.sources.enabled })}
-                </Badge>
-              </>
-            )}
-            {data && !isAdmin && (
-              <Badge variant="outline" className="border-input text-foreground">
-                <Database className="h-3 w-3 mr-1" />
-                {tr(t.header.rulesInDb, { n: data.rules.inDb.toLocaleString(loc) })}
-              </Badge>
-            )}
-            <Button onClick={runCycle} disabled={busy !== null} className="bg-primary hover:bg-primary/90 text-primary-foreground">
-              <RefreshCw className={`h-4 w-4 mr-1.5 ${busy === 'cycle' ? 'animate-spin' : ''}`} />
-              {t.header.fullCycle}
-            </Button>
-            <LangSwitch />
-            {me.multiUser && me.user && <UserMenu me={me} onLogout={() => void refreshMe()} />}
+              )}
+              <Button onClick={runCycle} disabled={busy !== null} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+                <RefreshCw className={`h-4 w-4 mr-1.5 ${busy === 'cycle' ? 'animate-spin' : ''}`} />
+                {t.header.fullCycle}
+              </Button>
+              <LangSwitch />
+              {me.multiUser && me.user && <UserMenu me={me} onLogout={() => void refreshMe()} />}
+            </div>
+          </div>
+        </header>
+        <div className="bg-background pt-1 pb-2">
+          <div className="max-w-7xl mx-auto px-4">
+            <MenuBar value={tab} onValue={setTab} isAdmin={isAdmin} showUsers={showUsersTab} showAccount={!!me.multiUser} />
           </div>
         </div>
-      </header>
+      </div>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
-        {/* баннеры сообщений — вне липкой шапки, чтобы высота шапки была постоянной */}
+        {/* баннеры сообщений — вне липкого блока, чтобы высота блока была постоянной */}
         {message && (
           <div className={`my-2 rounded-lg text-sm ${message.ok ? 'bg-emerald-50 text-emerald-800 border border-emerald-200/60' : 'bg-red-50 text-red-700 border border-red-200/60'} px-3 py-2`}>
             {message.text}
@@ -201,11 +204,6 @@ export default function Home() {
           </div>
         )}
         <Tabs value={tab} onValueChange={setTab} className="w-full">
-          {/* Меню прилипает под шапкой при прокрутке (top = высота шапки) */}
-          <div className="sticky z-30 bg-background pt-1 pb-2" style={{ top: headerH }}>
-            <MenuBar value={tab} onValue={setTab} isAdmin={isAdmin} showUsers={showUsersTab} showAccount={!!me.multiUser} />
-          </div>
-
           <TabsContent value="overview" className="mt-4">
             <Overview data={data} onRefresh={refresh} role={role} onSettings={() => setTab('settings')} />
           </TabsContent>

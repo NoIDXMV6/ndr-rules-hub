@@ -36,7 +36,7 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 | **Server monitoring** | Dashboards on “Overview”: CPU/memory/uptime (host /proc), disks with usage-threshold highlighting, network interface speed and traffic, WireGuard tunnel speed and peers, running containers (docker ps via a mounted docker.sock). 5 s polling, deltas computed client-side |
 | **Disk auto-cleanup** | Free-space control for the hub data volume: when a threshold is crossed — automatic reclaim: hub archive cache, old OpenSearch indices (allowed prefixes only, system indices untouched), old files in listed log directories (suricata logs), large-file search (report-only by default). Each step enabled separately, a “What will be deleted” dry-run, per-run index limit, free-space target. Managed in “Settings → Disk & auto-cleanup”, buttons on “Overview” |
 | **Notifications** | **Telegram** (bot + chat id, http/https/socks4/socks5 proxy, custom Bot API Server) and **Gotify** (self-hosted: URL + app token). Events: rule pipeline (fetch/build/export), WireGuard (tunnel up/down/errors), disk (usage thresholds, cleanup results) — individually switchable. “Test” buttons in settings |
-| **Own Gotify server** | Automatic deployment of a gotify/android container right from the hub (docker.sock): /health wait, environment templates in data/gotify/ — docker-compose, Caddy and nginx with TLS, a domain/DNS/reverse-proxy guide. Without docker.sock — the `scripts/gotify-deploy.sh` host script. Details — [docs/gotify.md](docs/gotify.md) |
+| **Own Gotify server** | Automatic deployment of a gotify/server container right from the hub (docker.sock): /health wait, environment templates in data/gotify/ — docker-compose, Caddy and nginx with TLS, a domain/DNS/reverse-proxy guide. Without docker.sock — the `scripts/gotify-deploy.sh` host script. Details — [docs/gotify.md](docs/gotify.md) |
 | **Clear NDR update** | A tab that detects the installed version → finds the latest stamusctl-templates release → when a newer one exists, lets you pick options (OpenSearch/PostgreSQL data, backups, stamusctl CLI) and start the update in one click. The `clearndr-update.sh` script runs on the host (SSH, or local when the hub is deployed in a container on the Clear NDR host), the log streams in real time, failures trigger automatic rollback, and the result is verified (containers, web UI, REST API). v4: self-restore of a missing `config/docker-compose.yaml`, `docker compose config` validation, auto-patch of the `networks` section (a gap in the 3.3.x templates), backup gate and rollback guard. A separate `clearndr-repair-stack.sh` repairs a broken instance `config/`. Guide — [docs/clearndr-update.en.md](docs/clearndr-update.en.md) |
 | **Schedule** | cron (node-cron): source update → build → export. Controlled from the UI |
 | **Logs** | All fetch/build/export/VPN events with levels and filters |
@@ -161,7 +161,7 @@ Anything outside the explicitly allowed lists is never deleted. Run history — 
 ### Own Gotify server
 
 Option 1 — from the UI: “Settings → Notifications → Gotify → Own server → Deploy Gotify”. The hub
-(with docker.sock) runs `gotify/android` (port 8085, volume `ndr-gotify-data`), waits for `/health`
+(with docker.sock) runs `gotify/server` (port 8085, volume `ndr-gotify-data`), waits for `/health`
 and saves environment templates (docker-compose, Caddy/nginx with TLS, a domain/DNS guide) to
 `data/gotify/`. Default credentials admin/admin — change the password right after the first login.
 

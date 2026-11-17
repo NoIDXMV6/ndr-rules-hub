@@ -3,7 +3,10 @@
 //   POST {action:'save-telegram', username}   — сохранить @username (чат отвяжется до /start)
 //   POST {action:'send-telegram-code'}        — выпустить и отправить код (или подсказать /start)
 //   POST {action:'switch-telegram', code}     — подтвердить кодом и включить 2FA=telegram
-//   POST {action:'setup-totp'}                — новый секрет TOTP + QR + ключ
+//   POST {action:'show-totp-qr'}              — QR/ключ для СУЩЕСТВУЮЩЕГО секрета (нет — создать);
+//                                               повторный показ НЕ инвалидирует отсканированный QR
+//   POST {action:'setup-totp'}                — ПЕРЕВЫПУСК секрета (старый QR/ключ перестают
+//                                               действовать — после нужен повторный скан)
 //   POST {action:'switch-totp', code}         — подтвердить кодом и включить 2FA=totp
 //   POST {action:'disable-2fa', password}     — выключить 2FA (нужен пароль)
 //   POST {action:'send-test'}                 — тестовое сообщение в привязанный чат
@@ -98,18 +101,34 @@ export async function POST(req: NextRequest) {
     }
 
     case 'setup-totp': {
+      // ЯВНЫЙ перевыпуск: старый секрет и отсканированный по нему QR перестают действовать
       const secret = generateTotpSecret()
       await db.user.update({ where: { id: user.id }, data: { totpSecret: secret } })
       const uri = otpauthUri(secret, user.email)
       const qr = await totpQrDataUrl(uri).catch(() => null)
-      void audit('2fa_change', { email: user.email, userId: user.id, ip, detail: 'сгенерирован новый секрет TOTP' })
-      return NextResponse.json({ ok: true, otpauth: uri, qrDataUrl: qr, manualKey: secret, message: 'Секрет создан. Отсканируйте QR и введите текущий код для включения' })
+      void audit('2fa_change', { email: user.email, userId: user.id, ip, detail: 'секрет TOTP перевыпущен (старый недействителен)' })
+      return NextResponse.json({ ok: true, otpauth: uri, qrDataUrl: qr, manualKey: secret, message: 'Секрет перевыпущен — предыдущий QR и ключ больше не действуют. Отсканируйте новый QR и введите текущий код для включения' })
+    }
+
+    case 'show-totp-qr': {
+      // Показ QR для текущего секрета БЕЗ перевыпуска: если пользователь потерял
+      // картинку (переключил вкладку/перезагрузил страницу), повторный показ не
+      // инвалидирует уже отсканированный QR — раньше любой повторный «setup»
+      // генерировал НОВЫЙ секрет, и код из приложения переставал подходить.
+      const secret = user.totpSecret ?? generateTotpSecret()
+      if (!user.totpSecret) {
+        await db.user.update({ where: { id: user.id }, data: { totpSecret: secret } })
+        void audit('2fa_change', { email: user.email, userId: user.id, ip, detail: 'сгенерирован новый секрет TOTP' })
+      }
+      const uri = otpauthUri(secret, user.email)
+      const qr = await totpQrDataUrl(uri).catch(() => null)
+      return NextResponse.json({ ok: true, otpauth: uri, qrDataUrl: qr, manualKey: secret, message: user.totpSecret ? 'QR для текущего секрета — код из приложения подойдёт' : 'Секрет создан. Отсканируйте QR и введите текущий код для включения' })
     }
 
     case 'switch-totp': {
       if (!user.totpSecret) return jsonError(400, 'Сначала настройте TOTP (создайте секрет)')
       if (!verifyTotp(user.totpSecret, String(body.code ?? ''))) {
-        return NextResponse.json({ error: 'Неверный код TOTP — проверьте приложение и время на устройстве' }, { status: 401 })
+        return NextResponse.json({ error: 'Неверный код TOTP. Проверьте: 1) в приложении именно текущий секрет (после «Пересоздать ключ» нужен повторный скан — нажмите «Показать QR» и сверьте ключ); 2) время на устройстве совпадает с серверным' }, { status: 401 })
       }
       await db.user.update({ where: { id: user.id }, data: { twoFactor: 'totp' } })
       void audit('2fa_change', { email: user.email, userId: user.id, ip, detail: 'метод: totp' })

@@ -46,8 +46,10 @@ WireGuard (поднятие/остановка/ошибки туннеля), д�
 (`/var/run/docker.sock:/var/run/docker.sock:ro`). Нажмите
 **«Настройки → Уведомления → Gotify → Свой сервер → Развернуть Gotify»**:
 
-- хаб запустит контейнер `ndr-gotify` (образ `gotify/android`, порт хоста 8085 —
-  настраивается, данные в named-volume `ndr-gotify-data`);
+- хаб запустит контейнер `ndr-gotify` (официальный образ по архитектуре хоста:
+  `gotify/server` на amd64, `gotify/server-arm64` на arm64, `gotify/server-armv7`
+  на armv7 — выбирается автоматически; у Gotify нет мультиарх-манифеста. Порт
+  хоста 8085 — настраивается, данные в named-volume `ndr-gotify-data`);
 - дождётся готовности (`GET /health`);
 - сохранит файлы окружения в **`data/gotify/`** (на хосте — `./data/gotify/`):
   - `docker-compose.gotify.yml` — самостоятельный compose-файл Gotify;

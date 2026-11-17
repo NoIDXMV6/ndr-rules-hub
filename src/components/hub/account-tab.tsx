@@ -26,8 +26,10 @@ export function AccountTab() {
   const [busy, setBusy] = useState(false)
   // форма Telegram
   const [tgUsername, setTgUsername] = useState('')
-  // код подтверждения (общий для обоих методов)
-  const [code, setCode] = useState('')
+  // коды подтверждения — РАЗДЕЛЬНЫЕ по методам: раньше один общий state привязывался
+  // к обоим инпутам, и ввод кода «зеркалился» в соседнее поле (Telegram/TOTP)
+  const [tgCode, setTgCode] = useState('')
+  const [totpCode, setTotpCode] = useState('')
   // TOTP
   const [totpSetup, setTotpSetup] = useState<{ otpauth: string; qrDataUrl: string | null; manualKey: string } | null>(null)
   // выключение 2FA
@@ -160,14 +162,15 @@ export function AccountTab() {
               <div className="w-40">
                 <Label className="text-foreground">{t.account.codeLabel}</Label>
                 <Input
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  value={tgCode}
+                  onChange={(e) => setTgCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   className="bg-card border-input font-mono tracking-widest mt-1 text-center"
                   maxLength={6}
                   placeholder="••••••"
+                  aria-label={t.account.tgCodeAria}
                 />
               </div>
-              <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={busy || code.length !== 6} onClick={() => void act({ action: 'switch-telegram', code }).then(() => setCode(''))}>
+              <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={busy || tgCode.length !== 6} onClick={() => void act({ action: 'switch-telegram', code: tgCode }).then(() => setTgCode(''))}>
                 {t.account.tgEnable}
               </Button>
             </div>
@@ -181,33 +184,55 @@ export function AccountTab() {
               {m === 'totp' && <Badge variant="outline" className="border-emerald-300 text-emerald-700 px-1 py-0 text-[10px]">{t.account.active}</Badge>}
             </div>
             <p className="text-xs text-muted-foreground whitespace-pre-line">{t.account.totpDesc}</p>
-            <Button size="sm" variant="outline" className="border-input text-foreground" disabled={busy} onClick={async () => {
-              const r = await act({ action: 'setup-totp' })
-              if (r?.ok) setTotpSetup({ otpauth: r.otpauth as string, qrDataUrl: (r.qrDataUrl as string) ?? null, manualKey: r.manualKey as string })
-              setCode('')
-            }}>
-              {t.account.totpSetup}
-            </Button>
+            <div className="flex flex-wrap items-end gap-3">
+              {/* «Показать QR» — картинка ТЕКУЩЕГО секрета без перевыпуска: повторный показ
+                  не инвалидирует уже отсканированный QR (потеря картинки при смене вкладки/
+                  перезагрузке больше не ломает привязку) */}
+              <Button size="sm" variant="outline" className="border-input text-foreground" disabled={busy} onClick={async () => {
+                const r = await act({ action: 'show-totp-qr' })
+                if (r?.ok) setTotpSetup({ otpauth: r.otpauth as string, qrDataUrl: (r.qrDataUrl as string) ?? null, manualKey: r.manualKey as string })
+                setTotpCode('')
+              }}>
+                {t.account.totpShowQr}
+              </Button>
+              {/* «Пересоздать» — явный перевыпуск секрета: старый QR/ключ перестают действовать,
+                  после него обязателен повторный скан */}
+              {info.twoFactor !== 'totp' && (
+                <Button size="sm" variant="outline" className="border-input text-muted-foreground" disabled={busy} onClick={async () => {
+                  const r = await act({ action: 'setup-totp' })
+                  if (r?.ok) setTotpSetup({ otpauth: r.otpauth as string, qrDataUrl: (r.qrDataUrl as string) ?? null, manualKey: r.manualKey as string })
+                  setTotpCode('')
+                }}>
+                  {t.account.totpSetup}
+                </Button>
+              )}
+            </div>
             {totpSetup && (
               <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
-                {totpSetup.qrDataUrl && <img src={totpSetup.qrDataUrl} alt="TOTP QR" className="mx-auto rounded border border-border bg-white p-1 w-[220px]" />}
+                {totpSetup.qrDataUrl
+                  ? <img src={totpSetup.qrDataUrl} alt="TOTP QR" className="mx-auto rounded border border-border bg-white p-1 w-[220px]" />
+                  : <p className="text-xs text-amber-700">⚠ {t.account.totpQrFailed}</p>}
                 <p className="text-xs text-muted-foreground break-all">
                   {t.auth.totpManualKey}: <code className="text-foreground font-mono">{totpSetup.manualKey}</code>
                 </p>
+                <p className="text-xs text-muted-foreground">{t.account.totpScanHint}</p>
               </div>
             )}
             <div className="flex flex-wrap items-end gap-3">
               <div className="w-40">
                 <Label className="text-foreground">{t.account.codeLabel}</Label>
                 <Input
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   className="bg-card border-input font-mono tracking-widest mt-1 text-center"
                   maxLength={6}
                   placeholder="••••••"
+                  aria-label={t.account.totpCodeAria}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
                 />
               </div>
-              <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={busy || code.length !== 6} onClick={() => void act({ action: 'switch-totp', code }).then(() => setCode(''))}>
+              <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={busy || totpCode.length !== 6} onClick={() => void act({ action: 'switch-totp', code: totpCode }).then(() => setTotpCode(''))}>
                 {t.account.totpEnable}
               </Button>
             </div>
