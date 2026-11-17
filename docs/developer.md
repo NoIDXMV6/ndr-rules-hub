@@ -109,7 +109,7 @@ const { user, role, ip } = g
 ## 8. Тесты
 
 ```bash
-npx vitest run              # все 199
+npx vitest run              # все 250
 npx vitest run tests/security-core.test.ts tests/auth-flow.test.ts tests/serve-tokens.test.ts
 npm run lint && bunx tsc --noEmit   # 3 предсуществующих warning/ошибки в engine — известные
 ```
@@ -120,8 +120,10 @@ npm run lint && bunx tsc --noEmit   # 3 предсуществующих warning
 
 ```bash
 bunx prisma generate && bunx prisma db push   # dev-БД
-bunx --bun next build                          # standalone + шаблон БД + манифест схемы
+npx next build                                # standalone + шаблон БД + манифест схемы — строго под Node.js
 ```
+
+`next build` и Docker-стадия builder выполняются под **Node.js 22** (в образе — `node:22-bookworm-slim` + пакет `openssl`), не под Bun: undici 8 в `lib/web/webidl/index.js` берёт `markAsUncloneable` из `node:worker_threads` без fallback и зовёт его в конструкторах Headers/Request/Response/FormData/CacheStorage — в Bun эта функция не реализована, и на этапе «Collecting page data» сборка падала с `TypeError: s.util.markAsUncloneable is not a function` (оценка модуля undici, вшитого Turbopack в серверный чанк). В Node.js функция есть с v22.14.0. Под Node также исчезают не-фатальные предупреждения Bun «worker_threads.Worker option "stdout"/"stderr"/"resourceLimits" is not yet implemented» (шум jest-worker Next.js) и warning Prisma про libssl/openssl. Рантайм контейнера и раньше был Node 22 (`node server.js`) — сборка теперь на той же платформе; bun остаётся на этапе deps (`bun install --frozen-lockfile`) и в dev-скриптах.
 
 Релизный чеклист: тесты → lint → build → версия в `package.json` → коммит с подробным описанием → push (origin, gitverse) → тег `vX.Y.Z`. Обновление на сервере: `cd /opt/ndr-rules-hub && git pull && docker compose up -d --build` (db-heal докатит схему тома автоматически).
 

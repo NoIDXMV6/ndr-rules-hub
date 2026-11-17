@@ -11,8 +11,28 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
 # ── Этап 2: сборка приложения + шаблон БД ────────────────────────────────────
-FROM oven/bun:1.2 AS builder
+# Сборка идёт под Node.js, а НЕ под Bun. Причина: undici 8 (зависимость
+# уведомлений Telegram/Gotify, экспорта abuse.ch и автоочистки) в
+# lib/web/webidl/index.js делает
+#   const { markAsUncloneable } = require('node:worker_threads')
+# БЕЗ fallback-защиты и зовёт webidl.util.markAsUncloneable(this) в
+# конструкторах Headers/Request/Response/FormData/CacheStorage. В Bun эта
+# функция worker_threads не реализована, и при «Collecting page data»
+# next build падал с фатальной ошибкой
+#   TypeError: s.util.markAsUncloneable is not a function (ERR_NOT_IMPLEMENTED)
+# — оценка модуля undici, вшитого Turbopack в серверный чанк (первой падала
+# страница /api/auth/events). В Node.js markAsUncloneable есть с v22.14.0,
+# поэтому сборка и рантайм (см. этап 3) под Node 22. Попутно уходят давние
+# НЕ-фатальные предупреждения Bun «worker_threads.Worker option
+# "stdout"/"stderr"/"resourceLimits" is not yet implemented» (шум jest-worker
+# Next.js под Bun) и warning Prisma про libssl/openssl (пакет openssl ниже).
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
+
+# openssl нужен Prisma для определения варианта query engine
+# (иначе «Prisma failed to detect the libssl/openssl version», дефолт 1.1.x)
+RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -20,16 +40,18 @@ COPY . .
 ENV DATABASE_URL="file:/app/db-template/hub.db"
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# node_modules установлены bun'ом на этапе deps; бины в .bin — симлинки с
+# шебангом #!/usr/bin/env node, под Node исполняются напрямую.
 RUN mkdir -p /app/db-template && \
-    bunx prisma generate && \
-    bunx prisma db push --skip-generate --accept-data-loss && \
+    ./node_modules/.bin/prisma generate && \
+    ./node_modules/.bin/prisma db push --skip-generate --accept-data-loss && \
     # версия схемы БД считается только по моделям (генератор исключён):
     # изменения binaryTargets и прочего в generator не должны стирать БД тома
     awk '/^generator/{g=1} g&&/^}/{g=0;next} !g' prisma/schema.prisma | sha256sum | cut -c1-12 > /app/db-template/.schema-version && \
     # манифест схемы для db-heal.cjs (runtime): докатка недостающих таблиц/
     # колонок в БД тома без потери данных — см. docker-entrypoint.sh
-    bun scripts/gen-schema-manifest.mjs /app/db-template/hub.db /app/db-template/schema-manifest.json && \
-    bunx --bun next build
+    node scripts/gen-schema-manifest.mjs /app/db-template/hub.db /app/db-template/schema-manifest.json && \
+    ./node_modules/.bin/next build
 
 # ── Этап 3: runtime — Next.js standalone + WireGuard-утилиты ─────────────────
 FROM node:22-bookworm-slim AS runtime

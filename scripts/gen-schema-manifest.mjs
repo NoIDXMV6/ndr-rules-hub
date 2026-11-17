@@ -6,7 +6,7 @@
 // скриптом db-heal.cjs: он докатывает недостающие таблицы/колонки в живую БД
 // тома БЕЗ потери данных (см. docker-entrypoint.sh).
 // Запуск: node scripts/gen-schema-manifest.mjs <путь-к-БД> <путь-к-манифесту>
-// Работает и под bun (builder), и под node (тесты).
+// Работает под node (builder и тесты); раньше builder работал под bun.
 // ============================================================================
 import { PrismaClient } from '@prisma/client'
 import { writeFileSync } from 'fs'
