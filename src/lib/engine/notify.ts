@@ -159,7 +159,13 @@ export async function sendGotify(title: string, message: string, cfg?: { url?: s
       const j = JSON.parse(text) as { error?: string; errorDescription?: string }
       if (j.error) detail = `${j.error}${j.errorDescription ? `: ${j.errorDescription}` : ''}`
     } catch { /* keep raw */ }
-    return { ok: false, channel: 'gotify', error: `HTTP ${res.statusCode}: ${detail}` }
+    // Сервер Gotify отклонил токен (401/403 «invalid X-Gotify-Key header») — это
+    // почти всегда неверный app-токен: вместо токена приложения вставлен клиентский,
+    // приложение удалено/пересоздано или в поле осталось старое несохранённое значение.
+    const keyHint = res.statusCode === 401 || res.statusCode === 403
+      ? ' — сервер отклонил токен. Нужен токен ПРИЛОЖЕНИЯ (Apps → Create Application; в Gotify 3.x начинается с «gtfya.»), не клиента («gtfyc.»); сверьте его с полем через «глазок» и повторите «Тест» (он сохраняет текущие значения полей перед проверкой).'
+      : ''
+    return { ok: false, channel: 'gotify', error: `HTTP ${res.statusCode}: ${detail}${keyHint}` }
   } catch (e) {
     return { ok: false, channel: 'gotify', error: (e as Error).message }
   }
@@ -188,9 +194,23 @@ export async function notifyEvent(scope: NotifyScope, level: 'success' | 'error'
   return out.filter((r) => !r.ok) // возвращаем только неудачи — для журнала
 }
 
-/** Проверка канала кнопкой «Тест» в настройках */
-export async function sendTest(channel: 'telegram' | 'gotify'): Promise<SendResult> {
+/** Значения канала прямо из полей формы — кнопка «Тест» сохраняет настройки и
+ *  проверяет ровно то, что видно в интерфейсе (раньше тест читал БД, и только что
+ *  вставленный токен давал «invalid X-Gotify-Key header» со старым значением). */
+export type TestChannelCfg = {
+  // Gotify
+  url?: string
+  token?: string
+  priority?: number
+  // Telegram
+  chatId?: string
+  proxy?: string
+  apiBase?: string
+}
+
+/** Проверка канала кнопкой «Тест» в настройках (cfg перекрывает значения из БД) */
+export async function sendTest(channel: 'telegram' | 'gotify', cfg?: TestChannelCfg): Promise<SendResult> {
   const now = new Date().toLocaleString('ru-RU')
   const text = `Тест уведомления NDR Rules Hub (${now})\nЕсли вы видите это сообщение — канал настроен верно.`
-  return channel === 'telegram' ? sendTelegram(text) : sendGotify('NDR Rules Hub — тест', text)
+  return channel === 'telegram' ? sendTelegram(text, cfg) : sendGotify('NDR Rules Hub — тест', text, cfg)
 }

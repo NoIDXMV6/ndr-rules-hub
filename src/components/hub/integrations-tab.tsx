@@ -14,7 +14,7 @@
 //  3. кнопка «Развернуть Gotify» неактивна, пока контейнер уже запущен
 //     (повторное развёртывание невозможно), активна — после удаления.
 // ─────────────────────────────────────────────────────────────────────────────
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -22,19 +22,33 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { api, Dashboard } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
-import { Save, Send, Rocket, Trash2 } from 'lucide-react'
+import { Save, Send, Rocket, Trash2, Eye, EyeOff } from 'lucide-react'
 
 export function IntegrationsTab({ data, onChange }: { data: Dashboard | null; onChange: () => void }) {
   const { t, tr } = useI18n()
   const [s, setS] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Клавиши, отредактированные пользователем: опрос /api/dashboard каждые 20 с
+  // обновляет data.settings и раньше ЗАТИРАЛ несохранённый ввод (вставленный токен
+  // исчезал из поля до нажатия «Сохранить»). Теперь отредактированные значения
+  // переживают обновление дашборда, пока их не сохранит «Сохранить»/«Тест».
+  const editedRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    if (data?.settings) setS(data.settings)
+    if (data?.settings) {
+      setS((prev) => {
+        const next = { ...data.settings }
+        for (const k of editedRef.current) if (k in prev) next[k] = prev[k]
+        return next
+      })
+    }
   }, [data?.settings])
 
-  const set = (k: string, v: string) => setS((prev) => ({ ...prev, [k]: v }))
+  const set = (k: string, v: string) => {
+    editedRef.current.add(k)
+    setS((prev) => ({ ...prev, [k]: v }))
+  }
 
   const save = async () => {
     setBusy(true)
@@ -83,6 +97,10 @@ function NotificationsCard({
   const [gotifyUrl, setGotifyUrl] = useState<string | null>(null)
   const [bcMsg, setBcMsg] = useState<string | null>(null)
   const [bcBusy, setBcBusy] = useState(false)
+  // «глазок» для сверки вставленных токенов (частая причина «invalid X-Gotify-Key» —
+  // в поле не то, что думает пользователь: старое значение, клиентский токен и т.п.)
+  const [showTgToken, setShowTgToken] = useState(false)
+  const [showGoToken, setShowGoToken] = useState(false)
 
   const refreshState = useCallback(async () => {
     try {
@@ -102,7 +120,16 @@ function NotificationsCard({
     const setter = channel === 'telegram' ? setTgResult : setGoResult
     setter('…')
     try {
-      const r = await api.notifyAction({ action: 'test', channel })
+      // 1) сохраняем ТЕКУЩИЕ значения полей: тестируется ровно то, что видно в форме
+      //    (раньше «Тест» читал БД — вставленный, но не сохранённый токен давал
+      //    «invalid X-Gotify-Key header» со старым значением)
+      await api.saveSettings(s)
+      setter(t.settings.notifyTestSaving)
+      // 2) и явно передаём эти значения в проверку — двойная гарантия совпадения
+      const cfg = channel === 'gotify'
+        ? { url: s.gotifyUrl ?? '', token: s.gotifyToken ?? '', priority: parseInt(s.gotifyPriority ?? '5', 10) || 5 }
+        : { token: s.tgBotToken ?? '', chatId: s.tgChatId ?? '', proxy: s.tgProxy ?? '', apiBase: s.tgApiBase ?? '' }
+      const r = await api.notifyAction({ action: 'test', channel, cfg })
       setter(r.ok ? tr(t.settings.notifyTestOk) : `${t.settings.notifyTestFail}: ${r.error}`)
     } catch (e) {
       setter((e as Error).message)
@@ -160,7 +187,12 @@ function NotificationsCard({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <Label className="text-foreground">{t.settings.tgBotToken}</Label>
-              <Input type="password" value={s.tgBotToken ?? ''} onChange={(e) => set('tgBotToken', e.target.value.trim())} className="bg-card border-input font-mono" placeholder="123456:ABC-DEF…" />
+              <div className="relative">
+                <Input type={showTgToken ? 'text' : 'password'} value={s.tgBotToken ?? ''} onChange={(e) => set('tgBotToken', e.target.value.trim())} className="bg-card border-input font-mono pr-9" placeholder="123456:ABC-DEF…" />
+                <button type="button" tabIndex={-1} aria-label={showTgToken ? 'hide' : 'show'} onClick={() => setShowTgToken((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                  {showTgToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
               <p className="text-xs text-muted-foreground mt-1">{t.settings.tgBotTokenHelp}</p>
             </div>
             <div>
@@ -204,7 +236,12 @@ function NotificationsCard({
             </div>
             <div>
               <Label className="text-foreground">{t.settings.gotifyToken}</Label>
-              <Input type="password" value={s.gotifyToken ?? ''} onChange={(e) => set('gotifyToken', e.target.value.trim())} className="bg-card border-input font-mono" placeholder="Axxxxxxxxxx" />
+              <div className="relative">
+                <Input type={showGoToken ? 'text' : 'password'} value={s.gotifyToken ?? ''} onChange={(e) => set('gotifyToken', e.target.value.trim())} className="bg-card border-input font-mono pr-9" placeholder="gtfya.…" />
+                <button type="button" tabIndex={-1} aria-label={showGoToken ? 'hide' : 'show'} onClick={() => setShowGoToken((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                  {showGoToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
               <p className="text-xs text-muted-foreground mt-1">{t.settings.gotifyTokenHelp}</p>
             </div>
             <div>

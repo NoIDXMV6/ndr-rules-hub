@@ -32,7 +32,24 @@ export async function POST(req: NextRequest) {
     const action = body?.action
     if (action === 'test') {
       const channel = body.channel === 'gotify' ? 'gotify' : 'telegram'
-      const r = await sendTest(channel)
+      // Значения прямо из полей формы (UI «Теста» сначала сохраняет настройки, потом
+      // передаёт их сюда): проверяется ровно то, что видно в интерфейсе, а не
+      // устаревшие значения БД — иначе только что вставленный токен «не применяется».
+      const raw = (typeof body.cfg === 'object' && body.cfg !== null ? body.cfg : {}) as Record<string, unknown>
+      const str = (k: string): string | undefined => {
+        const v = raw[k]
+        return typeof v === 'string' && v.trim() ? v.trim().slice(0, 500) : undefined
+      }
+      const pRaw = parseInt(String(raw.priority ?? ''), 10)
+      const cfg = {
+        url: str('url'),
+        token: str('token'),
+        chatId: str('chatId'),
+        proxy: str('proxy'),
+        apiBase: str('apiBase'),
+        priority: Number.isFinite(pRaw) ? Math.min(Math.max(pRaw, 0), 10) : undefined,
+      }
+      const r = await sendTest(channel, cfg)
       await log(r.ok ? 'info' : 'error', 'notify', `Тест ${channel}: ${r.ok ? 'отправлено' : r.error}`)
       return NextResponse.json({ ...r })
     }

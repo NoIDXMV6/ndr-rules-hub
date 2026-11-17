@@ -143,6 +143,26 @@ describe('notify: Gotify', () => {
     expect(body.message).toBe('Текст события')
     expect(body.priority).toBe(7)
   })
+
+  it('cfg из формы перекрывает значения БД (тестируется то, что видно в интерфейсе)', async () => {
+    reqs.length = 0
+    const r = await notify.sendGotify('t', 'm', { url: 'http://g-form.local/', token: 'gtfya.formtoken', priority: 3 })
+    expect(r.ok).toBe(true)
+    expect(reqs[0].url).toBe('http://g-form.local/message')
+    expect(reqs[0].opts.headers!['X-Gotify-Key']).toBe('gtfya.formtoken')
+    expect(JSON.parse(reqs[0].opts.body!).priority).toBe(3)
+  })
+
+  it('сервер отклонил токен (401 invalid X-Gotify-Key) — ошибка с подсказкой про app-токен', async () => {
+    reqs.length = 0
+    responder = () => ({ status: 401, body: '{"error":"Unauthorized","errorDescription":"invalid X-Gotify-Key header"}' })
+    const r = await notify.sendGotify('t', 'm', { url: 'http://g.local', token: 'gtfyc.clienttoken' })
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('401')
+    expect(r.error).toContain('invalid X-Gotify-Key header')
+    expect(r.error).toContain('gtfya')
+    responder = () => ({ status: 200, body: '{"ok":true}' })
+  })
 })
 
 describe('notify: события', () => {
@@ -173,5 +193,13 @@ describe('notify: события', () => {
     const r = await notify.sendTest('telegram')
     expect(r.ok).toBe(true)
     expect(JSON.parse(reqs[0].opts.body!).text).toContain('Тест уведомления')
+  })
+
+  it('sendTest с cfg из формы отправляет сообщение с этими значениями', async () => {
+    reqs.length = 0
+    const r = await notify.sendTest('gotify', { url: 'http://g-test.local', token: 'gtfya.testcfg' })
+    expect(r.ok).toBe(true)
+    expect(reqs[0].url).toBe('http://g-test.local/message')
+    expect(reqs[0].opts.headers!['X-Gotify-Key']).toBe('gtfya.testcfg')
   })
 })
