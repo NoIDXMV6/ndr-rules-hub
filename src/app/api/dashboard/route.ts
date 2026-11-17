@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ensureSeed, getSettings } from '@/lib/engine/service'
 import { maybeStartCleanupScheduler } from '@/lib/engine/cleanup'
+import { maybeStartTelegramPoller, checkReleaseBroadcast } from '@/lib/engine/telegram'
 import { wgStatus } from '@/lib/engine/vpn'
 import { apiError } from '@/lib/api-error'
 import { guard, sanitizeSettings } from '@/lib/security/guard'
@@ -15,6 +16,10 @@ export async function GET(req: NextRequest) {
     await ensureSeed()
     // cron проверки диска (пороги/автоочистка) поднимается один раз на процесс
     maybeStartCleanupScheduler()
+    // Telegram-поллер (привязка чатов, коды 2FA) + проверка рассылки о версии —
+    // тоже один раз на процесс; ошибки не роняют дашборд
+    maybeStartTelegramPoller()
+    void checkReleaseBroadcast().catch(() => undefined)
     const [sources, builds, settings, logs, ruleAgg] = await Promise.all([
       db.source.findMany({ orderBy: [{ enabled: 'desc' }, { priority: 'asc' }] }),
       db.build.findFirst({ orderBy: { createdAt: 'desc' } }),

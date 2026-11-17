@@ -484,4 +484,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   notifyOnPipeline: 'true', // события конвейера: загрузка/сборка/экспорт
   notifyOnVpn: 'true', // события WireGuard: поднятие/остановка туннеля
   notifyOnDisk: 'true', // события диска: очистка, пороги занятости
+  // ── 2FA / Telegram-бот / рассылка о версиях ─────────────────────────────────
+  releaseBroadcastEnabled: 'true', // уведомлять всех с привязанным Telegram о новой версии
+  releaseNotes: '', // текст «что нового», добавляемый к рассылке о версии
 }

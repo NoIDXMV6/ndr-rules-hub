@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -19,6 +19,7 @@ import { UsersTab } from '@/components/hub/users-tab'
 import { HelpTab } from '@/components/hub/help-tab'
 import { AboutTab } from '@/components/hub/about-tab'
 import { AuthScreen } from '@/components/hub/auth-screen'
+import { AccountTab } from '@/components/hub/account-tab'
 import { SystemPanel } from '@/components/hub/system-panel'
 import { api, Dashboard, fmtSize, fmtTime, type Me } from '@/components/hub/api'
 import { useI18n, type Dictionary, type Lang } from '@/lib/i18n'
@@ -27,7 +28,7 @@ import {
   Activity, Blocks, ChartColumn, Check, ChevronDown, CircleHelp, Database,
   Download, FolderTree, Globe, Info, Layers, LayoutDashboard, Library,
   LifeBuoy, LogOut, Network, Package, RefreshCw, ScrollText, Settings,
-  Shield, Users, Wifi, Wrench,
+  Shield, UserRound, Users, Wifi, Wrench,
 } from 'lucide-react'
 
 type Role = 'admin' | 'user' | 'anon'
@@ -41,6 +42,20 @@ export default function Home() {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
   // Активная вкладка управляется меню-баром (прямые кнопки + drop-down группы)
   const [tab, setTab] = useState('overview')
+  // Липкое меню: высота шапки измеряется и подставляется в top — баннеры
+  // не ломают позиционирование при прокрутке
+  const headerRef = useRef<HTMLElement | null>(null)
+  const [headerH, setHeaderH] = useState(68)
+
+  useEffect(() => {
+    const el = headerRef.current
+    if (!el) return
+    const measure = () => setHeaderH(el.offsetHeight)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
@@ -77,6 +92,7 @@ export default function Home() {
   useEffect(() => {
     const admin = !me?.multiUser || me.user?.role === 'admin'
     const allowed = new Set(['overview', 'sources', 'categories', 'rules', 'build', 'update', 'osd', 'help', 'about'])
+    if (me?.multiUser) allowed.add('account') // кабинет доступен всем вошедшим
     if (admin) {
       allowed.add('vpn')
       allowed.add('settings')
@@ -128,7 +144,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <header className="border-b border-border bg-card/95 backdrop-blur sticky top-0 z-40">
+      <header ref={headerRef} className="border-b border-border bg-card/95 backdrop-blur sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2.5">
             <img src="/logo.svg" alt="NDR Rules Hub logo" className="h-9 w-9 rounded-lg border border-primary/30" />
@@ -170,21 +186,25 @@ export default function Home() {
             {me.multiUser && me.user && <UserMenu me={me} onLogout={() => void refreshMe()} />}
           </div>
         </div>
+      </header>
+
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
+        {/* баннеры сообщений — вне липкой шапки, чтобы высота шапки была постоянной */}
         {message && (
-          <div className={`px-4 py-1.5 text-sm ${message.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700'} border-t border-border`}>
+          <div className={`my-2 rounded-lg text-sm ${message.ok ? 'bg-emerald-50 text-emerald-800 border border-emerald-200/60' : 'bg-red-50 text-red-700 border border-red-200/60'} px-3 py-2`}>
             {message.text}
           </div>
         )}
         {error && (
-          <div className="px-4 py-1.5 text-sm bg-red-50 text-red-700 border-t border-border">
+          <div className="my-2 rounded-lg text-sm bg-red-50 text-red-700 border border-red-200/60 px-3 py-2">
             {tr(t.header.apiError, { err: error })}
           </div>
         )}
-      </header>
-
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
         <Tabs value={tab} onValueChange={setTab} className="w-full">
-          <MenuBar value={tab} onValue={setTab} isAdmin={isAdmin} showUsers={showUsersTab} />
+          {/* Меню прилипает под шапкой при прокрутке (top = высота шапки) */}
+          <div className="sticky z-30 bg-background pt-1 pb-2" style={{ top: headerH }}>
+            <MenuBar value={tab} onValue={setTab} isAdmin={isAdmin} showUsers={showUsersTab} showAccount={!!me.multiUser} />
+          </div>
 
           <TabsContent value="overview" className="mt-4">
             <Overview data={data} onRefresh={refresh} role={role} onSettings={() => setTab('settings')} />
@@ -227,6 +247,11 @@ export default function Home() {
               <UsersTab selfId={me.user?.id ?? ''} />
             </TabsContent>
           )}
+          {me.multiUser && (
+            <TabsContent value="account" className="mt-4">
+              <AccountTab />
+            </TabsContent>
+          )}
           <TabsContent value="help" className="mt-4">
             <HelpTab />
           </TabsContent>
@@ -265,7 +290,7 @@ type MenuGroupDef =
  * Обзор и Сборка/экспорт — прямые кнопки (главный экран и главный рабочий процесс),
  * остальное собрано в drop-down группы; видимость зависит от роли.
  */
-function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean): MenuGroupDef[] {
+function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAccount: boolean): MenuGroupDef[] {
   const ico = (Icon: React.ComponentType<{ className?: string }>) => <Icon className="h-4 w-4 shrink-0 opacity-80" />
 
   const integrations: MenuItemDef[] = [
@@ -301,6 +326,11 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean): MenuGro
     groups.push({ kind: 'dropdown', key: 'admin', grow: 1.35, label: t.menu.admin, icon: ico(Wrench), items: adminItems })
   }
 
+  // Личный кабинет (только Enterprise): настройки 2FA своей учётной записи
+  if (showAccount) {
+    groups.push({ kind: 'direct', key: 'account', item: { value: 'account', label: t.tabs.account, icon: ico(UserRound) } })
+  }
+
   groups.push({
     kind: 'dropdown',
     key: 'help',
@@ -320,9 +350,9 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean): MenuGro
  * строки (flex-1), группы функционала раскрываются drop-down'ом. Группа, в которой
  * лежит активная вкладка, подсвечена; конкретная вкладка отмечена галочкой в меню.
  */
-function MenuBar({ value, onValue, isAdmin, showUsers }: { value: string; onValue: (v: string) => void; isAdmin: boolean; showUsers: boolean }) {
+function MenuBar({ value, onValue, isAdmin, showUsers, showAccount }: { value: string; onValue: (v: string) => void; isAdmin: boolean; showUsers: boolean; showAccount: boolean }) {
   const { t } = useI18n()
-  const groups = buildMenu(t, isAdmin, showUsers)
+  const groups = buildMenu(t, isAdmin, showUsers, showAccount)
   const triggerCls =
     'flex-1 basis-[7.5rem] min-w-0 h-9 inline-flex items-center justify-center gap-1.5 rounded-md px-2 text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50'
   const activeCls = 'bg-primary text-primary-foreground shadow-sm'

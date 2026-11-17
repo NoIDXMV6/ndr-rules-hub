@@ -264,6 +264,22 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       ],
     },
     {
+      trigger: 'Капча, двухфакторная аутентификация и рассылка о версиях',
+      paragraphs: [
+        'Вход и регистрация защищены **одноразовой SVG-капчей**: сервер рисует искажённый текст (случайные шрифты, наклоны каждого символа, волнистые линии, шум), ответ никогда не покидает сервер. Капча **сгорает после каждой попытки ввода**, живёт 2 минуты и выдаётся не чаще 30 картинок за 10 минут с одного IP — сервисы подбора не получают повторов, фарм экономически бессмыслен.',
+        '**Двухфакторная аутентификация обязательна** (кроме bootstrap-администратора, который может настроить её позже). Метод выбирается при регистрации: **Telegram** — код в чат бота, или **TOTP** — код из приложения-аутентификатора (Google Authenticator/Authy/FreeOTP).',
+      ],
+      items: [
+        '**Telegram**: при регистрации укажите username; Telegram запрещает ботам писать первыми, поэтому откройте бота по ссылке на экране и отправьте /start — поллер хаба привяжет чат и немедленно пришлёт отложенный код. Бот настраивается в «Настройки → Уведомления» (токен @BotFather, поддерживается прокси);',
+        '**TOTP**: сервер выдаёт секрет, QR-код и ключ для ручного ввода; код проверяется с окном ±1 шаг 30 секунд;',
+        '**Второй шаг входа**: после верного пароля выдаётся HMAC-билет (cookie ndrh_mfa, 5 минут); сессия создаётся только после кода. У кода 5 попыток ввода и срок 5 минут, лимит verify-эндпоинта — 10 попыток за 5 минут с IP;',
+        '**Кабинет «Аккаунт»**: смена метода (требуется код НОВОГО метода — нельзя заблокировать себя ошибочной настройкой), выпустить код, тест чата, обновить TOTP-секрет, выключить 2FA (с паролем);',
+        '**Администратор** может сбросить 2FA пользователю на вкладке «Пользователи» («Сброс 2FA») — если тот потерял доступ к Telegram и приложению;',
+        '**Рассылка о версиях**: при обновлении хаба всем учётным записям с привязанным Telegram приходит сообщение о новой версии (одна рассылка на версию); текст «что нового» задаётся в «Настройки → Уведомления», есть кнопка «Разослать сейчас»;',
+        '**Липкое меню**: меню-бар закреплён под шапкой при прокрутке страницы.',
+      ],
+    },
+    {
       trigger: 'Редакции Community и Enterprise: пользователи и токены',
       paragraphs: [
         'Один и тот же Docker-образ работает в двух редакциях: **Community** (по умолчанию) — всё доступно без входа, как раньше; **Enterprise** (`NDR_EDITION=enterprise`) — многопользовательский режим с регистрацией и персональными токенами.',
@@ -550,6 +566,22 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**Events** are enabled individually: rule pipeline (cycle result/errors), WireGuard (up/down/errors), disk (thresholds and cleanup results).',
       ],
       footnote: 'Anything outside the explicitly allowed lists (index prefixes, log/file directories) is never deleted. Run history is in the “Logs” tab (scope cleanup).',
+    },
+    {
+      trigger: 'Captcha, two-factor authentication and release broadcasts',
+      paragraphs: [
+        'Sign-in and registration are protected by a **single-use SVG captcha**: the server renders distorted text (random fonts, per-character rotation, wavy lines, noise) and the answer never leaves the server. The captcha **burns after every attempt**, lives for 2 minutes and is issued at most 30 images per 10 minutes per IP — solving services get no retries, and farming is economically pointless.',
+        '**Two-factor authentication is mandatory** (except the bootstrap administrator, who may set it up later). The method is chosen at registration: **Telegram** — a code in the bot chat, or **TOTP** — a code from an authenticator app (Google Authenticator/Authy/FreeOTP).',
+      ],
+      items: [
+        '**Telegram**: enter your username at registration; Telegram forbids bots to message first, so open the bot via the on-screen link and send /start — the hub poller binds the chat and immediately delivers the pending code. The bot is configured in “Settings → Notifications” (@BotFather token, proxy supported);',
+        '**TOTP**: the server issues a secret, a QR code and a manual key; codes are verified with a ±1 step (30 s) window;',
+        '**Second sign-in step**: after a correct password an HMAC ticket is issued (ndrh_mfa cookie, 5 minutes); the session is created only after the code. The code has 5 attempts and a 5-minute TTL; the verify endpoint is limited to 10 attempts per 5 minutes per IP;',
+        '**“Account” cabinet**: change the method (requires a code of the NEW method — you cannot lock yourself out), issue a code, test the chat, rotate the TOTP secret, disable 2FA (with the password);',
+        '**Administrators** can reset a user’s 2FA on the “Users” tab (“Reset 2FA”) — for those who lost access to both Telegram and the app;',
+        '**Release broadcasts**: when the hub is updated, every account with a bound Telegram gets a message about the new version (one broadcast per version); the “what’s new” text is configured in “Settings → Notifications”, with a “Broadcast now” button;',
+        '**Sticky menu**: the menu bar stays pinned under the header while scrolling.',
+      ],
     },
     {
       trigger: 'Community and Enterprise editions: users and tokens',

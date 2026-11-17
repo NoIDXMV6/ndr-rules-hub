@@ -2,9 +2,9 @@
   "openapi": "3.1.0",
   "info": {
     "title": "NDR Rules Hub API",
-    "version": "1.17.0",
+    "version": "1.18.0",
     "summary": "Управление источниками правил Snort/Suricata и экспорт в Clear NDR",
-    "description": "REST API NDR Rules Hub.\n\nРедакции: **Community** (однопользовательский режим, без аутентификации) и **Enterprise** (многопользовательский режим: регистрация, верификация администратором, личный кабинет, персональные токены скачивания).\n\nСхемы безопасности:\n- `sessionCookie` — cookie `ndrh_sid` (HttpOnly, SameSite=Lax, Secure), выдаётся POST /api/auth/login. Enterprise: все эндпоинты кроме `/api`, `/api/health`, `/api/auth/*` и `GET /api/export` требуют сессию; помеченные «только администратор» — роль admin.\n- `downloadToken` — персональный токен `ndrt_…` (?token= или Authorization) или глобальный ключ отдачи serveToken — только для GET /api/export (PULL-схема Clear NDR).\n\nЗащита: rate limit по IP на каждом эндпоинте (429 + Retry-After), анти-брутфорс (вход, ключи отдачи, токены), очередь тяжёлых операций (429 при переполнении), троттлинг канала для отдачи файлов, CSRF-проверка Origin/Sec-Fetch-Site для state-changing запросов браузера, scrypt-пароли, SHA-256 токенов в БД.",
+    "description": "REST API NDR Rules Hub.\n\nРедакции: **Community** (однопользовательский режим, без аутентификации) и **Enterprise** (многопользовательский режим: регистрация, верификация администратором, личный кабинет, персональные токены скачивания).\n\nСхемы безопасности:\n- `sessionCookie` — cookie `ndrh_sid` (HttpOnly, SameSite=Lax, Secure), выдаётся POST /api/auth/login. Enterprise: все эндпоинты кроме `/api`, `/api/health`, `/api/auth/*` и `GET /api/export` требуют сессию; помеченные «только администратор» — роль admin.\n- `downloadToken` — персональный токен `ndrt_…` (?token= или Authorization) или глобальный ключ отдачи serveToken — только для GET /api/export (PULL-схема Clear NDR).\n\nЗащита: rate limit по IP на каждом эндпоинте (429 + Retry-After), анти-брутфорс (вход, ключи отдачи, токены), очередь тяжёлых операций (429 при переполнении), троттлинг канала для отдачи файлов, CSRF-проверка Origin/Sec-Fetch-Site для state-changing запросов браузера, scrypt-пароли, SHA-256 токенов в БД.\n\nВход и регистрация (Enterprise) защищены одноразовой SVG-капчей (`POST /api/auth/captcha`, ответ сгорает после каждой попытки) и двухфакторной аутентификацией: код в Telegram (привязка чата по /start боту) или TOTP (RFC 6238). После пароля выдаётся HMAC-билет в cookie `ndrh_mfa` (5 минут); сессия создаётся только после кода (`/api/auth/login/verify`, `/api/auth/register/verify`). Метод 2FA выбирается при регистрации и меняется в кабинете (`/api/auth/account`).",
     "contact": {
       "name": "Павел Кожеватов",
       "url": "https://kozhevatov.ru"
@@ -86,6 +86,12 @@
         "in": "query",
         "name": "token",
         "description": "Токен скачивания ndrt_… или глобальный ключ serveToken. Альтернатива — заголовок Authorization: <токен> / Bearer <токен> / Token <токен> (scirius отправляет authkey источника)."
+      },
+      "mfaTicket": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "ndrh_mfa",
+        "description": "HMAC-билет второго шага 2FA (5 минут) — выдаётся /api/auth/login и /api/auth/register после верных учётных данных; обязательна для /api/auth/login/verify и /api/auth/register/verify."
       }
     },
     "schemas": {
@@ -1870,10 +1876,8 @@
         "tags": [
           "auth"
         ],
-        "summary": "Регистрация (только Enterprise). Первый пользователь — администратор (bootstrap), остальные — pending до верификации",
-        "security": [],
+        "summary": "Шаг 1 регистрации: капча + данные + выбор 2FA (Enterprise)",
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -1881,21 +1885,39 @@
                 "required": [
                   "email",
                   "displayName",
-                  "password"
+                  "password",
+                  "twoFactor",
+                  "captchaId",
+                  "captchaAnswer"
                 ],
                 "properties": {
                   "email": {
-                    "type": "string",
-                    "format": "email"
+                    "type": "string"
                   },
                   "displayName": {
-                    "type": "string",
-                    "maxLength": 100
+                    "type": "string"
                   },
                   "password": {
+                    "type": "string"
+                  },
+                  "twoFactor": {
                     "type": "string",
-                    "minLength": 8,
-                    "description": "≥8 символов, буквы и цифры"
+                    "enum": [
+                      "telegram",
+                      "totp",
+                      "none"
+                    ],
+                    "description": "none — только для bootstrap (первого пользователя)"
+                  },
+                  "telegramUsername": {
+                    "type": "string",
+                    "description": "для twoFactor=telegram: username (4-32 символа)"
+                  },
+                  "captchaId": {
+                    "type": "string"
+                  },
+                  "captchaAnswer": {
+                    "type": "string"
                   }
                 }
               }
@@ -1904,26 +1926,16 @@
         },
         "responses": {
           "200": {
-            "description": "Принята (pending) или создан bootstrap-админ"
+            "description": "Аккаунт pending (bootstrap — active): {ok, mfa, isFirst, botLink}; для totp — otpauth://, qrDataUrl, manualKey; для telegram — код выпущен и придёт после /start боту; + cookie ndrh_mfa (билет шага 2)"
           },
           "400": {
-            "description": "Некорректные данные / email занят"
+            "description": "Валидация (капча, email, пароль, username занят, 2FA обязательна)"
           },
           "403": {
             "description": "Регистрация закрыта администратором"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFoundEdition"
-          },
           "429": {
-            "description": "Более 5 регистраций с IP за час",
-            "headers": {
-              "Retry-After": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
+            "description": "5 регистраций в час с IP"
           }
         }
       }
@@ -1933,17 +1945,17 @@
         "tags": [
           "auth"
         ],
-        "summary": "Вход (только Enterprise): сессия в cookie ndrh_sid",
-        "security": [],
+        "summary": "Шаг 1 входа: капча + пароль (Enterprise)",
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
                 "required": [
                   "email",
-                  "password"
+                  "password",
+                  "captchaId",
+                  "captchaAnswer"
                 ],
                 "properties": {
                   "email": {
@@ -1951,6 +1963,14 @@
                   },
                   "password": {
                     "type": "string"
+                  },
+                  "captchaId": {
+                    "type": "string",
+                    "description": "из POST /api/auth/captcha"
+                  },
+                  "captchaAnswer": {
+                    "type": "string",
+                    "description": "5 символов с картинки (регистронезависимо)"
                   }
                 }
               }
@@ -1959,26 +1979,19 @@
         },
         "responses": {
           "200": {
-            "description": "Успех; Set-Cookie ndrh_sid",
-            "headers": {
-              "Set-Cookie": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
+            "description": "Без 2FA — {ok, user} + cookie ndrh_sid; с 2FA — {ok, mfa: telegram|totp, sent?} + cookie ndrh_mfa (билет второго шага, 5 мин); Telegram-код отправлен ботом в привязанный чат"
+          },
+          "400": {
+            "description": "Капча неверна ({captchaFailed: true}); Telegram-2FA без привязанного чата ({telegramStartRequired, botLink})"
           },
           "401": {
-            "description": "Неверный email или пароль (единый текст)"
+            "description": "Неверный email или пароль"
           },
           "403": {
-            "description": "pending (ожидает верификации) или disabled"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFoundEdition"
+            "description": "Учётная запись pending/disabled"
           },
           "429": {
-            "description": "Сработал анти-брутфорс (лимит IP/email или блок учётной записи после 5 неудач)"
+            "description": "Анти-брутфорс: блок IP/учётной записи"
           }
         }
       }
@@ -2346,7 +2359,8 @@
                     "enum": [
                       "test",
                       "gotify-deploy",
-                      "gotify-remove"
+                      "gotify-remove",
+                      "release-broadcast"
                     ]
                   },
                   "channel": {
@@ -2376,6 +2390,178 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/auth/captcha": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Выдать одноразовую SVG-капчу (Enterprise)",
+        "description": "Возвращает {captchaId, svg, expiresSec}. Ответ одноразовый: после ЛЮБОЙ попытки проверки капча сгорает (сервисы подбора не получают повторов). TTL 2 минуты, лимит выдачи 30/10 мин на IP (429 при превышении). Капча обязательна в POST /api/auth/login и POST /api/auth/register.",
+        "responses": {
+          "200": {
+            "description": "{captchaId, svg (inline SVG), expiresSec}"
+          },
+          "429": {
+            "description": "Лимит выдачи капч с этого IP"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Выдать одноразовую SVG-капчу (Enterprise)",
+        "description": "Возвращает {captchaId, svg, expiresSec}. Ответ одноразовый: после ЛЮБОЙ попытки проверки капча сгорает (сервисы подбора не получают повторов). TTL 2 минуты, лимит выдачи 30/10 мин на IP (429 при превышении). Капча обязательна в POST /api/auth/login и POST /api/auth/register.",
+        "responses": {
+          "200": {
+            "description": "{captchaId, svg (inline SVG), expiresSec}"
+          },
+          "429": {
+            "description": "Лимит выдачи капч с этого IP"
+          }
+        }
+      }
+    },
+    "/api/auth/login/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Шаг 2 входа: код 2FA → сессия (Enterprise)",
+        "description": "Требуется cookie ndrh_mfa (билет шага 1). Код Telegram (одноразовый, TTL 5 мин, 5 неверных вводов) или TOTP (окно ±1 шаг 30 c). Лимит 10/5 мин на IP.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "description": "6 цифр"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ok, user} + cookie ndrh_sid (сессия); билет ndrh_mfa погашен"
+          },
+          "401": {
+            "description": "Билет отсутствует/просрочен или код неверен"
+          },
+          "429": {
+            "description": "Лимит попыток"
+          }
+        }
+      }
+    },
+    "/api/auth/register/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Шаг 2 регистрации: код → аккаунт активируется (Enterprise)",
+        "description": "Требуется cookie ndrh_mfa (purpose=register). После верного кода статус → active (verifiedBy: telegram-code | totp-code).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ok, message, user}"
+          },
+          "401": {
+            "description": "Билет истёк или код неверен"
+          }
+        }
+      }
+    },
+    "/api/auth/account": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Кабинет: учётная запись и текущее 2FA (Enterprise)",
+        "responses": {
+          "200": {
+            "description": "{email, displayName, role, status, twoFactor, telegramUsername, telegramBound, totpEnabled, botLink}"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Кабинет: управление 2FA своей учётной записи (Enterprise)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "save-telegram",
+                      "send-telegram-code",
+                      "switch-telegram",
+                      "setup-totp",
+                      "switch-totp",
+                      "disable-2fa",
+                      "send-test"
+                    ]
+                  },
+                  "username": {
+                    "type": "string",
+                    "description": "save-telegram"
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "switch-telegram | switch-totp"
+                  },
+                  "password": {
+                    "type": "string",
+                    "description": "disable-2fa — подтверждение паролем"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ok, message, twoFactor?, ...}; смена метода требует кода НОВОГО метода"
+          },
+          "400": {
+            "description": "Не выполнены предусловия действия"
+          },
+          "401": {
+            "description": "Неверный пароль (disable-2fa) или код"
           }
         }
       }

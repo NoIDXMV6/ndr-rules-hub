@@ -42,7 +42,9 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 | **Logs** | All fetch/build/export/VPN events with levels and filters |
 | **Bilingual UI** | Russian and English via localization files (`src/lib/i18n/`). Language detected from browser strings (`navigator.languages`), RU/EN switch in the header, choice persisted in `localStorage`. Favicon (`public/favicon.ico`, 16–256 px) and logo included |
 | **Help & “About”** | Tabs with goals/principles, developer info, acknowledgements and the technology list — collapsible accordions, also in both languages. The “Help” tab includes a detailed Clear NDR integration guide (token, PUSH/PULL schemes, auto-update) illustrated with process diagrams |
-| **Multi-user mode (Enterprise)** | Registration verified by an administrator (the first registered account becomes admin), a reduced personal cabinet, personal **rule download tokens** (`ndrt_…`, SHA-256 in DB, revoke/expiry/statistics), “own sources” (ownerId), security event journal. See [docs/developer.md](docs/developer.md) |
+| **Multi-user mode (Enterprise)** | Registration with **2FA choice** (Telegram or TOTP), the account is activated by code confirmation, a cabinet with 2FA settings, personal **download tokens** (`ndrt_…`, SHA-256 in DB, revocation/expiry/stats), “own sources” (ownerId), security event journal. See [docs/developer.md](docs/developer.md) |
+| **Captcha & 2FA** | Sign-in and registration are protected by a **single-use SVG captcha** (the answer never leaves the server, the image is burned after every attempt, per-IP issue limit, 2-min TTL — economic protection against captcha-solving services) and **two-factor authentication**: a code via Telegram (chat bound by /start to the bot) or **TOTP** (RFC 6238, QR + manual key, ±1 step window). The method is chosen at registration and changed in the “Account” cabinet (switching requires a code of the new method, disabling requires the password); on loss of access an administrator resets 2FA |
+| **Release broadcasts** | When the hub is updated, every account with a bound Telegram automatically gets a message about the new version and features (one broadcast per version; the “what’s new” text is in settings; a “Broadcast now” button and a switch) |
 | **Protection** | Per-IP rate limits on every endpoint (429 + Retry-After); brute-force protection: sign-in (IP + email + account lock), serving keys and tokens (10 failures/5 min → 15 min block); request queues for heavy operations (build/fetch/download — 429 on overflow); download bandwidth throttling (`downloadBandwidthKbps`); CSRF (Sec-Fetch-Site/Origin); scrypt passwords, SHA-256 token storage, constant-time comparisons; security headers; secrets redacted for non-admins |
 
 ## Editions
@@ -166,6 +168,46 @@ and saves environment templates (docker-compose, Caddy/nginx with TLS, a domain/
 Option 2 — on the host: `sudo bash scripts/gotify-deploy.sh --port 8085 --domain gotify.example.com`.
 
 Full guide — [docs/gotify.md](docs/gotify.md).
+
+## Captcha and two-factor authentication (Enterprise)
+
+Sign-in and registration start with a captcha: the server renders a distorted SVG text
+(random fonts, per-character rotation/shift, wavy lines, noise) and returns `{captchaId, svg}`.
+The answer never leaves the server; the comparison is constant-time. Resistance to captcha-solving
+services is economic: the captcha is **single-use** (burned after every attempt), TTL 2 minutes,
+issue limit 30 per 10 minutes per IP, plus the existing brute-force protection (IP/account blocks).
+The captcha is mandatory at step 1 of both sign-in and registration.
+
+**2FA** — the method is chosen at registration and changed in the “Account” cabinet:
+
+- **Telegram** — registration asks for a username; the hub sends the code via the bot. Telegram
+  forbids bots from messaging first, so the user sends `/start` to the bot once (the deep link is
+  shown on the screen) — the hub poller binds the chat_id and immediately delivers the pending code.
+  Sign-in: password → Telegram code → session.
+- **TOTP** (for those without Telegram) — the server generates a secret (RFC 4648 base32), a QR
+  (`otpauth://…`) and a manual key; codes are verified with a ±1 step (30 s) window, compatible with
+  Google Authenticator/Authy/FreeOTP.
+
+Second-step mechanics: after a correct password a short-lived (5 min) HMAC ticket is issued in the
+HttpOnly `ndrh_mfa` cookie; the session is created only after the code is confirmed. Code: 5-min TTL,
+max 5 wrong attempts, 10/5-min per-IP limit on verify endpoints. All events land in the security
+journal (sign-ins, codes, 2FA changes/resets).
+
+Changing the method in the cabinet requires confirming with the NEW method (you cannot lock yourself
+out); disabling 2FA requires the password. If both factors are lost, an administrator resets 2FA on
+the “Users” tab (“Reset 2FA”). The bootstrap administrator (first user) may postpone 2FA setup and
+enable it later in “Account”.
+
+For Telegram 2FA and broadcasts configure the bot: “Settings → Notifications” → bot token
+(@BotFather) — the same token serves chat binding, codes and release broadcasts. Proxy supported.
+
+**Release broadcasts**: on the first dashboard request after an update the app version is compared
+with the `releaseNotifyVersion` setting; on mismatch every account with a bound Telegram gets
+“updated to vX.Y.Z” + the “what’s new” text (`releaseNotes`) + the releases link. One broadcast per
+version; “Broadcast now” repeats it.
+
+**Sticky menu**: the menu bar stays pinned under the header while scrolling (header height is
+measured automatically; message banners moved out of the sticky header).
 
 ## Bilingual interface (RU/EN)
 
@@ -397,7 +439,13 @@ an archive (download limit, a personal-cabinet link with the oinkcode in the que
 | `POST /api/build` | build `{ "export": true }` — with export |
 | `GET /api/export` | the final set for a Clear NDR URL source (PULL): the file (datatype `sig`) or `?archive=1` — per-source tgz (datatype `sigs`); authentication — a personal `ndrt_…` token / serveToken (`?token=` or the Authorization header) or a session; download queue + bandwidth throttling |
 | `POST /api/export` | push to Clear NDR using the configured method |
-| `POST /api/auth/register` · `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` | registration (the first user becomes admin), sign-in/out (cookie session), UI state — Enterprise only |
+| `POST /api/auth/captcha` · `GET` | issue a single-use SVG captcha ({captchaId, svg}, 2-min TTL, 30/10 min per IP limit) — Enterprise |
+| `POST /api/auth/login` | sign-in step 1: captcha + password; with 2FA — a second-step ticket (cookie `ndrh_mfa`) and `{mfa: telegram\|totp}`; Telegram-2FA sends the code via the bot, without a bound chat it refuses with a /start hint |
+| `POST /api/auth/login/verify` | sign-in step 2: Telegram or TOTP code (±1 step) → session; 10/5 min limit, the code has 5 wrong attempts and a 5-min TTL |
+| `POST /api/auth/register` | registration step 1: captcha + data + 2FA choice (telegram — username; totp — secret+QR right away); the account is pending until the code is confirmed |
+| `POST /api/auth/register/verify` | registration step 2: code → account activated (verifiedBy: telegram-code / totp-code) |
+| `GET/POST /api/auth/account` | cabinet: current 2FA and actions — save-telegram, send-telegram-code, switch-telegram, setup-totp, switch-totp, disable-2fa (password), send-test |
+| `POST /api/auth/register` · `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` | registration (the first user becomes admin; bootstrap may skip 2FA), sign-in/out (cookie session), UI state (including twoFactor) — Enterprise only |
 | `GET/PATCH /api/auth/users` · `PATCH/DELETE /api/auth/users/:id` · `GET /api/auth/events` | users: list, verification/disable/roles/delete, security journal — administrator only, Enterprise only |
 | `GET/POST /api/tokens` · `DELETE /api/tokens/:id` | personal download tokens (admin sees all): creation (the token is shown once), revocation — Enterprise only |
 | `GET /api/rules?sid=&q=&sourceId=&page=` | browse the rule database |
@@ -405,7 +453,7 @@ an archive (download limit, a personal-cabinet link with the oinkcode in the que
 | `GET/POST/PUT/DELETE /api/vpn` | WireGuard status/actions/profiles; a second `up` of a raised tunnel → 409 + `alreadyUp` |
 | `GET /api/system` | system monitoring (administrator only): CPU/memory/disks/network/containers/WireGuard + auto-cleanup status |
 | `POST /api/system` | cleanup actions: `cleanup-preview` (dry-run), `cleanup-run`, `disk-check`, `reschedule` |
-| `GET /api/notify` · `POST /api/notify` | Gotify state; actions: `test` (telegram/gotify), `gotify-deploy` (deploy your own server), `gotify-remove` |
+| `GET /api/notify` · `POST /api/notify` | Gotify state; actions: `test` (telegram/gotify), `gotify-deploy` (deploy your own server), `gotify-remove`, `release-broadcast` (forced version broadcast) |
 | `GET /api/clearndr-update` | update section status: versions, host preflight, stack state, run history (`?log=<runId>` — run log) |
 | `POST /api/clearndr-update` | actions: `probe` (host check), `start` (begin update), `cancel`, `sync-script` |
 | `PUT /api/clearndr-update` | connection settings (SSH/local, instance dir, URL, token) |

@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { api, fmtTime, type AuthEventItem, type UserItem } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
-import { CheckCircle2, Lock, RefreshCw, ShieldOff, Trash2, UserCheck } from 'lucide-react'
+import { CheckCircle2, KeyRound, Lock, RefreshCw, ShieldOff, Trash2, UserCheck } from 'lucide-react'
 
 export function UsersTab({ selfId }: { selfId: string }) {
   const { t, tr, loc } = useI18n()
@@ -112,6 +112,7 @@ export function UsersTab({ selfId }: { selfId: string }) {
                   <th className="px-3 py-2 font-medium">{t.users.thName}</th>
                   <th className="px-3 py-2 font-medium">{t.users.thRole}</th>
                   <th className="px-3 py-2 font-medium">{t.users.thStatus}</th>
+                  <th className="px-3 py-2 font-medium">{t.users.thTwoFa}</th>
                   <th className="px-3 py-2 font-medium">{t.users.thLastLogin}</th>
                   <th className="px-3 py-2 font-medium">{t.users.thSessions} · {t.users.thTokens}</th>
                   <th className="px-3 py-2 font-medium text-right">{t.users.thActions}</th>
@@ -119,7 +120,7 @@ export function UsersTab({ selfId }: { selfId: string }) {
               </thead>
               <tbody>
                 {users.length === 0 && (
-                  <tr><td colSpan={7} className="px-3 py-4 text-muted-foreground">{t.users.empty}</td></tr>
+                  <tr><td colSpan={8} className="px-3 py-4 text-muted-foreground">{t.users.empty}</td></tr>
                 )}
                 {users.map((u) => (
                   <tr key={u.id} className="border-t border-border/60 text-foreground align-top">
@@ -133,6 +134,18 @@ export function UsersTab({ selfId }: { selfId: string }) {
                     <td className="px-3 py-2">{u.displayName}</td>
                     <td className="px-3 py-2">{roleBadge(u)}</td>
                     <td className="px-3 py-2">{statusBadge(u)}</td>
+                    <td className="px-3 py-2">
+                      <span className="inline-flex items-center gap-1.5">
+                        <KeyRound className={`h-3.5 w-3.5 ${u.twoFactor && u.twoFactor !== 'none' ? 'text-emerald-600' : 'text-muted-foreground/50'}`} />
+                        <span className="text-xs text-muted-foreground">
+                          {u.twoFactor === 'telegram'
+                            ? `Telegram @${u.telegramUsername ?? '?'}${u.telegramBound === false ? ' (·)' : ''}`
+                            : u.twoFactor === 'totp'
+                              ? 'TOTP'
+                              : '—'}
+                        </span>
+                      </span>
+                    </td>
                     <td className="px-3 py-2 text-muted-foreground">{u.lastLoginAt ? fmtTime(u.lastLoginAt, loc === 'ru-RU' ? 'ru' : 'en') : '—'}</td>
                     <td className="px-3 py-2 tabular-nums text-muted-foreground">{u.activeSessions ?? 0} · {u.tokens ?? 0}</td>
                     <td className="px-3 py-2">
@@ -160,6 +173,11 @@ export function UsersTab({ selfId }: { selfId: string }) {
                         {u.role === 'admin' && u.id !== selfId && (
                           <Button size="sm" variant="outline" className="border-input text-foreground" disabled={busy} onClick={() => act(u.id, 'demote')} title={t.users.demote}>
                             ↓ admin
+                          </Button>
+                        )}
+                        {u.twoFactor && u.twoFactor !== 'none' && (
+                          <Button size="sm" variant="outline" className="border-amber-300 text-amber-700" disabled={busy} onClick={() => act(u.id, 'reset-2fa')} title={t.users.reset2fa}>
+                            <KeyRound className="h-4 w-4 mr-1" /> {t.users.reset2fa}
                           </Button>
                         )}
                         {u.id !== selfId && (

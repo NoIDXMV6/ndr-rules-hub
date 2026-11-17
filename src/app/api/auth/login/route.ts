@@ -1,14 +1,21 @@
-// POST /api/auth/login — вход в систему (только Enterprise).
+// POST /api/auth/login — первый шаг входа (только Enterprise): капча + пароль.
+// При включённой 2FA сессия НЕ выдаётся: возвращается билет второго шага
+// (HttpOnly cookie ndrh_mfa, HMAC, 5 минут) и подсказка метода. Код
+// подтверждается в POST /api/auth/login/verify.
 // Анти-брутфорс, три независимых слоя:
 //   1) rate limit по IP: 10 неудач за 5 минут → блок IP на 15 минут;
 //   2) блокировка учётной записи: 5 неудач подряд → lockedUntil +15 минут;
 //   3) единые тексты ошибок (не раскрываем существование email в системе).
+// Плюс капча (одноразовая, сгорает после каждой попытки) и её лимит выдачи.
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireMultiUser, jsonError, sameOriginOk } from '@/lib/security/guard'
 import { verifyPassword } from '@/lib/security/password'
+import { verifyCaptcha } from '@/lib/security/captcha'
 import { clientIp, peekBlocked, rateLimit, recordFailure, resetRate } from '@/lib/security/ratelimit'
-import { createSession, cookieAttrs, requestIsHttps, SESSION_COOKIE } from '@/lib/security/session'
+import { issueMfaTicket, MFA_COOKIE, mfaCookieAttrs } from '@/lib/engine/mfa'
+import { getBotUsername, botDeepLink, sendTelegramText } from '@/lib/engine/telegram'
+import { requestIsHttps } from '@/lib/security/session'
 import { audit } from '@/lib/security/audit'
 
 export const dynamic = 'force-dynamic'
@@ -27,10 +34,14 @@ export async function POST(req: NextRequest) {
   const ip = clientIp(req)
   if (!sameOriginOk(req)) return jsonError(403, 'Запрос с чужого источника запрещён (CSRF-защита)')
 
-  const body = await req.json().catch(() => null) as { email?: string; password?: string } | null
+  const body = await req.json().catch(() => null) as { email?: string; password?: string; captchaId?: string; captchaAnswer?: string } | null
   const email = String(body?.email ?? '').trim().toLowerCase()
   const password = String(body?.password ?? '')
   if (!email || !password) return jsonError(400, 'Укажите email и пароль')
+
+  // 0) капча: обязательна, одноразовая — после любой попытки сгорает
+  const cap = verifyCaptcha(String(body?.captchaId ?? ''), String(body?.captchaAnswer ?? ''))
+  if (!cap.ok) return NextResponse.json({ error: cap.error, captchaFailed: true }, { status: 400 })
 
   const keyIp = `login:ip:${ip}`
   const keyEmail = `login:email:${email}`
@@ -88,25 +99,74 @@ export async function POST(req: NextRequest) {
   // статус учётной записи
   if (user.status === 'pending') {
     void audit('login_pending', { email, userId: user.id, ip })
-    return NextResponse.json({ error: 'Учётная запись ожидает верификации администратором', pending: true }, { status: 403 })
+    return NextResponse.json({ error: 'Учётная запись ожидает подтверждения — завершите верификацию кодом или обратитесь к администратору', pending: true }, { status: 403 })
   }
   if (user.status === 'disabled') {
     void audit('login_disabled', { email, userId: user.id, ip })
     return NextResponse.json({ error: 'Учётная запись отключена администратором' }, { status: 403 })
   }
 
-  // успех: счётчики неудач обнуляются, сессия создаётся
+  // пароль верен: счётчики неудач обнуляются; сессия — только после второго шага (если 2FA включена)
   resetRate(keyIp)
   resetRate(keyEmail)
-  await db.user.update({ where: { id: user.id }, data: { failedLogins: 0, lockedUntil: null, lastLoginAt: new Date() } })
-  const ua = req.headers.get('user-agent') ?? ''
-  const { token, expiresAt } = await createSession(user.id, ip, ua, parseInt((await db.setting.findUnique({ where: { key: 'sessionTtlHours' } }))?.value ?? '', 10) || null)
-  void audit('login_ok', { email, userId: user.id, ip })
+  await db.user.update({ where: { id: user.id }, data: { failedLogins: 0, lockedUntil: null } })
 
+  if (user.twoFactor === 'telegram') {
+    if (!user.telegramChatId) {
+      // чат не привязан — код доставить некуда; вход невозможен до /start боту или сброса 2FA администратором
+      void audit('login_2fa_fail', { email, userId: user.id, ip, detail: 'telegram: чат не привязан' })
+      const bot = await getBotUsername().catch(() => null)
+      return NextResponse.json(
+        {
+          error: 'Telegram-чат не привязан (бот не может отправить вам код). Откройте бота и отправьте /start, затем повторите вход. Если бот недоступен — попросите администратора сбросить 2FA.',
+          telegramStartRequired: true,
+          botLink: botDeepLink(bot),
+        },
+        { status: 400 },
+      )
+    }
+    // выпуск и отправка кода
+    const code = Math.floor(100000 + Math.random() * 900000).toString()
+    await db.user.update({
+      where: { id: user.id },
+      data: { verificationCode: code, verificationExpiresAt: new Date(Date.now() + 5 * 60_000), verificationAttempts: 0 },
+    })
+    const sent = await sendTelegramText(user.telegramChatId, `Код входа NDR Rules Hub: ${code}\n(действует 5 минут; вы входите с адреса ${ip})`)
+    void audit('login_2fa', { email, userId: user.id, ip, detail: sent.ok ? 'код входа отправлен в Telegram' : `ошибка доставки: ${sent.error}` })
+    const ticket = await issueMfaTicket('login', user.id)
+    const res = NextResponse.json(
+      sent.ok
+        ? { ok: true, mfa: 'telegram', sent: true }
+        : { ok: true, mfa: 'telegram', sent: false, error: `Бот не смог доставить код: ${sent.error}. Проверьте, что бот не заблокирован, или попросите администратора сбросить 2FA.` },
+    )
+    res.cookies.set(MFA_COOKIE, ticket.ticket, mfaCookieAttrs(ticket.expiresSec, requestIsHttps(req)))
+    return res
+  }
+
+  if (user.twoFactor === 'totp') {
+    const ticket = await issueMfaTicket('login', user.id)
+    void audit('login_2fa', { email, userId: user.id, ip, detail: 'ожидается код TOTP' })
+    const res = NextResponse.json({ ok: true, mfa: 'totp' })
+    res.cookies.set(MFA_COOKIE, ticket.ticket, mfaCookieAttrs(ticket.expiresSec, requestIsHttps(req)))
+    return res
+  }
+
+  // 2FA не включена (bootstrap-администратор или аккаунт до настройки) — сразу сессия
+  return finalizeLogin(req, user.id, user.email, user.displayName, user.role, user.status)
+}
+
+/** Общая выдача сессии (используется и первым шагом без 2FA, и verify-шагом) */
+export async function finalizeLogin(req: NextRequest, userId: string, email: string, displayName: string, role: string, status: string) {
+  const { createSession, cookieAttrs, SESSION_COOKIE } = await import('@/lib/security/session')
+  const ip = clientIp(req)
+  const ua = req.headers.get('user-agent') ?? ''
+  const { token, expiresAt } = await createSession(userId, ip, ua, parseInt((await db.setting.findUnique({ where: { key: 'sessionTtlHours' } }))?.value ?? '', 10) || null)
+  void audit('login_ok', { email, userId, ip })
   const res = NextResponse.json({
     ok: true,
-    user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role, status: user.status },
+    user: { id: userId, email, displayName, role, status },
   })
   res.cookies.set(SESSION_COOKIE, token, cookieAttrs(expiresAt, requestIsHttps(req)))
+  res.cookies.set(MFA_COOKIE, '', { httpOnly: true, path: '/', maxAge: 0 }) // билет погашен
   return res
 }

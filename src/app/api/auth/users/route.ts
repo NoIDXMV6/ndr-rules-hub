@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
     select: {
       id: true, email: true, displayName: true, role: true, status: true,
       verifiedAt: true, verifiedBy: true, lastLoginAt: true, createdAt: true, lockedUntil: true,
+      twoFactor: true, telegramUsername: true, telegramChatId: true,
       _count: { select: { sessions: true, tokens: true } },
     },
   })

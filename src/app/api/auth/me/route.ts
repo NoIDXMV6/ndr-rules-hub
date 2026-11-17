@@ -19,11 +19,27 @@ export async function GET(req: Request) {
     db.user.count(),
     (async () => (await getSetting('registrationOpen')) !== 'false')(),
   ])
+  let twoFactorInfo: { twoFactor: string; telegramUsername: string | null; telegramBound: boolean; totpEnabled: boolean } | null = null
+  if (session) {
+    const u = await db.user.findUnique({
+      where: { id: session.user.id },
+      select: { twoFactor: true, telegramUsername: true, telegramChatId: true, totpSecret: true },
+    })
+    if (u) {
+      twoFactorInfo = {
+        twoFactor: u.twoFactor,
+        telegramUsername: u.telegramUsername,
+        telegramBound: !!u.telegramChatId,
+        totpEnabled: !!u.totpSecret,
+      }
+    }
+  }
   return NextResponse.json({
     edition: 'enterprise',
     multiUser: true,
     authenticated: !!session,
     user: session ? { id: session.user.id, email: session.user.email, displayName: session.user.displayName, role: session.user.role, status: session.user.status } : null,
+    twoFactor: twoFactorInfo,
     needsBootstrap: userCount === 0,
     registrationOpen: open,
   })

@@ -13,6 +13,9 @@ export type AuditKind =
   | 'logout' | 'verify' | 'disable' | 'enable' | 'role_change' | 'delete_user'
   | 'token_create' | 'token_revoke' | 'download' | 'download_denied'
   | 'ratelimit' | 'queue_full'
+  // 2FA / Telegram-верификация
+  | 'login_2fa' | 'login_2fa_ok' | 'login_2fa_fail' | 'register_verify_fail'
+  | '2fa_change' | '2fa_reset' | 'telegram_username'
 
 export interface AuditCtx {
   email?: string

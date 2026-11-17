@@ -252,6 +252,8 @@ function NotificationsCard({
   const [deploying, setDeploying] = useState(false)
   const [gotifyRunning, setGotifyRunning] = useState<boolean | null>(null)
   const [gotifyUrl, setGotifyUrl] = useState<string | null>(null)
+  const [bcMsg, setBcMsg] = useState<string | null>(null)
+  const [bcBusy, setBcBusy] = useState(false)
 
   const refreshState = useCallback(async () => {
     try {
@@ -416,6 +418,47 @@ function NotificationsCard({
             {goResult && <pre className="text-xs whitespace-pre-wrap rounded-lg border border-border bg-muted/40 p-3 max-h-56 overflow-auto">{goResult}</pre>}
             <p className="text-xs text-muted-foreground">{t.settings.gotifyEventsHelp}</p>
           </div>
+        </div>
+
+        {/* Рассылка о новых версиях */}
+        <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t.settings.releaseBcTitle}</p>
+              <p className="text-xs text-muted-foreground">{t.settings.releaseBcDesc}</p>
+            </div>
+            <Switch checked={(s.releaseBroadcastEnabled ?? 'true') === 'true'} onChange={(v) => set('releaseBroadcastEnabled', String(v))} />
+          </div>
+          {(s.releaseBroadcastEnabled ?? 'true') === 'true' && (
+            <div className="space-y-2">
+              <div>
+                <Label className="text-foreground">{t.settings.releaseNotesLabel}</Label>
+                <textarea
+                  value={s.releaseNotes ?? ''}
+                  onChange={(e) => set('releaseNotes', e.target.value)}
+                  rows={3}
+                  className="w-full rounded-md border border-input bg-card px-3 py-2 text-sm mt-1"
+                  placeholder={t.settings.releaseNotesPlaceholder}
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t.settings.releaseNotesHelp}</p>
+              </div>
+              <Button size="sm" variant="outline" className="border-input text-foreground" disabled={bcBusy} onClick={async () => {
+                setBcBusy(true)
+                setBcMsg(null)
+                try {
+                  const r = await api.notifyAction({ action: 'release-broadcast' })
+                  setBcMsg(r.skipped ? `${r.skipped}` : `${t.settings.releaseBcDone}: ${r.delivered} ✓, ${r.failed} ✗`)
+                } catch (e) {
+                  setBcMsg((e as Error).message)
+                } finally {
+                  setBcBusy(false)
+                }
+              }}>
+                <Send className="h-3.5 w-3.5 mr-1.5" /> {t.settings.releaseBcSend}
+              </Button>
+              {bcMsg && <p className="text-xs text-muted-foreground">{bcMsg}</p>}
+            </div>
+          )}
         </div>
 
         {/* Какие события слать */}

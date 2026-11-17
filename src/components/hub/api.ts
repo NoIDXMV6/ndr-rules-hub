@@ -317,11 +317,19 @@ export const api = {
     fetch('/api/clearndr-osd', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
   // многопользовательский режим (Enterprise)
   me: () => fetch('/api/auth/me', { cache: 'no-store' }).then((r) => j<Me>(r)),
-  register: (data: { email: string; displayName: string; password: string }) =>
-    fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; message?: string; user?: Me['user'] }>(r)),
-  login: (data: { email: string; password: string }) =>
-    fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; user?: Me['user'] }>(r)),
+  captcha: () => fetch('/api/auth/captcha', { cache: 'no-store' }).then((r) => j<Captcha>(r)),
+  login: (data: { email: string; password: string; captchaId?: string; captchaAnswer?: string }) =>
+    fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<Record<string, unknown>>(r)),
+  loginVerify: (code: string) =>
+    fetch('/api/auth/login/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) }).then((r) => j<Record<string, unknown>>(r)),
+  register: (data: { email: string; displayName: string; password: string; twoFactor: string; telegramUsername?: string; captchaId?: string; captchaAnswer?: string }) =>
+    fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<Record<string, unknown>>(r)),
+  registerVerify: (code: string) =>
+    fetch('/api/auth/register/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) }).then((r) => j<Record<string, unknown>>(r)),
   logout: () => fetch('/api/auth/logout', { method: 'POST' }).then((r) => j<{ ok: boolean }>(r)),
+  account: () => fetch('/api/auth/account', { cache: 'no-store' }).then((r) => j<AccountInfo>(r)),
+  accountAction: (body: Record<string, unknown>) =>
+    fetch('/api/auth/account', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
   users: () => fetch('/api/auth/users', { cache: 'no-store' }).then((r) => j<{ users: UserItem[]; registrationOpen: boolean }>(r)),
   userAction: (id: string, action: string) =>
     fetch(`/api/auth/users/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }).then((r) => j<{ ok: boolean; user?: UserItem }>(r)),
@@ -523,6 +531,7 @@ export interface Me {
   multiUser: boolean
   authenticated: boolean
   user: { id: string; email: string; displayName: string; role: 'admin' | 'user'; status: 'pending' | 'active' | 'disabled' } | null
+  twoFactor?: { twoFactor: 'none' | 'telegram' | 'totp'; telegramUsername: string | null; telegramBound: boolean; totpEnabled: boolean } | null
   needsBootstrap?: boolean
   registrationOpen?: boolean
 }
@@ -538,8 +547,31 @@ export interface UserItem {
   lastLoginAt: string | null
   createdAt: string
   lockedUntil: string | null
+  twoFactor?: 'none' | 'telegram' | 'totp'
+  telegramUsername?: string | null
+  telegramBound?: boolean
   activeSessions?: number
   tokens?: number
+}
+
+export interface AccountInfo {
+  email: string
+  displayName: string
+  role: string
+  status: string
+  twoFactor: 'none' | 'telegram' | 'totp'
+  telegramUsername: string | null
+  telegramBound: boolean
+  totpEnabled: boolean
+  botLink: string | null
+}
+
+// ── Капча (вход/регистрация) ─────────────────────────────────────────────────
+
+export interface Captcha {
+  captchaId: string
+  svg: string
+  expiresSec: number
 }
 
 export interface AuthEventItem {

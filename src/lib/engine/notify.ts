@@ -55,7 +55,7 @@ export async function getNotifySettings(): Promise<NotifySettings> {
 
 let insecureAgent: Agent | null = null
 /** Агент, не проверяющий self-signed сертификаты (для Telegram/Gotify за прокси) */
-function insecureDispatcher(): Agent {
+export function insecureDispatcher(): Agent {
   if (!insecureAgent) insecureAgent = new Agent({ connect: { rejectUnauthorized: false } })
   return insecureAgent
 }

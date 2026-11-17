@@ -143,7 +143,7 @@ model User {
   role         String    @default("user")  // admin | user
   status       String    @default("pending") // pending | active | disabled
   verifiedAt   DateTime?
-  verifiedBy   String?   // id администратора, выполнившего верификацию
+  verifiedBy   String?   // id администратора, код Telegram/TOTP или 'bootstrap'
   failedLogins Int       @default(0)  // счётчик неудач подряд (анти-брутфорс)
   lockedUntil  DateTime? // до этого времени вход заблокирован (анти-брутфорс)
   lastLoginAt  DateTime?
@@ -151,6 +151,17 @@ model User {
   updatedAt    DateTime  @updatedAt
   sessions     Session[]
   tokens       DownloadToken[]
+
+  // ── Двухфакторная аутентификация (2FA) ────────────────────────────────────
+  twoFactor             String    @default("none") // none | telegram | totp
+  telegramUsername      String?   // @username для кодов верификации (без @, lowercase)
+  telegramChatId        String?   // chat_id привязан, когда пользователь отправил боту /start
+  totpSecret            String?   // секрет TOTP (base32, RFC 4648)
+  verificationCode      String?   // текущий одноразовый код (открытый — нужен для отправки в Telegram)
+  verificationExpiresAt DateTime? // срок действия кода (5 минут)
+  verificationAttempts  Int       @default(0) // число неверных вводов кода (макс 5)
+
+  @@index([telegramUsername])
 }
 
 // Сессия веб-интерфейса (cookie ndrh_sid). В БД хранится только SHA-256 токена.

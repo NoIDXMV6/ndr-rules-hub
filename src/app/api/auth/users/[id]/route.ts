@@ -64,8 +64,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       void audit('role_change', { userId: id, email: target.email, ip: g.ip, detail: '→ user' })
       break
     }
+    case 'reset-2fa': {
+      // сброс 2FA: пользователь потерял доступ к Telegram/приложению — метод
+      // выключается, привязки и секреты очищаются; дальнейшую настройку
+      // пользователь делает сам в «Аккаунте»
+      await db.user.update({
+        where: { id },
+        data: { twoFactor: 'none', totpSecret: null, verificationCode: null, verificationExpiresAt: null, verificationAttempts: 0 },
+      })
+      void audit('2fa_reset', { userId: id, email: target.email, ip: g.ip, detail: `2FA сброшена администратором ${g.user!.email}` })
+      break
+    }
     default:
-      return NextResponse.json({ error: 'Действие: verify | disable | enable | promote | demote' }, { status: 400 })
+      return NextResponse.json({ error: 'Действие: verify | disable | enable | promote | demote | reset-2fa' }, { status: 400 })
   }
 
   const updated = await db.user.findUnique({

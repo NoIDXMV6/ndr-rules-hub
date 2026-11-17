@@ -3,6 +3,7 @@ import { guard } from '@/lib/security/guard'
 import { apiError } from '@/lib/api-error'
 import { sendTest } from '@/lib/engine/notify'
 import { deployGotify, removeGotify, gotifyState } from '@/lib/engine/gotify-deploy'
+import { checkReleaseBroadcast } from '@/lib/engine/telegram'
 import { log } from '@/lib/engine/service'
 
 export const dynamic = 'force-dynamic'
@@ -44,7 +45,13 @@ export async function POST(req: NextRequest) {
       const r = await removeGotify()
       return NextResponse.json(r)
     }
-    return NextResponse.json({ error: 'action: test | gotify-deploy | gotify-remove' }, { status: 400 })
+    if (action === 'release-broadcast') {
+      // принудительная рассылка уведомления о текущей версии всем аккаунтам
+      // с привязанным Telegram (автоматическая — при смене версии на старте)
+      const r = await checkReleaseBroadcast(true)
+      return NextResponse.json({ ok: r.delivered > 0 || r.sent, ...r })
+    }
+    return NextResponse.json({ error: 'action: test | gotify-deploy | gotify-remove | release-broadcast' }, { status: 400 })
   } catch (e) {
     return apiError(e)
   }
