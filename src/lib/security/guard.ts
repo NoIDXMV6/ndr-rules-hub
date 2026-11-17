@@ -67,7 +67,14 @@ export function sameOriginOk(req: Request): boolean {
 }
 
 /** Ключи настроек, которые нельзя отдавать не-администратору (секреты) */
-export const SECRET_SETTING_KEYS = ['serveToken', 'oinkcode', 'abusechAuthKey', 'clearndrExportToken']
+export const SECRET_SETTING_KEYS = [
+  'serveToken',
+  'oinkcode',
+  'abusechAuthKey',
+  'clearndrExportToken',
+  'tgBotToken', // токен Telegram-бота
+  'gotifyToken', // app-токен Gotify
+]
 
 export function sanitizeSettings<T extends Record<string, string>>(settings: T, role: GuardCtx['role']): T {
   if (role === 'admin') return settings

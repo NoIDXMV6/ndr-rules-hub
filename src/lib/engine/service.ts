@@ -11,6 +11,7 @@ import {
 import { saveExportFile, pushToClearndr, ClearndrExportCfg } from './exporter'
 import { SidMapper, remapToClearndrBlock } from './sidmap'
 import { ruleCategory, applyCategoryAndRuleFilter } from './categories'
+import { notifyEvent } from './notify'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { execFile } from 'child_process'
@@ -511,6 +512,16 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
   if (buildRes.ok && origin === 'cron' && settings.cronExport === 'true') {
     exportRes = await exportLatestBuild()
   }
+  // уведомление о цикле (Telegram/Gotify; шлётся, только если каналы включены)
+  try {
+    const title = buildRes.ok
+      ? `Полный цикл (${origin}): собрано ${buildRes.total ?? 0} правил${buildRes.fileName ? ` → ${buildRes.fileName}` : ''}`
+      : `Ошибка сборки: ${buildRes.error ?? '—'}`
+    const parts = [`загрузка: успешно ${fetchRes.ok}, ошибок ${fetchRes.failed}`, buildRes.ok ? `сборка: ${buildRes.total ?? 0} правил` : `сборка: ОШИБКА — ${buildRes.error}`]
+    if (exportRes) parts.push(exportRes.ok ? 'экспорт: выполнен' : `экспорт: ${exportRes.error}`)
+    if (fetchRes.errors.length) parts.push(`ошибки загрузки: ${fetchRes.errors.slice(0, 5).join('; ')}`)
+    await notifyEvent('pipeline', buildRes.ok && fetchRes.failed === 0 ? 'success' : fetchRes.failed || !buildRes.ok ? 'error' : 'warn', title, parts.join('\n'))
+  } catch { /* уведомления не роняют цикл */ }
   return {
     ok: buildRes.ok && fetchRes.failed === 0,
     detail: { fetch: fetchRes, build: buildRes, export: exportRes },

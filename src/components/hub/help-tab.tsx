@@ -69,6 +69,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'наполнять пустые разделы OpenSearch Dashboards (Alerting, Anomaly, Security Analytics) дашбордами по данным EVE;',
         'обновлять сам Clear NDR до новой версии одним запуском — с бэкапами и автооткатом;',
         'при необходимости загружать правила через WireGuard VPN, не теряя доступ к самому сервису;',
+        'следить за сервером и местом на диске: дашборды на «Обзоре» (CPU, память, диски, контейнеры, скорость интерфейсов и туннеля) и автоочистка при нехватке места — старые индексы OpenSearch, логи, кэш — с уведомлениями в Telegram (с поддержкой прокси) и Gotify;',
         'в редакции Enterprise — работать нескольким пользователям с регистрацией, верификацией и персональными токенами скачивания.',
       ],
     },
@@ -257,6 +258,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       ],
       items: [
         'требования: `/dev/net/tun`, `NET_ADMIN`, `net.ipv4.conf.all.src_valid_mark=1` (см. README);',
+        'поднятый туннель нельзя поднять повторно — сервер отклоняет второй «up» с 409, а кнопка «Поднять» недоступна по фактическому состоянию `wg show interfaces` (раньше повторное нажатие сносило и поднимало туннель заново, подвешивая web UI); переподключение — «Опустить», затем «Поднять»;',
         'при потерянном доступе к UI: `docker compose exec rules-hub wg-quick down /app/data/wireguard/wg0.conf` или `docker compose restart rules-hub`;',
         'включается флагом «Гнать загрузки через WireGuard» в «Настройках».',
       ],
@@ -311,6 +313,21 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'офлайн-пакет dist/ дополнительно проходит цикл валидации движком `suricata -T` до нуля ошибок — невалидированный набор не публикуется.',
       ],
     },
+    {
+      trigger: 'Мониторинг сервера, автоочистка диска и уведомления',
+      paragraphs: [
+        '**Обзор** показывает системные дашборды (только администратору, обновление каждые 5 с): утилизация CPU и память сервера (данные /proc хоста), аптайм, тома дисков с подсветкой порогов занятости, скорость и трафик сетевых интерфейсов, пиры и скорость WireGuard-туннеля, список запущенных контейнеров (docker ps через смонтированный /var/run/docker.sock:ro). Самое важное — свободное место: том данных хаба помечен значком, при превышении порогов (85 % / 92 %) сверху появляется баннер с кнопками действий.',
+      ],
+      items: [
+        '**Что будет удалено** — dry-run без удаления: перечень кандидатов по каждому шагу; **Очистить сейчас** — реальный прогон. Оба — на «Обзоре» и в «Настройках → Диск и автоочистка»;',
+        '**Шаги очистки включаются по отдельности**: кэш хаба (data/cache и .pack-* — пересоздаются), каталоги логов (активные eve.json/fast.log/stats.log не трогаются никогда — место освобождают только ротации), индексы OpenSearch (только разрешённые префиксы logstash-/ndr-/eve-/suricata-/selks- старше N дней; системные .kibana не трогаются; лимит на число индексов за прогон, самые старые первыми), большие файлы (поиск только в явно перечисленных каталогах; по умолчанию — только отчёт);',
+        '**Автоочистка** — по cron-проверке (по умолчанию ежечасно на 17-й минуте): при занятости ≥ порога запускается очистка включёнными шагами до достижения цели свободного места; уведомления о порогах — не чаще раза в 6 часов на уровень;',
+        '**Telegram** — токен бота (@BotFather) + chat_id (подсказка, как узнать), прокси http(s)://user:pass@host:port или socks5://, можно свой Bot API Server; кнопка «Тест»;',
+        '**Gotify** — URL + app-токен; свой сервер разворачивается кнопкой «Развернуть Gotify» (контейнер gotify/android, /health, шаблоны docker-compose/Caddy/nginx и инструкция по домену, DNS и TLS сохраняются в data/gotify/) или скриптом scripts/gotify-deploy.sh на хосте (см. docs/gotify.md);',
+        '**События** включаются по отдельности: конвейер правил (итог цикла/ошибки), WireGuard (подъём/остановка/ошибки), диск (пороги и результаты очистки).',
+      ],
+      footnote: 'Всё, что не входит в явно разрешённые списки (префиксы индексов, каталоги логов/файлов), никогда не удаляется. Журнал прогонов — вкладка «Журнал» (scope cleanup).',
+    },
   ],
   en: [
     {
@@ -328,6 +345,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'populate the empty OpenSearch Dashboards sections (Alerting, Anomaly, Security Analytics) with EVE-data dashboards;',
         'update Clear NDR itself to a new version in one run — with backups and automatic rollback;',
         'when needed, download rules through a WireGuard VPN without losing access to the service itself;',
+        'watch the server and disk space: dashboards on Overview (CPU, memory, disks, containers, interface and tunnel speed) plus automatic cleanup when space runs low — old OpenSearch indices, logs, cache — with notifications via Telegram (proxy support) and Gotify;',
         'in the Enterprise edition — work with multiple users, registration, verification and personal download tokens.',
       ],
     },
@@ -513,9 +531,25 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       ],
       items: [
         'requirements: `/dev/net/tun`, `NET_ADMIN`, `net.ipv4.conf.all.src_valid_mark=1` (see the README);',
+        'a raised tunnel cannot be raised again — the server rejects a second “up” with 409 and the “Up” button is disabled based on the actual `wg show interfaces` state (previously a second click tore the tunnel down and up again, hanging the web UI); to reconnect — stop, then up;',
         'if access to the UI is lost: `docker compose exec rules-hub wg-quick down /app/data/wireguard/wg0.conf` or `docker compose restart rules-hub`;',
         'enabled by the “Route downloads through WireGuard” flag in “Settings”.',
       ],
+    },
+    {
+      trigger: 'Server monitoring, disk auto-cleanup and notifications',
+      paragraphs: [
+        '**Overview** shows system dashboards (administrator only, refreshed every 5 s): server CPU usage and memory (host /proc data), uptime, disk volumes with usage-threshold highlighting, network interface speed and traffic, WireGuard tunnel peers and speed, the list of running containers (docker ps via the mounted /var/run/docker.sock:ro). The most important metric — free disk space: the hub data volume is marked with an icon, and when thresholds are crossed (85 % / 92 %) an action banner appears at the top.',
+      ],
+      items: [
+        '**What will be deleted** — a dry-run without deleting anything: the list of candidates per step; **Clean up now** — a real run. Both are on “Overview” and in “Settings → Disk & auto-cleanup”;',
+        '**Cleanup steps are enabled separately**: hub cache (data/cache and .pack-* — safely recreated), log directories (active eve.json/fast.log/stats.log are never touched — only rotations free space), OpenSearch indices (allowed prefixes logstash-/ndr-/eve-/suricata-/selks- older than N days only; system indices like .kibana are untouched; per-run index limit, oldest first), large files (searched only in explicitly listed directories; report-only by default);',
+        '**Auto-cleanup** — by a cron check (hourly at minute 17 by default): when usage ≥ the trigger threshold, cleanup runs through the enabled steps until the free-space target is reached; threshold notifications are throttled to once per 6 hours per level;',
+        '**Telegram** — bot token (@BotFather) + chat_id (a hint explains how to find it), http(s)://user:pass@host:port or socks5:// proxy support, optional custom Bot API Server; a “Test” button;',
+        '**Gotify** — server URL + app token; your own server is deployed with the “Deploy Gotify” button (gotify/android container, /health wait, docker-compose/Caddy/nginx templates plus a domain/DNS/TLS guide saved to data/gotify/) or by scripts/gotify-deploy.sh on the host (see docs/gotify.md);',
+        '**Events** are enabled individually: rule pipeline (cycle result/errors), WireGuard (up/down/errors), disk (thresholds and cleanup results).',
+      ],
+      footnote: 'Anything outside the explicitly allowed lists (index prefixes, log/file directories) is never deleted. Run history is in the “Logs” tab (scope cleanup).',
     },
     {
       trigger: 'Community and Enterprise editions: users and tokens',

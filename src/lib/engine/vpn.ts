@@ -217,12 +217,26 @@ export function parseWgConfig(config: string): { ok: boolean; error?: string; if
 }
 
 /** Применить конфиг: сохраняет файл и поднимает туннель (wg-quick up) */
-export async function wgUp(name: string, config: string): Promise<{ ok: boolean; error?: string; output?: string; notes?: string[] }> {
+export async function wgUp(name: string, config: string): Promise<{ ok: boolean; error?: string; output?: string; notes?: string[]; alreadyUp?: boolean }> {
   const parsed = parseWgConfig(config)
   if (!parsed.ok) return { ok: false, error: parsed.error }
   const iface = parsed.iface ?? 'wg0'
-  const confPath = `${WG_DIR}/${iface}.conf`
   const notes: string[] = []
+  // ЗАЩИТА ОТ ПОВТОРНОГО UP: если интерфейс уже поднят — не трогаем его.
+  // Раньше здесь выполнялся cleanStaleInterface (wg-quick down + up): рабочий
+  // full-tunnel туннель сносился вместе с маршрутизацией и поднимался заново,
+  // а ответ на этот самый запрос уходил в ещё не готовый туннель — web UI
+  // зависал, контейнер приходилось перезапускать. Поднятый туннель можно
+  // только остановить (down) — повторный up не имеет смысла.
+  if ((await wgInterfaces()).includes(iface)) {
+    return {
+      ok: false,
+      alreadyUp: true,
+      error: `Туннель ${iface} уже поднят — повторное включение не требуется. Если нужно переподключить: сначала «Остановить», затем «Поднять».`,
+      notes,
+    }
+  }
+  const confPath = `${WG_DIR}/${iface}.conf`
   // адреса контейнера захватываем ДО подъёма туннеля, пока таблица main чиста;
   // для full-tunnel они понадобятся, чтобы исключить трафик web UI из туннеля
   const fullTunnel = isFullTunnelConfig(config)

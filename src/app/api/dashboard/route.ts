@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ensureSeed, getSettings } from '@/lib/engine/service'
+import { maybeStartCleanupScheduler } from '@/lib/engine/cleanup'
 import { wgStatus } from '@/lib/engine/vpn'
 import { apiError } from '@/lib/api-error'
 import { guard, sanitizeSettings } from '@/lib/security/guard'
@@ -12,6 +13,8 @@ export async function GET(req: NextRequest) {
   if (g instanceof NextResponse) return g
   try {
     await ensureSeed()
+    // cron проверки диска (пороги/автоочистка) поднимается один раз на процесс
+    maybeStartCleanupScheduler()
     const [sources, builds, settings, logs, ruleAgg] = await Promise.all([
       db.source.findMany({ orderBy: [{ enabled: 'desc' }, { priority: 'asc' }] }),
       db.build.findFirst({ orderBy: { createdAt: 'desc' } }),

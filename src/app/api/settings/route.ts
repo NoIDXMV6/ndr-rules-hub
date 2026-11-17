@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSettings, setSetting, reinitScheduler } from '@/lib/engine/service'
+import { reinitCleanupScheduler } from '@/lib/engine/cleanup'
 import { apiError } from '@/lib/api-error'
 import { guard, sanitizeSettings } from '@/lib/security/guard'
 
@@ -27,6 +28,7 @@ export async function PUT(req: NextRequest) {
       await setSetting(k, String(v))
     }
     await reinitScheduler()
+    await reinitCleanupScheduler().catch(() => undefined) // cron очистки диска — тоже по настройкам
     return NextResponse.json({ ok: true, settings: await getSettings() })
   } catch (e) {
     return apiError(e)

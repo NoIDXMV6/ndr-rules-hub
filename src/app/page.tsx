@@ -19,6 +19,7 @@ import { UsersTab } from '@/components/hub/users-tab'
 import { HelpTab } from '@/components/hub/help-tab'
 import { AboutTab } from '@/components/hub/about-tab'
 import { AuthScreen } from '@/components/hub/auth-screen'
+import { SystemPanel } from '@/components/hub/system-panel'
 import { api, Dashboard, fmtSize, fmtTime, type Me } from '@/components/hub/api'
 import { useI18n, type Dictionary, type Lang } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -186,7 +187,7 @@ export default function Home() {
           <MenuBar value={tab} onValue={setTab} isAdmin={isAdmin} showUsers={showUsersTab} />
 
           <TabsContent value="overview" className="mt-4">
-            <Overview data={data} onRefresh={refresh} role={role} />
+            <Overview data={data} onRefresh={refresh} role={role} onSettings={() => setTab('settings')} />
           </TabsContent>
           <TabsContent value="sources" className="mt-4">
             <SourcesTab data={data} onChange={refresh} role={role} selfId={me.user?.id} />
@@ -445,7 +446,7 @@ function StatCard({ title, value, sub, icon }: { title: string; value: string; s
   )
 }
 
-function Overview({ data, onRefresh, role }: { data: Dashboard | null; onRefresh: () => void; role: Role }) {
+function Overview({ data, onRefresh, role, onSettings }: { data: Dashboard | null; onRefresh: () => void; role: Role; onSettings: () => void }) {
   const { t, tr, lang, loc } = useI18n()
   if (!data) {
     return (
@@ -463,6 +464,9 @@ function Overview({ data, onRefresh, role }: { data: Dashboard | null; onRefresh
         <StatCard title={t.overview.statRulesBuild} value={b ? b.totalRules.toLocaleString(loc) : '—'} sub={b ? `${b.fileName} · ${fmtSize(b.sizeBytes, lang)}` : t.overview.statRulesBuildSubNo} icon={<Layers className="h-3.5 w-3.5" />} />
         <StatCard title={t.overview.statDups} value={b ? (b.stats.duplicateBySid + b.stats.duplicateByContent).toLocaleString(loc) : '—'} sub={b ? tr(t.overview.statDupsSub, { sid: b.stats.duplicateBySid.toLocaleString(loc), content: b.stats.duplicateByContent.toLocaleString(loc) }) : ''} icon={<Activity className="h-3.5 w-3.5" />} />
       </div>
+
+      {/* ── Системные дашборды: сервер/диски/контейнеры/сеть/туннель/очистка — только администратору (API /api/system — admin) ── */}
+      {role === 'admin' && <SystemPanel onSettings={onSettings} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card className="bg-card border-border">

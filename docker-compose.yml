@@ -25,15 +25,19 @@ services:
       - NDR_EDITION=${NDR_EDITION:-community}
     volumes:
       # данные сервиса: БД, кэш архивов, итоговые файлы, WireGuard-конфиги,
-      # метаданные прогонов обновления Clear NDR
+      # метаданные прогонов обновления Clear NDR, файлы окружения Gotify
       - ./data:/app/data
+      # docker.sock (read-only): список контейнеров на «Обзоре», автоочистка
+      # OpenSearch через docker exec, развёртывание своего сервера Gotify.
+      # Если это не нужно — строку можно убрать (мониторинг покажет подсказку).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       # при экспорте режиме local-path можно указать каталог самого Clear NDR:
       # - /srv/clearndr/rules-import:/mnt/clearndr
       # Раздел «Обновление Clear NDR» и «Дашборды OpenSearch»: по умолчанию
       # работает по SSH (скрипт запускается на хосте) — ничего докручивать не
       # нужно (укажите хост/ключ на вкладке). Режим «local» (хаб в контейнере
-      # на хосте с Clear NDR, скрипты прямо из контейнера) — раскомментируйте:
-      #   - /var/run/docker.sock:/var/run/docker.sock
+      # на хосте с Clear NDR, скрипты прямо из контейнера): docker.sock уже
+      # смонтирован выше — раскомментируйте только каталог инстанса:
       #   - /opt/ClearNDR:/opt/ClearNDR      # путь на хосте = путь в контейнере
       # docker CLI, python3 и stamusctl (amd64) уже входят в образ; healthUrl
       # укажите доступный из контейнера (например https://172.17.0.1/);

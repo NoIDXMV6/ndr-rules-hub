@@ -43,7 +43,7 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
   const [vpn, setVpn] = useState<VpnState | null>(null)
   const [name, setName] = useState('wg0')
   const [config, setConfig] = useState('')
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string; info?: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
   // true — последняя попытка загрузки статуса не дошла до API (сервер недоступен,
   // например web UI «завёрнут» в full-tunnel туннель). Карточки при этом НЕ должны
@@ -102,6 +102,14 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
         return
       }
       const notes = (r.notes as string[] | undefined) ?? []
+      if (r.alreadyUp) {
+        // сервер отклонил повторный up (409): туннель уже поднят — это не ошибка,
+        // а подсказка: поднятый туннель можно только остановить
+        setMsg({ ok: false, info: true, text: (r.error as string) ?? t.vpn.upBlocked })
+        await load()
+        onChange()
+        return
+      }
       setMsg({ ok: false, text: ((r.error as string) ?? t.vpn.msgError) + (notes.length ? `\n${notes.join('\n')}` : '') })
       await load()
       onChange()
@@ -126,6 +134,12 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
   }
 
   const tools = vpn?.tools
+
+  // Реальное состояние интерфейса в редакторе: имя из комментария
+  // «# InterfaceName:» (как его понимает сервер) или имя профиля; проверяем
+  // по списку поднятых интерфейсов — кнопки следуют факту, а не флагу в БД
+  const editorIface = config.match(/^#\s*InterfaceName\s*[:=]\s*(\S+)/m)?.[1] ?? (name || 'wg0')
+  const editorUp = !!vpn?.interfaces.some((i) => i.name === editorIface)
 
   return (
     <div className="space-y-4">
@@ -193,12 +207,29 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
             <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" onClick={save} disabled={busy || !config || !name}>
               <Save className="h-4 w-4 mr-1.5" /> {t.vpn.save}
             </Button>
-            <Button variant="outline" className="border-emerald-300 text-emerald-700" onClick={() => act('up', { config, name })} disabled={busy || !config}>
+            <Button
+              variant="outline"
+              className="border-emerald-300 text-emerald-700"
+              onClick={() => act('up', { config, name })}
+              disabled={busy || !config || editorUp}
+              title={editorUp ? tr(t.vpn.upDisabledHint, { iface: editorIface }) : undefined}
+            >
               <Play className="h-4 w-4 mr-1.5" /> {t.vpn.up}
             </Button>
-            <Button variant="outline" className="border-red-300 text-red-600" onClick={() => act('down', { name })} disabled={busy}>
+            <Button
+              variant="outline"
+              className="border-red-300 text-red-600"
+              onClick={() => act('down', { name: editorIface })}
+              disabled={busy || !editorUp}
+            >
               <Power className="h-4 w-4 mr-1.5" /> {t.vpn.down}
             </Button>
+            {editorUp && (
+              <span className="inline-flex items-center text-xs text-emerald-700 gap-1.5">
+                <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                {tr(t.vpn.upActive, { iface: editorIface })}
+              </span>
+            )}
           </div>
           <Textarea
             value={config}
@@ -214,6 +245,8 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
           </div>
           {msg && (msg.ok ? (
             <p className="text-sm text-emerald-700 whitespace-pre-wrap">{msg.text}</p>
+          ) : msg.info ? (
+            <p className="text-sm text-amber-700 whitespace-pre-wrap rounded-lg border border-amber-300/60 bg-amber-50 p-3">{msg.text}</p>
           ) : (
             <pre className="text-xs text-red-700 whitespace-pre-wrap rounded-lg border border-red-300/60 bg-red-50 p-3 max-h-64 overflow-auto font-mono">{msg.text}</pre>
           ))}
@@ -228,18 +261,40 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
           <CardContent className="space-y-2">
             {vpn.profiles.map((p) => {
               const last = parseLastStatus(p.lastStatusJson)
+              // реальное состояние интерфейса — от API (wg show interfaces);
+              // флаг active в БД отражает последнюю операцию и может отставать
+              const iface = p.iface ?? p.name
+              const up = p.ifaceUp ?? false
               return (
               <div key={p.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-3">
                 <span className="font-mono text-emerald-700">{p.name}</span>
-                <Badge variant="outline" className={p.active ? 'border-emerald-300 text-emerald-700' : 'border-input text-muted-foreground'}>
-                  {p.active ? t.vpn.active : t.vpn.inactive}
+                <Badge
+                  variant="outline"
+                  className={up ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-input text-muted-foreground'}
+                  title={up ? t.vpn.stateUpHint : t.vpn.stateDownHint}
+                >
+                  {up ? t.vpn.stateUp : t.vpn.inactive}
                 </Badge>
                 <span className="text-xs text-muted-foreground">{tr(t.vpn.checkedAt, { t: fmtTime(p.lastCheckAt, lang) })}</span>
                 <div className="ml-auto flex gap-1">
-                  <Button size="sm" variant="outline" className="h-8 border-emerald-300 text-emerald-700" onClick={() => act('up', { id: p.id })} disabled={busy}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 border-emerald-300 text-emerald-700"
+                    onClick={() => act('up', { id: p.id })}
+                    disabled={busy || up}
+                    title={up ? tr(t.vpn.upDisabledHint, { iface }) : undefined}
+                  >
                     <Play className="h-3.5 w-3.5" />
                   </Button>
-                  <Button size="sm" variant="outline" className="h-8 border-red-300 text-red-600" onClick={() => act('down', { name: p.name, id: p.id })} disabled={busy}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 border-red-300 text-red-600"
+                    onClick={() => act('down', { name: iface, id: p.id })}
+                    disabled={busy || !up}
+                    title={!up ? t.vpn.downDisabledHint : undefined}
+                  >
                     <ShieldOff className="h-3.5 w-3.5" />
                   </Button>
                   <Button size="sm" variant="outline" className="h-8 border-input text-foreground" onClick={() => { setName(p.name); setConfig(p.config) }}>

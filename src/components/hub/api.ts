@@ -59,6 +59,10 @@ export interface VpnState {
     lastCheckAt: string | null
     config: string
     lastStatusJson?: string | null
+    /** имя интерфейса из конфига (# InterfaceName: или wg0) */
+    iface?: string
+    /** реальное состояние: интерфейс есть в `wg show interfaces` */
+    ifaceUp?: boolean
   }>
 }
 
@@ -131,6 +135,113 @@ export interface Dashboard {
   logs: Array<{ id: number; ts: string; level: string; scope: string; message: string }>
 }
 
+// ── Системный мониторинг («Обзор») ───────────────────────────────────────────
+
+export interface CpuInfo {
+  usagePct: number
+  load1: number
+  load5: number
+  load15: number
+  cores: number
+}
+
+export interface MemInfo {
+  totalMb: number
+  freeMb: number
+  availableMb: number
+  usedMb: number
+  usedPct: number
+}
+
+export interface DiskInfo {
+  fs: string
+  type: string
+  mount: string
+  totalMb: number
+  usedMb: number
+  freeMb: number
+  usedPct: number
+  isData: boolean
+}
+
+export interface NetIface {
+  iface: string
+  rxBytes: number
+  txBytes: number
+  up: boolean
+}
+
+export interface ContainersInfo {
+  available: boolean
+  error?: string
+  hint?: string
+  list: Array<{ name: string; image: string; status: string; state: string; up: boolean; isHub: boolean }>
+}
+
+export interface CleanupAction {
+  cleaner: string
+  ok: boolean
+  dryRun: boolean
+  detail: string
+  freedBytes: number
+  items?: string[]
+  skipped?: string
+}
+
+export interface CleanupReport {
+  dryRun: boolean
+  triggeredBy: string
+  startedAt: string
+  finishedAt: string
+  freedBytes: number
+  diskBefore: { mount: string; usedPct: number; freeMb: number } | null
+  diskAfter: { mount: string; usedPct: number; freeMb: number } | null
+  actions: CleanupAction[]
+}
+
+export interface CleanupSettingsUi {
+  autoEnabled: boolean
+  schedule: string
+  triggerPct: number
+  freeTargetPct: number
+  osEnabled: boolean
+  osKeepDays: number
+  osPrefixes: string[]
+  osMaxDelete: number
+  osUrl: string
+  cacheEnabled: boolean
+  cacheKeepDays: number
+  logsEnabled: boolean
+  logDirs: string[]
+  logKeepDays: number
+  filesEnabled: boolean
+  fileDirs: string[]
+  largeFileMb: number
+  fileKeepDays: number
+  filesDelete: boolean
+  diskWarnPct: number
+  diskCriticalPct: number
+}
+
+export interface SystemStats {
+  ts: string
+  uptimeSec: number
+  cpu: CpuInfo
+  mem: MemInfo
+  disks: DiskInfo[]
+  net: NetIface[]
+  containers: ContainersInfo
+  wg: WgState
+  cleanup: { lastRun: CleanupReport | null; settings: CleanupSettingsUi }
+  notify: null | {
+    telegram: { enabled: boolean; configured: boolean }
+    gotify: { enabled: boolean; configured: boolean }
+  }
+}
+
+// алиас, чтобы не ломать существующие импорты
+export type WgState = VpnState
+
 async function j<T>(res: Response): Promise<T> {
   // читаем тело как текст: при 500 от Next.js оно может быть не-JSON,
   // и важно показать пользователю реальную причину, а не безликий «HTTP 500»
@@ -184,6 +295,14 @@ export const api = {
     fetch('/api/vpn', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, config }) }).then((r) => j<{ profile: { id: string } }>(r)),
   vpnDelete: (id: string) => fetch(`/api/vpn?id=${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   logs: (take = 200) => fetch(`/api/logs?take=${take}`, { cache: 'no-store' }).then((r) => j<{ logs: Dashboard['logs'] }>(r)),
+  // системный мониторинг («Обзор») и очистка диска
+  system: () => fetch('/api/system', { cache: 'no-store' }).then((r) => j<SystemStats>(r)),
+  systemAction: (body: Record<string, unknown>) =>
+    fetch('/api/system', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<{ ok: boolean; report?: CleanupReport; ran?: boolean; notified?: string; error?: string }>(r)),
+  // уведомления: тест канала, развёртывание Gotify
+  notifyAction: (body: Record<string, unknown>) =>
+    fetch('/api/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
+  notifyState: () => fetch('/api/notify', { cache: 'no-store' }).then((r) => j<{ gotify: { containerRunning: boolean; url?: string; port: number } }>(r)),
   // обновление Clear NDR
   updateStatus: () => fetch('/api/clearndr-update', { cache: 'no-store' }).then((r) => j<UpdateStatus>(r)),
   updateRun: (runId: string, tail = 24000) => fetch(`/api/clearndr-update?log=${encodeURIComponent(runId)}&tail=${tail}`, { cache: 'no-store' }).then((r) => j<UpdateRunStatus>(r)),

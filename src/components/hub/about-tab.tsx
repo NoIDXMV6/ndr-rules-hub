@@ -8,7 +8,7 @@ import { TECH, TechItem } from './tech-logos'
 import { Rich } from './rich'
 import { useI18n, type Lang } from '@/lib/i18n'
 
-export const APP_VERSION = '1.16.0' // синхронно с релизом (package.json)
+export const APP_VERSION = '1.17.0' // синхронно с релизом (package.json)
 
 const REPO = 'https://github.com/NoIDXMV6/ndr-rules-hub'
 const AUTHOR_SITE = 'https://kozhevatov.ru'
@@ -92,8 +92,8 @@ function sections(lang: Lang, techNote: string): AboutSection[] {
         <div className="space-y-2 text-sm leading-relaxed">
           <p>
             {ru
-              ? 'Сервис автоматизирует полный цикл работы с наборами правил Snort/Suricata для Clear NDR: каталог из 36 преднастроенных источников, конвертация Snort 2/3 → Suricata, дедупликация и устранение конфликтов SID, фильтр совместимости, управление категориями и отдельными правилами, сборка с SHA-256 и доставкой в Clear NDR (вручную, PUSH через REST API, PULL по URL с tgz-архивом и токенами). Плюс: валидированный офлайн-пакет (цикл suricata -T), WireGuard VPN, наполнение дашбордов OpenSearch, обновление Clear NDR одним кликом и многопользовательский режим (Enterprise) с токенами скачивания и защитой от перебора.'
-              : 'The service automates the full cycle of working with Snort/Suricata rulesets for Clear NDR: a catalog of 36 preconfigured sources, Snort 2/3 → Suricata conversion, deduplication and SID conflict handling, a compatibility filter, category and per-rule management, builds with SHA-256 and delivery to Clear NDR (manual, PUSH via REST API, PULL by URL with a tgz archive and tokens). Plus: a validated offline package (suricata -T loop), WireGuard VPN, OpenSearch dashboards population, one-click Clear NDR updates, and a multi-user mode (Enterprise) with download tokens and brute-force protection.'}
+              ? 'Сервис автоматизирует полный цикл работы с наборами правил Snort/Suricata для Clear NDR: каталог из 36 преднастроенных источников, конвертация Snort 2/3 → Suricata, дедупликация и устранение конфликтов SID, фильтр совместимости, управление категориями и отдельными правилами, сборка с SHA-256 и доставкой в Clear NDR (вручную, PUSH через REST API, PULL по URL с tgz-архивом и токенами). Плюс: валидированный офлайн-пакет (цикл suricata -T), WireGuard VPN с защитой от повторного включения туннеля, системные дашборды (CPU/память/диски/контейнеры/сеть) с автоочисткой диска при нехватке места, уведомления Telegram (с прокси) и Gotify (включая авторазвёртывание своего сервера), наполнение дашбордов OpenSearch, обновление Clear NDR одним кликом и многопользовательский режим (Enterprise) с токенами скачивания и защитой от перебора.'
+              : 'The service automates the full cycle of working with Snort/Suricata rulesets for Clear NDR: a catalog of 36 preconfigured sources, Snort 2/3 → Suricata conversion, deduplication and SID conflict handling, a compatibility filter, category and per-rule management, builds with SHA-256 and delivery to Clear NDR (manual, PUSH via REST API, PULL by URL with a tgz archive and tokens). Plus: a validated offline package (suricata -T loop), WireGuard VPN with re-raise protection, system dashboards (CPU/memory/disks/containers/network) with automatic disk cleanup when space runs low, Telegram (with proxy) and Gotify notifications (including auto-deploying your own server), OpenSearch dashboards population, one-click Clear NDR updates, and a multi-user mode (Enterprise) with download tokens and brute-force protection.'}
           </p>
           <ul className="space-y-1">
             <Li>{ru ? 'исходный код и релизы: ' : 'source code and releases: '} <A href={REPO}>github.com/NoIDXMV6/ndr-rules-hub</A>;</Li>

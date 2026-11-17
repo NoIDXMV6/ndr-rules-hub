@@ -2,329 +2,2383 @@
   "openapi": "3.1.0",
   "info": {
     "title": "NDR Rules Hub API",
-    "version": "1.16.0",
+    "version": "1.17.0",
     "summary": "Управление источниками правил Snort/Suricata и экспорт в Clear NDR",
     "description": "REST API NDR Rules Hub.\n\nРедакции: **Community** (однопользовательский режим, без аутентификации) и **Enterprise** (многопользовательский режим: регистрация, верификация администратором, личный кабинет, персональные токены скачивания).\n\nСхемы безопасности:\n- `sessionCookie` — cookie `ndrh_sid` (HttpOnly, SameSite=Lax, Secure), выдаётся POST /api/auth/login. Enterprise: все эндпоинты кроме `/api`, `/api/health`, `/api/auth/*` и `GET /api/export` требуют сессию; помеченные «только администратор» — роль admin.\n- `downloadToken` — персональный токен `ndrt_…` (?token= или Authorization) или глобальный ключ отдачи serveToken — только для GET /api/export (PULL-схема Clear NDR).\n\nЗащита: rate limit по IP на каждом эндпоинте (429 + Retry-After), анти-брутфорс (вход, ключи отдачи, токены), очередь тяжёлых операций (429 при переполнении), троттлинг канала для отдачи файлов, CSRF-проверка Origin/Sec-Fetch-Site для state-changing запросов браузера, scrypt-пароли, SHA-256 токенов в БД.",
-    "contact": { "name": "Павел Кожеватов", "url": "https://kozhevatov.ru" },
+    "contact": {
+      "name": "Павел Кожеватов",
+      "url": "https://kozhevatov.ru"
+    },
     "x-repository": "https://github.com/NoIDXMV6/ndr-rules-hub",
     "x-editions": {
       "community": "Многопользовательский режим выключен: /api/auth/* возвращает 404, guard пропускает всех (как в однопользовательской версии).",
       "enterprise": "Многопользовательский режим: регистрация (первый пользователь — администратор), верификация, роли, персональные токены скачивания."
     }
   },
-  "servers": [{ "url": "/", "description": "Тот же origin, что и Web UI (в Docker — порт 3000, за Caddy — 443)" }],
-  "tags": [
-    { "name": "system" }, { "name": "dashboard" }, { "name": "sources" }, { "name": "rules" },
-    { "name": "categories" }, { "name": "build" }, { "name": "export" }, { "name": "settings" },
-    { "name": "logs" }, { "name": "vpn" }, { "name": "clearndr-update" }, { "name": "clearndr-osd" },
-    { "name": "auth" }, { "name": "users" }, { "name": "tokens" }
+  "servers": [
+    {
+      "url": "/",
+      "description": "Тот же origin, что и Web UI (в Docker — порт 3000, за Caddy — 443)"
+    }
   ],
-  "security": [{ "sessionCookie": [] }],
+  "tags": [
+    {
+      "name": "system"
+    },
+    {
+      "name": "dashboard"
+    },
+    {
+      "name": "sources"
+    },
+    {
+      "name": "rules"
+    },
+    {
+      "name": "categories"
+    },
+    {
+      "name": "build"
+    },
+    {
+      "name": "export"
+    },
+    {
+      "name": "settings"
+    },
+    {
+      "name": "logs"
+    },
+    {
+      "name": "vpn"
+    },
+    {
+      "name": "clearndr-update"
+    },
+    {
+      "name": "clearndr-osd"
+    },
+    {
+      "name": "auth"
+    },
+    {
+      "name": "users"
+    },
+    {
+      "name": "tokens"
+    }
+  ],
+  "security": [
+    {
+      "sessionCookie": []
+    }
+  ],
   "components": {
     "securitySchemes": {
-      "sessionCookie": { "type": "apiKey", "in": "cookie", "name": "ndrh_sid", "description": "Сессия веб-интерфейса (Enterprise). Выдаётся POST /api/auth/login." },
-      "downloadToken": { "type": "apiKey", "in": "query", "name": "token", "description": "Токен скачивания ndrt_… или глобальный ключ serveToken. Альтернатива — заголовок Authorization: <токен> / Bearer <токен> / Token <токен> (scirius отправляет authkey источника)." }
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "ndrh_sid",
+        "description": "Сессия веб-интерфейса (Enterprise). Выдаётся POST /api/auth/login."
+      },
+      "downloadToken": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "token",
+        "description": "Токен скачивания ndrt_… или глобальный ключ serveToken. Альтернатива — заголовок Authorization: <токен> / Bearer <токен> / Token <токен> (scirius отправляет authkey источника)."
+      }
     },
     "schemas": {
-      "Error": { "type": "object", "properties": { "error": { "type": "string" } }, "required": ["error"] },
-      "Ok": { "type": "object", "properties": { "ok": { "type": "boolean", "const": true } }, "required": ["ok"] },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Ok": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
       "Source": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" }, "name": { "type": "string" },
-          "category": { "type": "string", "enum": ["ruleset", "ip-list", "domain-list", "url-list"] },
-          "kind": { "type": "string", "enum": ["url", "tarball", "local"] },
-          "url": { "type": "string", "nullable": true },
-          "format": { "type": "string", "enum": ["auto", "snort2", "snort3", "suricata"] },
-          "authType": { "type": "string", "enum": ["none", "oinkcode", "authkey", "basic"] },
-          "extraJson": { "type": "string", "nullable": true, "description": "Настройки конвертера/авторизации (JSON)" },
-          "enabled": { "type": "boolean" }, "priority": { "type": "integer" },
-          "status": { "type": "string", "enum": ["ok", "error", "never"] },
-          "lastFetchAt": { "type": "string", "format": "date-time", "nullable": true },
-          "lastError": { "type": "string", "nullable": true },
-          "ruleCount": { "type": "integer" }, "sizeBytes": { "type": "integer" },
-          "badge": { "type": "string", "nullable": true, "description": "recommended | duplicate | legacy | paid | converter | unavailable" },
-          "notes": { "type": "string", "nullable": true },
-          "builtin": { "type": "boolean" },
-          "ownerId": { "type": "string", "nullable": true, "description": "Enterprise: владелец («свои источники»); null — общий/каталог" },
-          "deletedAt": { "type": "string", "format": "date-time", "nullable": true, "description": "не null — источник в корзине" }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "ruleset",
+              "ip-list",
+              "domain-list",
+              "url-list"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "url",
+              "tarball",
+              "local"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "snort2",
+              "snort3",
+              "suricata"
+            ]
+          },
+          "authType": {
+            "type": "string",
+            "enum": [
+              "none",
+              "oinkcode",
+              "authkey",
+              "basic"
+            ]
+          },
+          "extraJson": {
+            "type": "string",
+            "nullable": true,
+            "description": "Настройки конвертера/авторизации (JSON)"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "error",
+              "never"
+            ]
+          },
+          "lastFetchAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          },
+          "ruleCount": {
+            "type": "integer"
+          },
+          "sizeBytes": {
+            "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "nullable": true,
+            "description": "recommended | duplicate | legacy | paid | converter | unavailable"
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "builtin": {
+            "type": "boolean"
+          },
+          "ownerId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Enterprise: владелец («свои источники»); null — общий/каталог"
+          },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "не null — источник в корзине"
+          }
         }
       },
       "Rule": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer" }, "sid": { "type": "integer" }, "rev": { "type": "integer" },
-          "action": { "type": "string" }, "proto": { "type": "string" },
-          "msg": { "type": "string", "nullable": true }, "raw": { "type": "string" },
-          "suricataOk": { "type": "boolean" }, "compatNotes": { "type": "string", "nullable": true },
-          "sourceName": { "type": "string" }
+          "id": {
+            "type": "integer"
+          },
+          "sid": {
+            "type": "integer"
+          },
+          "rev": {
+            "type": "integer"
+          },
+          "action": {
+            "type": "string"
+          },
+          "proto": {
+            "type": "string"
+          },
+          "msg": {
+            "type": "string",
+            "nullable": true
+          },
+          "raw": {
+            "type": "string"
+          },
+          "suricataOk": {
+            "type": "boolean"
+          },
+          "compatNotes": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceName": {
+            "type": "string"
+          }
         }
       },
       "Category": {
         "type": "object",
         "properties": {
-          "id": { "type": "string", "nullable": true }, "name": { "type": "string" },
-          "label": { "type": "string", "nullable": true }, "enabled": { "type": "boolean" },
-          "hidden": { "type": "boolean" }, "rules": { "type": "integer" },
-          "sources": { "type": "integer" }, "known": { "type": "boolean" }
+          "id": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "rules": {
+            "type": "integer"
+          },
+          "sources": {
+            "type": "integer"
+          },
+          "known": {
+            "type": "boolean"
+          }
         }
       },
       "BuildStats": {
         "type": "object",
         "properties": {
-          "totalInputRules": { "type": "integer" }, "uniqueSids": { "type": "integer" },
-          "duplicateBySid": { "type": "integer" }, "duplicateByContent": { "type": "integer" },
-          "incompatibleDropped": { "type": "integer" }, "renumbered": { "type": "integer" },
-          "conflictingRemoved": { "type": "integer" }, "sanitizedForScirius": { "type": "integer" },
-          "excludedByCategory": { "type": "integer" }, "excludedByRule": { "type": "integer" },
-          "archive": { "type": "object", "nullable": true, "properties": { "fileName": { "type": "string" }, "filePath": { "type": "string" }, "sizeBytes": { "type": "integer" }, "files": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "rules": { "type": "integer" }, "sha256": { "type": "string" } } } } } },
-          "perSource": { "type": "object", "additionalProperties": { "type": "object", "properties": { "total": { "type": "integer" }, "kept": { "type": "integer" }, "droppedSid": { "type": "integer" }, "droppedContent": { "type": "integer" }, "droppedCompat": { "type": "integer" } } } }
+          "totalInputRules": {
+            "type": "integer"
+          },
+          "uniqueSids": {
+            "type": "integer"
+          },
+          "duplicateBySid": {
+            "type": "integer"
+          },
+          "duplicateByContent": {
+            "type": "integer"
+          },
+          "incompatibleDropped": {
+            "type": "integer"
+          },
+          "renumbered": {
+            "type": "integer"
+          },
+          "conflictingRemoved": {
+            "type": "integer"
+          },
+          "sanitizedForScirius": {
+            "type": "integer"
+          },
+          "excludedByCategory": {
+            "type": "integer"
+          },
+          "excludedByRule": {
+            "type": "integer"
+          },
+          "archive": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "fileName": {
+                "type": "string"
+              },
+              "filePath": {
+                "type": "string"
+              },
+              "sizeBytes": {
+                "type": "integer"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "rules": {
+                      "type": "integer"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "perSource": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "total": {
+                  "type": "integer"
+                },
+                "kept": {
+                  "type": "integer"
+                },
+                "droppedSid": {
+                  "type": "integer"
+                },
+                "droppedContent": {
+                  "type": "integer"
+                },
+                "droppedCompat": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
         }
       },
       "Build": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" }, "createdAt": { "type": "string", "format": "date-time" },
-          "totalRules": { "type": "integer" }, "fileName": { "type": "string" },
-          "filePath": { "type": "string" }, "sha256": { "type": "string" },
-          "sizeBytes": { "type": "integer" }, "source": { "type": "string", "description": "manual | cron" },
-          "stats": { "$ref": "#/components/schemas/BuildStats" }
+          "id": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "totalRules": {
+            "type": "integer"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "filePath": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string",
+            "description": "manual | cron"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/BuildStats"
+          }
         }
       },
       "Dashboard": {
         "type": "object",
         "properties": {
-          "sources": { "type": "object", "properties": { "total": { "type": "integer" }, "enabled": { "type": "integer" }, "ok": { "type": "integer" }, "error": { "type": "integer" }, "trash": { "type": "integer" }, "list": { "type": "array", "items": { "$ref": "#/components/schemas/Source" } } } },
-          "rules": { "type": "object", "properties": { "inDb": { "type": "integer" }, "inBuild": { "type": "integer" } } },
-          "lastBuild": { "oneOf": [{ "$ref": "#/components/schemas/Build" }, { "type": "null" }] },
-          "settings": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Для не-администраторов секреты (serveToken, oinkcode, abusechAuthKey, clearndrExportToken) вырезаны" },
-          "vpn": { "$ref": "#/components/schemas/VpnState" },
-          "logs": { "type": "array", "items": { "$ref": "#/components/schemas/LogEntry" } }
+          "sources": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer"
+              },
+              "enabled": {
+                "type": "integer"
+              },
+              "ok": {
+                "type": "integer"
+              },
+              "error": {
+                "type": "integer"
+              },
+              "trash": {
+                "type": "integer"
+              },
+              "list": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Source"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "object",
+            "properties": {
+              "inDb": {
+                "type": "integer"
+              },
+              "inBuild": {
+                "type": "integer"
+              }
+            }
+          },
+          "lastBuild": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Build"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Для не-администраторов секреты (serveToken, oinkcode, abusechAuthKey, clearndrExportToken) вырезаны"
+          },
+          "vpn": {
+            "$ref": "#/components/schemas/VpnState"
+          },
+          "logs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogEntry"
+            }
+          }
         }
       },
       "LogEntry": {
         "type": "object",
-        "properties": { "id": { "type": "integer" }, "ts": { "type": "string", "format": "date-time" }, "level": { "type": "string", "enum": ["info", "warn", "error", "success"] }, "scope": { "type": "string" }, "message": { "type": "string" } }
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warn",
+              "error",
+              "success"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
       },
       "VpnState": {
         "type": "object",
-        "properties": { "available": { "type": "boolean" }, "error": { "type": "string", "nullable": true }, "interfaces": { "type": "array", "items": { "type": "object" } } }
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "interfaces": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
       },
       "Me": {
         "type": "object",
         "properties": {
-          "edition": { "type": "string", "enum": ["community", "enterprise"] },
-          "multiUser": { "type": "boolean" },
-          "authenticated": { "type": "boolean" },
-          "user": { "oneOf": [{ "$ref": "#/components/schemas/User" }, { "type": "null" }] },
-          "needsBootstrap": { "type": "boolean", "description": "Enterprise: пользователей нет — первый зарегистрированный станет администратором" },
-          "registrationOpen": { "type": "boolean" }
+          "edition": {
+            "type": "string",
+            "enum": [
+              "community",
+              "enterprise"
+            ]
+          },
+          "multiUser": {
+            "type": "boolean"
+          },
+          "authenticated": {
+            "type": "boolean"
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/User"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "needsBootstrap": {
+            "type": "boolean",
+            "description": "Enterprise: пользователей нет — первый зарегистрированный станет администратором"
+          },
+          "registrationOpen": {
+            "type": "boolean"
+          }
         }
       },
       "User": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" }, "email": { "type": "string", "format": "email" },
-          "displayName": { "type": "string" }, "role": { "type": "string", "enum": ["admin", "user"] },
-          "status": { "type": "string", "enum": ["pending", "active", "disabled"] },
-          "verifiedAt": { "type": "string", "format": "date-time", "nullable": true },
-          "verifiedBy": { "type": "string", "nullable": true },
-          "lastLoginAt": { "type": "string", "format": "date-time", "nullable": true },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "lockedUntil": { "type": "string", "format": "date-time", "nullable": true },
-          "activeSessions": { "type": "integer" }, "tokens": { "type": "integer" }
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "user"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "active",
+              "disabled"
+            ]
+          },
+          "verifiedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "verifiedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastLoginAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lockedUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "activeSessions": {
+            "type": "integer"
+          },
+          "tokens": {
+            "type": "integer"
+          }
         }
       },
       "AuthEvent": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer" }, "ts": { "type": "string", "format": "date-time" },
-          "kind": { "type": "string", "description": "register | login_ok | login_fail | login_lock | login_pending | login_disabled | logout | verify | disable | enable | role_change | delete_user | token_create | token_revoke | download | download_denied | ratelimit | queue_full" },
-          "email": { "type": "string", "nullable": true }, "userId": { "type": "string", "nullable": true },
-          "ip": { "type": "string", "nullable": true }, "detail": { "type": "string", "nullable": true }
+          "id": {
+            "type": "integer"
+          },
+          "ts": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kind": {
+            "type": "string",
+            "description": "register | login_ok | login_fail | login_lock | login_pending | login_disabled | logout | verify | disable | enable | role_change | delete_user | token_create | token_revoke | download | download_denied | ratelimit | queue_full"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "userId": {
+            "type": "string",
+            "nullable": true
+          },
+          "ip": {
+            "type": "string",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          }
         }
       },
       "DownloadToken": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" }, "name": { "type": "string" },
-          "prefix": { "type": "string", "description": "Первые 12 символов; полный токен показывается один раз при создании" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "expiresAt": { "type": "string", "format": "date-time", "nullable": true },
-          "revokedAt": { "type": "string", "format": "date-time", "nullable": true },
-          "lastUsedAt": { "type": "string", "format": "date-time", "nullable": true },
-          "lastIp": { "type": "string", "nullable": true },
-          "downloadCount": { "type": "integer" }, "bytesServed": { "type": "integer" },
-          "owner": { "type": "string" }, "ownerName": { "type": "string" }, "own": { "type": "boolean" }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Первые 12 символов; полный токен показывается один раз при создании"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastIp": {
+            "type": "string",
+            "nullable": true
+          },
+          "downloadCount": {
+            "type": "integer"
+          },
+          "bytesServed": {
+            "type": "integer"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "ownerName": {
+            "type": "string"
+          },
+          "own": {
+            "type": "boolean"
+          }
         }
       }
     },
     "responses": {
-      "Unauthorized": { "description": "Enterprise: нет действительной сессии", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "Forbidden": { "description": "Недостаточно прав (только администратор) или CSRF-защита", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "TooManyRequests": { "description": "Rate limit / переполнение очереди", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "NotFoundEdition": { "description": "Многопользовательский режим доступен только в редакции Enterprise (в Community — 404)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+      "Unauthorized": {
+        "description": "Enterprise: нет действительной сессии",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Недостаточно прав (только администратор) или CSRF-защита",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Rate limit / переполнение очереди",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFoundEdition": {
+        "description": "Многопользовательский режим доступен только в редакции Enterprise (в Community — 404)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
     }
   },
   "paths": {
     "/api": {
-      "get": { "tags": ["system"], "summary": "Краткая информация о сервисе (без аутентификации)", "responses": { "200": { "description": "Имя сервиса, версия, список API" } } }
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Краткая информация о сервисе (без аутентификации)",
+        "responses": {
+          "200": {
+            "description": "Имя сервиса, версия, список API"
+          }
+        }
+      }
     },
     "/api/health": {
-      "get": { "tags": ["system"], "summary": "Самодиагностика (БД, файлы, версия схемы) — всегда 200", "responses": { "200": { "description": "Отчёт диагностики" } } }
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Самодиагностика (БД, файлы, версия схемы) — всегда 200",
+        "responses": {
+          "200": {
+            "description": "Отчёт диагностики"
+          }
+        }
+      }
     },
     "/api/dashboard": {
-      "get": { "tags": ["dashboard"], "summary": "Состояние: источники, правила, последняя сборка, настройки (без секретов для не-админов), VPN (только админ), журнал", "responses": {
-        "200": { "description": "Состояние хаба", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Dashboard" } } } },
-        "401": { "$ref": "#/components/responses/Unauthorized" }, "429": { "$ref": "#/components/responses/TooManyRequests" }
-      } }
+      "get": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "Состояние: источники, правила, последняя сборка, настройки (без секретов для не-админов), VPN (только админ), журнал",
+        "responses": {
+          "200": {
+            "description": "Состояние хаба",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dashboard"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
     },
     "/api/sources": {
-      "get": { "tags": ["sources"], "summary": "Список источников (включая корзину; ownerId — владелец)", "responses": { "200": { "description": "Источники", "content": { "application/json": { "schema": { "type": "object", "properties": { "sources": { "type": "array", "items": { "$ref": "#/components/schemas/Source" } } } } } } }, "401": { "$ref": "#/components/responses/Unauthorized" } } },
-      "post": { "tags": ["sources"], "summary": "Создать источник (Enterprise: ownerId = текущий пользователь)", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "category", "kind"], "properties": { "name": { "type": "string" }, "category": { "$ref": "#/components/schemas/Source/properties/category" }, "kind": { "$ref": "#/components/schemas/Source/properties/kind" }, "url": { "type": "string" }, "authType": { "$ref": "#/components/schemas/Source/properties/authType" }, "extraJson": { "type": "string" }, "enabled": { "type": "boolean" }, "priority": { "type": "integer" }, "notes": { "type": "string" } } } } } }, "responses": { "200": { "description": "Создан" }, "400": { "description": "Ошибка валидации" }, "401": { "$ref": "#/components/responses/Unauthorized" } } }
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Список источников (включая корзину; ownerId — владелец)",
+        "responses": {
+          "200": {
+            "description": "Источники",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Source"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Создать источник (Enterprise: ownerId = текущий пользователь)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "category",
+                  "kind"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "$ref": "#/components/schemas/Source/properties/category"
+                  },
+                  "kind": {
+                    "$ref": "#/components/schemas/Source/properties/kind"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "authType": {
+                    "$ref": "#/components/schemas/Source/properties/authType"
+                  },
+                  "extraJson": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "priority": {
+                    "type": "integer"
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Создан"
+          },
+          "400": {
+            "description": "Ошибка валидации"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
     },
     "/api/sources/{id}": {
-      "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
-      "patch": { "tags": ["sources"], "summary": "Правка источника (пользователь — только свои; у общих — только enabled)", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" }, "category": { "type": "string" }, "kind": { "type": "string" }, "url": { "type": "string" }, "authType": { "type": "string" }, "extraJson": { "type": "string" }, "enabled": { "type": "boolean" }, "priority": { "type": "integer" }, "badge": { "type": "string", "nullable": true }, "notes": { "type": "string" } } } } } }, "responses": { "200": { "description": "Обновлён" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "description": "Не найден" } } },
-      "delete": { "tags": ["sources"], "summary": "В корзину; ?purge=1 — удалить навсегда (пользователь — только свои)", "parameters": [{ "name": "purge", "in": "query", "schema": { "type": "string", "enum": ["1", "true"] } }], "responses": { "200": { "description": "trashed/purged" }, "403": { "$ref": "#/components/responses/Forbidden" } } },
-      "post": { "tags": ["sources"], "summary": "Синоним загрузки источника (fetch)", "responses": { "200": { "description": "Результат загрузки" }, "429": { "$ref": "#/components/responses/TooManyRequests" } } }
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Правка источника (пользователь — только свои; у общих — только enabled)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "authType": {
+                    "type": "string"
+                  },
+                  "extraJson": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "priority": {
+                    "type": "integer"
+                  },
+                  "badge": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Обновлён"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Не найден"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "В корзину; ?purge=1 — удалить навсегда (пользователь — только свои)",
+        "parameters": [
+          {
+            "name": "purge",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1",
+                "true"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "trashed/purged"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Синоним загрузки источника (fetch)",
+        "responses": {
+          "200": {
+            "description": "Результат загрузки"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
     },
     "/api/sources/{id}/fetch": {
-      "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
-      "post": { "tags": ["sources"], "summary": "Загрузить источник сейчас (лимит 30/мин с IP)", "responses": { "200": { "description": "ok: загружено правил" }, "400": { "description": "Ошибка загрузки" }, "429": { "$ref": "#/components/responses/TooManyRequests" } } }
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Загрузить источник сейчас (лимит 30/мин с IP)",
+        "responses": {
+          "200": {
+            "description": "ok: загружено правил"
+          },
+          "400": {
+            "description": "Ошибка загрузки"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
     },
     "/api/sources/{id}/restore": {
-      "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
-      "post": { "tags": ["sources"], "summary": "Восстановить источник из корзины (пользователь — только свои)", "responses": { "200": { "description": "Восстановлен" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Восстановить источник из корзины (пользователь — только свои)",
+        "responses": {
+          "200": {
+            "description": "Восстановлен"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     },
     "/api/fetch-all": {
-      "post": { "tags": ["sources"], "summary": "Загрузить все включённые источники (через очередь 'fetch')", "responses": { "200": { "description": "{ok, failed, errors}" }, "429": { "$ref": "#/components/responses/TooManyRequests" } } }
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Загрузить все включённые источники (через очередь 'fetch')",
+        "responses": {
+          "200": {
+            "description": "{ok, failed, errors}"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
     },
     "/api/rules": {
-      "get": { "tags": ["rules"], "summary": "Правила БД: фильтры sid/sourceId/q, пагинация", "parameters": [
-        { "name": "sid", "in": "query", "schema": { "type": "integer" } },
-        { "name": "sourceId", "in": "query", "schema": { "type": "string" } },
-        { "name": "q", "in": "query", "schema": { "type": "string" } },
-        { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
-        { "name": "perPage", "in": "query", "schema": { "type": "integer", "default": 50, "maximum": 200 } }
-      ], "responses": { "200": { "description": "{total, page, perPage, rules[]}" } } }
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "summary": "Правила БД: фильтры sid/sourceId/q, пагинация",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "sourceId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "perPage",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{total, page, perPage, rules[]}"
+          }
+        }
+      }
     },
     "/api/categories": {
-      "get": { "tags": ["categories"], "summary": "Категории (classtype) + статистика по активным источникам", "responses": { "200": { "description": "{categories[], totalRules, activeSources, overridesOff, overridesAll}" } } },
-      "post": { "tags": ["categories"], "summary": "Скан правил и группировка по категориям", "responses": { "200": { "description": "{ok, added, categories, totalRules, rows}" }, "429": { "$ref": "#/components/responses/TooManyRequests" } } },
-      "put": { "tags": ["categories"], "summary": "Массовое включение/выключение категорий {enabled}", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["enabled"], "properties": { "enabled": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "{ok, updated}" } } }
+      "get": {
+        "tags": [
+          "categories"
+        ],
+        "summary": "Категории (classtype) + статистика по активным источникам",
+        "responses": {
+          "200": {
+            "description": "{categories[], totalRules, activeSources, overridesOff, overridesAll}"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "categories"
+        ],
+        "summary": "Скан правил и группировка по категориям",
+        "responses": {
+          "200": {
+            "description": "{ok, added, categories, totalRules, rows}"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "categories"
+        ],
+        "summary": "Массовое включение/выключение категорий {enabled}",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "enabled"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ok, updated}"
+          }
+        }
+      }
     },
     "/api/categories/{id}": {
-      "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
-      "patch": { "tags": ["categories"], "summary": "{enabled?, label?, hidden?}", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "enabled": { "type": "boolean" }, "label": { "type": "string", "nullable": true }, "hidden": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Обновлена" } } },
-      "delete": { "tags": ["categories"], "summary": "Скрыть категорию из раздела", "responses": { "200": { "description": "Скрыта" } } }
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "tags": [
+          "categories"
+        ],
+        "summary": "{enabled?, label?, hidden?}",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "label": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "hidden": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Обновлена"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "categories"
+        ],
+        "summary": "Скрыть категорию из раздела",
+        "responses": {
+          "200": {
+            "description": "Скрыта"
+          }
+        }
+      }
     },
     "/api/categories/{id}/rules": {
-      "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
-      "get": { "tags": ["categories"], "summary": "Правила категории: пагинация + поиск (sid или msg) + состояние override", "parameters": [
-        { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
-        { "name": "perPage", "in": "query", "schema": { "type": "integer", "default": 50 } },
-        { "name": "q", "in": "query", "schema": { "type": "string" } }
-      ], "responses": { "200": { "description": "{total, page, perPage, category, rules[]}" } } },
-      "put": { "tags": ["categories"], "summary": "Переключатель правила (RuleOverride) {sid, enabled}", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["sid", "enabled"], "properties": { "sid": { "type": "integer" }, "enabled": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "{ok, override}" } } }
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "categories"
+        ],
+        "summary": "Правила категории: пагинация + поиск (sid или msg) + состояние override",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "perPage",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{total, page, perPage, category, rules[]}"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "categories"
+        ],
+        "summary": "Переключатель правила (RuleOverride) {sid, enabled}",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sid",
+                  "enabled"
+                ],
+                "properties": {
+                  "sid": {
+                    "type": "integer"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ok, override}"
+          }
+        }
+      }
     },
     "/api/build": {
-      "post": { "tags": ["build"], "summary": "Собрать итоговый набор (очередь 'build': 1 за раз); {export: true} — затем PUSH-экспорт", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "export": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Сборка выполнена" }, "400": { "description": "Сборка не выполнена (конфликты, нет источников)" }, "429": { "$ref": "#/components/responses/TooManyRequests" } } }
+      "post": {
+        "tags": [
+          "build"
+        ],
+        "summary": "Собрать итоговый набор (очередь 'build': 1 за раз); {export: true} — затем PUSH-экспорт",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "export": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Сборка выполнена"
+          },
+          "400": {
+            "description": "Сборка не выполнена (конфликты, нет источников)"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
     },
     "/api/export": {
       "get": {
-        "tags": ["export"], "summary": "PULL-схема: отдать последнюю сборку (файл datatype «sig»; ?archive=1 — tgz по источникам datatype «sigs»)",
+        "tags": [
+          "export"
+        ],
+        "summary": "PULL-схема: отдать последнюю сборку (файл datatype «sig»; ?archive=1 — tgz по источникам datatype «sigs»)",
         "description": "Аутентификация (любой из способов): персональный токен ndrt_… (?token=/Authorization), глобальный ключ serveToken, сессия веб-интерфейса; ключ не задан — отдача открыта. Отдача идёт через очередь загрузок и (при настройке downloadBandwidthKbps) через троттлинг канала. Анти-брутфорс ключей: 10 неудач/5мин с IP → 429 на 15 минут. scirius не проверяет HTTP-статус — тексты ошибок внятные.",
-        "security": [{ "downloadToken": [] }, { "sessionCookie": [] }, {}],
+        "security": [
+          {
+            "downloadToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {}
+        ],
         "parameters": [
-          { "name": "archive", "in": "query", "schema": { "type": "string", "enum": ["1"] } },
-          { "name": "token", "in": "query", "schema": { "type": "string" } }
+          {
+            "name": "archive",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Файл правил (text/plain) или архив (application/gzip)", "content": { "text/plain": { "schema": { "type": "string" } }, "application/gzip": { "schema": { "type": "string", "format": "binary" } } } },
-          "403": { "description": "Неверный ключ/токен", "content": { "text/plain": { "schema": { "type": "string" } } } },
-          "404": { "description": "Нет сборок / нет архива / файл отсутствует на диске" },
-          "429": { "description": "Перебор ключей или лимит скачиваний", "headers": { "Retry-After": { "schema": { "type": "string" } } } }
+          "200": {
+            "description": "Файл правил (text/plain) или архив (application/gzip)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Неверный ключ/токен",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Нет сборок / нет архива / файл отсутствует на диске"
+          },
+          "429": {
+            "description": "Перебор ключей или лимит скачиваний",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         }
       },
-      "post": { "tags": ["export"], "summary": "PUSH-экспорт в Clear NDR настроенным способом", "responses": { "200": { "description": "Выполнен" }, "400": { "description": "Ошибка" }, "401": { "$ref": "#/components/responses/Unauthorized" } } },
-      "put": { "tags": ["export"], "summary": "Список файлов в каталоге экспорта (data/exports)", "responses": { "200": { "description": "{files: [{name, size, mtime}]}" }, "401": { "$ref": "#/components/responses/Unauthorized" } } }
+      "post": {
+        "tags": [
+          "export"
+        ],
+        "summary": "PUSH-экспорт в Clear NDR настроенным способом",
+        "responses": {
+          "200": {
+            "description": "Выполнен"
+          },
+          "400": {
+            "description": "Ошибка"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Список файлов в каталоге экспорта (data/exports)",
+        "responses": {
+          "200": {
+            "description": "{files: [{name, size, mtime}]}"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
     },
     "/api/settings": {
-      "get": { "tags": ["settings"], "summary": "Настройки (секреты вырезаны для не-администраторов)", "responses": { "200": { "description": "{settings}", "content": { "application/json": { "schema": { "type": "object", "properties": { "settings": { "type": "object", "additionalProperties": { "type": "string" } } } } } } }, "401": { "$ref": "#/components/responses/Unauthorized" } } },
-      "put": { "tags": ["settings"], "summary": "Сохранить настройки (только администратор; Enterprise)", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "type": "string" } } } } }, "responses": { "200": { "description": "{ok, settings}" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Настройки (секреты вырезаны для не-администраторов)",
+        "responses": {
+          "200": {
+            "description": "{settings}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "settings": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Сохранить настройки (только администратор; Enterprise)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ok, settings}"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     },
     "/api/logs": {
-      "get": { "tags": ["logs"], "summary": "Журнал событий (только администратор)", "parameters": [{ "name": "take", "in": "query", "schema": { "type": "integer", "default": 100, "maximum": 500 } }], "responses": { "200": { "description": "{logs}" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "Журнал событий (только администратор)",
+        "parameters": [
+          {
+            "name": "take",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "maximum": 500
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{logs}"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     },
     "/api/vpn": {
-      "get": { "tags": ["vpn"], "summary": "Статус WireGuard (только администратор)", "responses": { "200": { "description": "Статус" }, "403": { "$ref": "#/components/responses/Forbidden" } } },
-      "post": { "tags": ["vpn"], "summary": "Действия up/down/test (только администратор)", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "action": { "type": "string", "enum": ["up", "down", "test", "test-config"] }, "id": { "type": "string" }, "config": { "type": "string" }, "name": { "type": "string" } } } } } }, "responses": { "200": { "description": "Результат" }, "403": { "$ref": "#/components/responses/Forbidden" } } },
-      "put": { "tags": ["vpn"], "summary": "Сохранить профиль {name, config} (только администратор)", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "config"], "properties": { "name": { "type": "string" }, "config": { "type": "string" } } } } } }, "responses": { "200": { "description": "Сохранён" }, "403": { "$ref": "#/components/responses/Forbidden" } } },
-      "delete": { "tags": ["vpn"], "summary": "Удалить профиль ?id= (только администратор)", "parameters": [{ "name": "id", "in": "query", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "Удалён" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+      "get": {
+        "tags": [
+          "vpn"
+        ],
+        "summary": "Статус WireGuard (только администратор)",
+        "responses": {
+          "200": {
+            "description": "Статус"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "vpn"
+        ],
+        "summary": "Действия up/down/test (только администратор)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "up",
+                      "down",
+                      "test",
+                      "test-config"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "config": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Результат"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "vpn"
+        ],
+        "summary": "Сохранить профиль {name, config} (только администратор)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "config"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "config": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Сохранён"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "vpn"
+        ],
+        "summary": "Удалить профиль ?id= (только администратор)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Удалён"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     },
     "/api/clearndr-update": {
-      "get": { "tags": ["clearndr-update"], "summary": "Статус обновления Clear NDR (или лог прогона ?log=<runId>)", "parameters": [{ "name": "log", "in": "query", "schema": { "type": "string" } }, { "name": "tail", "in": "query", "schema": { "type": "integer", "default": 24000 } }], "responses": { "200": { "description": "Статус" }, "401": { "$ref": "#/components/responses/Unauthorized" } } },
-      "post": { "tags": ["clearndr-update"], "summary": "Действия: probe | start | cancel | sync-script", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["action"], "properties": { "action": { "type": "string" }, "options": { "type": "object" } } } } } }, "responses": { "200": { "description": "Результат" }, "401": { "$ref": "#/components/responses/Unauthorized" } } },
-      "put": { "tags": ["clearndr-update"], "summary": "Сохранить настройки подключения (только администратор; секреты под маской не перезаписываются)", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "type": "string" } } } } }, "responses": { "200": { "description": "Сохранено" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+      "get": {
+        "tags": [
+          "clearndr-update"
+        ],
+        "summary": "Статус обновления Clear NDR (или лог прогона ?log=<runId>)",
+        "parameters": [
+          {
+            "name": "log",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tail",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 24000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Статус"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "clearndr-update"
+        ],
+        "summary": "Действия: probe | start | cancel | sync-script",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Результат"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "clearndr-update"
+        ],
+        "summary": "Сохранить настройки подключения (только администратор; секреты под маской не перезаписываются)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Сохранено"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     },
     "/api/clearndr-osd": {
-      "get": { "tags": ["clearndr-osd"], "summary": "Статус дашбордов OpenSearch (или лог прогона ?log=<runId>)", "parameters": [{ "name": "log", "in": "query", "schema": { "type": "string" } }, { "name": "tail", "in": "query", "schema": { "type": "integer", "default": 24000 } }], "responses": { "200": { "description": "Статус" }, "401": { "$ref": "#/components/responses/Unauthorized" } } },
-      "post": { "tags": ["clearndr-osd"], "summary": "Действия: probe | sync-scripts | start | cancel", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["action"], "properties": { "action": { "type": "string" }, "packs": { "type": "array", "items": { "type": "string" } }, "what": { "type": "string" }, "runId": { "type": "string" } } } } } }, "responses": { "200": { "description": "Результат" }, "401": { "$ref": "#/components/responses/Unauthorized" } } }
+      "get": {
+        "tags": [
+          "clearndr-osd"
+        ],
+        "summary": "Статус дашбордов OpenSearch (или лог прогона ?log=<runId>)",
+        "parameters": [
+          {
+            "name": "log",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tail",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 24000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Статус"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "clearndr-osd"
+        ],
+        "summary": "Действия: probe | sync-scripts | start | cancel",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "packs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "what": {
+                    "type": "string"
+                  },
+                  "runId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Результат"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
     },
     "/api/auth/me": {
-      "get": { "tags": ["auth"], "summary": "Текущее состояние аутентификации и редакция (для UI)", "security": [], "responses": { "200": { "description": "Me", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Me" } } } } } }
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Текущее состояние аутентификации и редакция (для UI)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Me",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/api/auth/register": {
       "post": {
-        "tags": ["auth"], "summary": "Регистрация (только Enterprise). Первый пользователь — администратор (bootstrap), остальные — pending до верификации",
+        "tags": [
+          "auth"
+        ],
+        "summary": "Регистрация (только Enterprise). Первый пользователь — администратор (bootstrap), остальные — pending до верификации",
         "security": [],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["email", "displayName", "password"], "properties": { "email": { "type": "string", "format": "email" }, "displayName": { "type": "string", "maxLength": 100 }, "password": { "type": "string", "minLength": 8, "description": "≥8 символов, буквы и цифры" } } } } } },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "displayName",
+                  "password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "displayName": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "description": "≥8 символов, буквы и цифры"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": { "description": "Принята (pending) или создан bootstrap-админ" },
-          "400": { "description": "Некорректные данные / email занят" },
-          "403": { "description": "Регистрация закрыта администратором" },
-          "404": { "$ref": "#/components/responses/NotFoundEdition" },
-          "429": { "description": "Более 5 регистраций с IP за час", "headers": { "Retry-After": { "schema": { "type": "string" } } } }
+          "200": {
+            "description": "Принята (pending) или создан bootstrap-админ"
+          },
+          "400": {
+            "description": "Некорректные данные / email занят"
+          },
+          "403": {
+            "description": "Регистрация закрыта администратором"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundEdition"
+          },
+          "429": {
+            "description": "Более 5 регистраций с IP за час",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/auth/login": {
       "post": {
-        "tags": ["auth"], "summary": "Вход (только Enterprise): сессия в cookie ndrh_sid",
+        "tags": [
+          "auth"
+        ],
+        "summary": "Вход (только Enterprise): сессия в cookie ndrh_sid",
         "security": [],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["email", "password"], "properties": { "email": { "type": "string" }, "password": { "type": "string" } } } } } },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": { "description": "Успех; Set-Cookie ndrh_sid", "headers": { "Set-Cookie": { "schema": { "type": "string" } } } },
-          "401": { "description": "Неверный email или пароль (единый текст)" },
-          "403": { "description": "pending (ожидает верификации) или disabled" },
-          "404": { "$ref": "#/components/responses/NotFoundEdition" },
-          "429": { "description": "Сработал анти-брутфорс (лимит IP/email или блок учётной записи после 5 неудач)" }
+          "200": {
+            "description": "Успех; Set-Cookie ndrh_sid",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Неверный email или пароль (единый текст)"
+          },
+          "403": {
+            "description": "pending (ожидает верификации) или disabled"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundEdition"
+          },
+          "429": {
+            "description": "Сработал анти-брутфорс (лимит IP/email или блок учётной записи после 5 неудач)"
+          }
         }
       }
     },
     "/api/auth/logout": {
-      "post": { "tags": ["auth"], "summary": "Выход: сессия удалена, cookie сброшен (только Enterprise)", "security": [], "responses": { "200": { "description": "Выполнено" }, "404": { "$ref": "#/components/responses/NotFoundEdition" } } }
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Выход: сессия удалена, cookie сброшен (только Enterprise)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Выполнено"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundEdition"
+          }
+        }
+      }
     },
     "/api/auth/users": {
-      "get": { "tags": ["users"], "summary": "Список пользователей (только администратор, только Enterprise)", "responses": { "200": { "description": "{users[], registrationOpen}", "content": { "application/json": { "schema": { "type": "object", "properties": { "users": { "type": "array", "items": { "$ref": "#/components/schemas/User" } }, "registrationOpen": { "type": "boolean" } } } } } }, "403": { "$ref": "#/components/responses/Forbidden" } } },
-      "patch": { "tags": ["users"], "summary": "Открыть/закрыть регистрацию (только администратор)", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "registrationOpen": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "{ok, registrationOpen}" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Список пользователей (только администратор, только Enterprise)",
+        "responses": {
+          "200": {
+            "description": "{users[], registrationOpen}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/User"
+                      }
+                    },
+                    "registrationOpen": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Открыть/закрыть регистрацию (только администратор)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "registrationOpen": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ok, registrationOpen}"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     },
     "/api/auth/users/{id}": {
-      "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
-      "patch": { "tags": ["users"], "summary": "Управление учётной записью (только администратор): verify | disable | enable | promote | demote. Нельзя отключить/разжаловать себя; в системе остаётся минимум один активный администратор", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["action"], "properties": { "action": { "type": "string", "enum": ["verify", "disable", "enable", "promote", "demote"] } } } } } }, "responses": { "200": { "description": "Обновлено" }, "400": { "description": "Защитное ограничение или неверное действие" }, "403": { "$ref": "#/components/responses/Forbidden" } } },
-      "delete": { "tags": ["users"], "summary": "Удалить пользователя (только администратор): источники становятся общими, сессии и токены удаляются", "responses": { "200": { "description": "Удалён" }, "400": { "description": "Нельзя удалить себя / последний активный админ" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Управление учётной записью (только администратор): verify | disable | enable | promote | demote. Нельзя отключить/разжаловать себя; в системе остаётся минимум один активный администратор",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "verify",
+                      "disable",
+                      "enable",
+                      "promote",
+                      "demote"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Обновлено"
+          },
+          "400": {
+            "description": "Защитное ограничение или неверное действие"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Удалить пользователя (только администратор): источники становятся общими, сессии и токены удаляются",
+        "responses": {
+          "200": {
+            "description": "Удалён"
+          },
+          "400": {
+            "description": "Нельзя удалить себя / последний активный админ"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     },
     "/api/auth/events": {
-      "get": { "tags": ["users"], "summary": "Журнал событий безопасности (только администратор)", "parameters": [{ "name": "take", "in": "query", "schema": { "type": "integer", "default": 100, "maximum": 500 } }], "responses": { "200": { "description": "{events: AuthEvent[]}" }, "403": { "$ref": "#/components/responses/Forbidden" } } }
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Журнал событий безопасности (только администратор)",
+        "parameters": [
+          {
+            "name": "take",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "maximum": 500
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{events: AuthEvent[]}"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     },
     "/api/tokens": {
-      "get": { "tags": ["tokens"], "summary": "Токены скачивания: свои (администратор — все, с владельцами; только Enterprise)", "responses": { "200": { "description": "{tokens: DownloadToken[]}", "content": { "application/json": { "schema": { "type": "object", "properties": { "tokens": { "type": "array", "items": { "$ref": "#/components/schemas/DownloadToken" } } } } } } }, "404": { "$ref": "#/components/responses/NotFoundEdition" } } },
-      "post": { "tags": ["tokens"], "summary": "Создать токен {name, ttlDays?}. Полный токен в ответе — показывается один раз; лимит 10 созданий в час с IP", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string", "maxLength": 100 }, "ttlDays": { "type": "integer", "minimum": 0, "maximum": 365, "description": "0 — бессрочно" } } } } } }, "responses": { "200": { "description": "{ok, token: {id, token, name, prefix, expiresAt}}" }, "404": { "$ref": "#/components/responses/NotFoundEdition" }, "429": { "description": "Лимит создания" } } }
+      "get": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Токены скачивания: свои (администратор — все, с владельцами; только Enterprise)",
+        "responses": {
+          "200": {
+            "description": "{tokens: DownloadToken[]}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DownloadToken"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundEdition"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Создать токен {name, ttlDays?}. Полный токен в ответе — показывается один раз; лимит 10 созданий в час с IP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "ttlDays": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 365,
+                    "description": "0 — бессрочно"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ok, token: {id, token, name, prefix, expiresAt}}"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundEdition"
+          },
+          "429": {
+            "description": "Лимит создания"
+          }
+        }
+      }
     },
     "/api/tokens/{id}": {
-      "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
-      "delete": { "tags": ["tokens"], "summary": "Отозвать токен (владелец или администратор)", "responses": { "200": { "description": "Отозван" }, "404": { "description": "Не найден / не ваш" } } }
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Отозвать токен (владелец или администратор)",
+        "responses": {
+          "200": {
+            "description": "Отозван"
+          },
+          "404": {
+            "description": "Не найден / не ваш"
+          }
+        }
+      }
+    },
+    "/api/system": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Системный мониторинг (только администратор)",
+        "description": "Сводка сервера для дашбордов «Обзора»: CPU (дельта /proc/stat, loadavg, ядра), память (/proc/meminfo хоста), диски (df -kPT, том данных хаба помечен isData), сетевые интерфейсы (/proc/net/dev), запущенные контейнеры (docker ps через смонтированный /var/run/docker.sock:ro; без сокета — available=false с подсказкой), статус WireGuard, настройки и последний отчёт автоочистки диска, конфигурация уведомлений (без секретов).",
+        "responses": {
+          "200": {
+            "description": "Сводка: {ts, uptimeSec, cpu, mem, disks[], net[], containers, wg, cleanup: {lastRun, settings}, notify}"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Действия мониторинга/очистки (только администратор)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "cleanup-preview",
+                      "cleanup-run",
+                      "disk-check",
+                      "reschedule"
+                    ],
+                    "description": "cleanup-preview — dry-run (ничего не удаляет, полный перечень кандидатов); cleanup-run — реальная очистка включёнными шагами; disk-check — проверка порогов сейчас (уведомления/автоочистка); reschedule — перечитать cron очистки"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ok, report: CleanupReport} — отчёт: dryRun, triggeredBy, freedBytes, diskBefore/diskAfter, actions[] {cleaner, ok, detail, freedBytes, items[]}"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/notify": {
+      "get": {
+        "tags": [
+          "notify"
+        ],
+        "summary": "Состояние собственного сервера Gotify (только администратор)",
+        "responses": {
+          "200": {
+            "description": "{gotify: {containerRunning, url?, port}}"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "notify"
+        ],
+        "summary": "Действия уведомлений (только администратор)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "test",
+                      "gotify-deploy",
+                      "gotify-remove"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "enum": [
+                      "telegram",
+                      "gotify"
+                    ],
+                    "description": "для action=test"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "description": "для action=gotify-deploy: порт хоста (по умолчанию 8085)"
+                  },
+                  "domain": {
+                    "type": "string",
+                    "description": "для action=gotify-deploy: домен для шаблонов реверс-прокси"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "test → {ok, error?}; gotify-deploy → {ok, url?, port, container, files[], instructions[], alreadyRunning?}; gotify-remove → {ok}"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     }
   },
   "x-security-model": {
@@ -336,9 +2390,24 @@
       "tokenCreate": "10 созданий токенов в час с IP"
     },
     "queues": {
-      "download": { "maxConcurrent": 2, "maxWaiting": 16, "maxWaitMs": 20000, "endpoint": "GET /api/export" },
-      "build": { "maxConcurrent": 1, "maxWaiting": 4, "maxWaitMs": 5000, "endpoint": "POST /api/build" },
-      "fetch": { "maxConcurrent": 1, "maxWaiting": 4, "maxWaitMs": 5000, "endpoint": "POST /api/fetch-all, /api/sources/{id}/fetch" }
+      "download": {
+        "maxConcurrent": 2,
+        "maxWaiting": 16,
+        "maxWaitMs": 20000,
+        "endpoint": "GET /api/export"
+      },
+      "build": {
+        "maxConcurrent": 1,
+        "maxWaiting": 4,
+        "maxWaitMs": 5000,
+        "endpoint": "POST /api/build"
+      },
+      "fetch": {
+        "maxConcurrent": 1,
+        "maxWaiting": 4,
+        "maxWaitMs": 5000,
+        "endpoint": "POST /api/fetch-all, /api/sources/{id}/fetch"
+      }
     },
     "bandwidth": "Настройка downloadBandwidthKbps (0 — без ограничения): суммарная скорость отдачи /api/export делится между активными скачиваниями (token bucket)",
     "secrets": "Пароли — scrypt (N=16384, r=8, p=1); сессии и токены скачивания — в БД только SHA-256; сравнение ключей — константное (timingSafeEqual через SHA-256); секреты настроек вырезаются из ответов для не-администраторов",

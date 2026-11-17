@@ -32,7 +32,11 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 | **Categories** | A section grouping rules of enabled sources by `classtype`; manage categories (on/off in build, rename, hide) and **individual rules** (SID switch survives source re-fetching). Final ruleset = enabled sources ∩ category/rule filter |
 | **Build** | A final `suricata.rules` file with a header, per-source statistics and SHA-256. Output option: **tgz archive with one file per source** (import into Clear NDR as a datatype `sigs` source — each file becomes a category) |
 | **Clear NDR export** | 1) file for manual import; 2) **native integration via the Clear NDR (Scirius) REST API** — upload + `update_push_all` with a token; 3) pull scheme: Clear NDR fetches the file from the Hub itself (`/api/export`, datatype `sig`; `?archive=1` — per-source tgz for datatype `sigs`; optional serving key via `?token=`/source authkey) and updates on its own schedule; 4) HTTP POST to any endpoint; 5) copying to a shared directory (volume). Ready URLs and the key — “Build” tab → “Serve by URL”. Step-by-step guide — [docs/clearndr-integration.en.md](docs/clearndr-integration.en.md) |
-| **WireGuard VPN** | Full setup: wg-quick config editor, syntax check, up/down, status (`wg show`), environment check (wg, wg-quick, /dev/net/tun, NET_ADMIN). Rule downloads through the tunnel |
+| **WireGuard VPN** | Full setup: wg-quick config editor, syntax check, up/down, status (`wg show`), environment check (wg, wg-quick, /dev/net/tun, NET_ADMIN). Rule downloads through the tunnel. **Re-raise protection**: an up tunnel cannot be raised again (HTTP 409 + the “Up” button disabled by actual `wg show interfaces` state — a second click no longer tears the tunnel down and hangs the container); profile state comes from wg, not a DB flag |
+| **Server monitoring** | Dashboards on “Overview”: CPU/memory/uptime (host /proc), disks with usage-threshold highlighting, network interface speed and traffic, WireGuard tunnel speed and peers, running containers (docker ps via a mounted docker.sock). 5 s polling, deltas computed client-side |
+| **Disk auto-cleanup** | Free-space control for the hub data volume: when a threshold is crossed — automatic reclaim: hub archive cache, old OpenSearch indices (allowed prefixes only, system indices untouched), old files in listed log directories (suricata logs), large-file search (report-only by default). Each step enabled separately, a “What will be deleted” dry-run, per-run index limit, free-space target. Managed in “Settings → Disk & auto-cleanup”, buttons on “Overview” |
+| **Notifications** | **Telegram** (bot + chat id, http/https/socks4/socks5 proxy, custom Bot API Server) and **Gotify** (self-hosted: URL + app token). Events: rule pipeline (fetch/build/export), WireGuard (tunnel up/down/errors), disk (usage thresholds, cleanup results) — individually switchable. “Test” buttons in settings |
+| **Own Gotify server** | Automatic deployment of a gotify/android container right from the hub (docker.sock): /health wait, environment templates in data/gotify/ — docker-compose, Caddy and nginx with TLS, a domain/DNS/reverse-proxy guide. Without docker.sock — the `scripts/gotify-deploy.sh` host script. Details — [docs/gotify.md](docs/gotify.md) |
 | **Clear NDR update** | A tab that detects the installed version → finds the latest stamusctl-templates release → when a newer one exists, lets you pick options (OpenSearch/PostgreSQL data, backups, stamusctl CLI) and start the update in one click. The `clearndr-update.sh` script runs on the host (SSH, or local when the hub is deployed in a container on the Clear NDR host), the log streams in real time, failures trigger automatic rollback, and the result is verified (containers, web UI, REST API). v4: self-restore of a missing `config/docker-compose.yaml`, `docker compose config` validation, auto-patch of the `networks` section (a gap in the 3.3.x templates), backup gate and rollback guard. A separate `clearndr-repair-stack.sh` repairs a broken instance `config/`. Guide — [docs/clearndr-update.en.md](docs/clearndr-update.en.md) |
 | **Schedule** | cron (node-cron): source update → build → export. Controlled from the UI |
 | **Logs** | All fetch/build/export/VPN events with levels and filters |
@@ -101,6 +105,67 @@ using Clear NDR itself), or configure automatic export in **“Settings”**
 > Personal-cabinet links (`https://snort.org/downloads/registered/<file>.tar.gz`) do **not** accept an
 > oinkcode query parameter — the Hub automatically rewrites them to the canonical reg-rules form.
 > Mind the snort.org download limit — do not enable several mirrors of the same ruleset at once.
+
+## Server monitoring, disk auto-cleanup and notifications
+
+### Dashboards on “Overview” (administrator only)
+
+The system-dashboard block polls `GET /api/system` every 5 seconds:
+
+- **Server** — CPU usage (`/proc/stat` delta), load average, memory (`/proc/meminfo`), uptime.
+  `/proc` inside the container reflects the host kernel — this is server state, not container state.
+- **Disks** — real volumes (`df -kPT`, tmpfs/squashfs excluded): used/free/percent. The hub data
+  volume (`/app/data`) is marked; above the thresholds (85 % / 92 % by default) the row is
+  highlighted and a banner with “What will be deleted” / “Configure” buttons appears.
+- **WireGuard tunnel** — peers, handshake freshness, total traffic and speed (delta of
+  `wg show all dump` between polls).
+- **Network interfaces** — rx/tx counters and per-interface speed (`/proc/net/dev`).
+- **Containers** — `docker ps` via the read-only mounted `/var/run/docker.sock` (the line is
+  already in docker-compose.yml); without the socket a mounting hint is shown.
+- **Disk cleanup** — “What will be deleted” (dry-run) and “Clean up now” buttons, last report.
+
+### Disk auto-cleanup
+
+Periodic usage check of the data volume (cron, hourly by default); warn/critical thresholds →
+notification (throttled to once per 6 hours per level); with auto-cleanup enabled and the trigger
+threshold crossed, cleanup steps run until the free-space target is reached. Manual runs and
+dry-runs execute all enabled steps fully.
+
+Steps (each enabled separately in “Settings → Disk & auto-cleanup”):
+
+1. **Hub cache** — source archives in `data/cache` and `.pack-*` build leftovers older than N days
+   (default 14) — safely recreated.
+2. **Log directories** — files older than N days (default 7) in the listed directories. For
+   suricata logs mount the host directory into the container (e.g. `- /var/log/suricata:/mnt/suricata-logs:ro`)
+   and list it. Active files (`eve.json`, `fast.log`, `stats.log`…) are never touched.
+3. **OpenSearch indices** — only indices with allowed prefixes (`logstash-,ndr-,eve-,suricata-,selks-`)
+   older than N days (default 14), max N per run (default 50, oldest first). System indices
+   (`.kibana`, `.opendistro-*`, security*) are untouched. Channel: explicit URL → OSD setting →
+   auto-discovery (127.0.0.1/172.17.0.1/host.docker.internal:9200) → docker exec into the opensearch
+   container. Self-signed certificates are accepted.
+4. **Large files** — files > N MB and older than N days searched ONLY in explicitly listed
+   directories; report-only by default, deletion behind a separate switch.
+
+Anything outside the explicitly allowed lists is never deleted. Run history — “Logs” tab
+(scope `cleanup`), the last report — on “Overview”.
+
+### Notifications: Telegram and Gotify
+
+- **Telegram**: bot token (@BotFather) + chat id. Proxy: `http(s)://user:pass@host:port` or
+  `socks5://user:pass@host:1080`. A custom Bot API Server can be set. “Test” button.
+- **Gotify**: server URL + app token (Apps → Create Application), priority 0–10.
+- **Events** (individually switchable): rule pipeline, WireGuard, disk.
+
+### Own Gotify server
+
+Option 1 — from the UI: “Settings → Notifications → Gotify → Own server → Deploy Gotify”. The hub
+(with docker.sock) runs `gotify/android` (port 8085, volume `ndr-gotify-data`), waits for `/health`
+and saves environment templates (docker-compose, Caddy/nginx with TLS, a domain/DNS guide) to
+`data/gotify/`. Default credentials admin/admin — change the password right after the first login.
+
+Option 2 — on the host: `sudo bash scripts/gotify-deploy.sh --port 8085 --domain gotify.example.com`.
+
+Full guide — [docs/gotify.md](docs/gotify.md).
 
 ## Bilingual interface (RU/EN)
 
@@ -336,8 +401,11 @@ an archive (download limit, a personal-cabinet link with the oinkcode in the que
 | `GET/PATCH /api/auth/users` · `PATCH/DELETE /api/auth/users/:id` · `GET /api/auth/events` | users: list, verification/disable/roles/delete, security journal — administrator only, Enterprise only |
 | `GET/POST /api/tokens` · `DELETE /api/tokens/:id` | personal download tokens (admin sees all): creation (the token is shown once), revocation — Enterprise only |
 | `GET /api/rules?sid=&q=&sourceId=&page=` | browse the rule database |
-| `GET/PUT /api/settings` | settings (oinkcode, policies, cron, export) |
-| `GET/POST/PUT/DELETE /api/vpn` | WireGuard status/actions/profiles |
+| `GET/PUT /api/settings` | settings (oinkcode, policies, cron, export, notifications, auto-cleanup) |
+| `GET/POST/PUT/DELETE /api/vpn` | WireGuard status/actions/profiles; a second `up` of a raised tunnel → 409 + `alreadyUp` |
+| `GET /api/system` | system monitoring (administrator only): CPU/memory/disks/network/containers/WireGuard + auto-cleanup status |
+| `POST /api/system` | cleanup actions: `cleanup-preview` (dry-run), `cleanup-run`, `disk-check`, `reschedule` |
+| `GET /api/notify` · `POST /api/notify` | Gotify state; actions: `test` (telegram/gotify), `gotify-deploy` (deploy your own server), `gotify-remove` |
 | `GET /api/clearndr-update` | update section status: versions, host preflight, stack state, run history (`?log=<runId>` — run log) |
 | `POST /api/clearndr-update` | actions: `probe` (host check), `start` (begin update), `cancel`, `sync-script` |
 | `PUT /api/clearndr-update` | connection settings (SSH/local, instance dir, URL, token) |

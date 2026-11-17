@@ -449,4 +449,39 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   vpnEnabled: 'false', // гнать загрузки через WireGuard
   vpnInterface: 'wg0',
   homeNet: '192.168.0.0/16,10.0.0.0/8',
+  // ── Мониторинг диска и автоочистка (вкладка «Настройки» → «Диск и очистка») ──
+  diskWarnPct: '85', // порог предупреждения на «Обзоре»
+  diskCriticalPct: '92', // порог критического состояния (уведомление)
+  cleanupAutoEnabled: 'false', // автоматическая очистка по расписанию/порогу
+  cleanupSchedule: '17 * * * *', // частота проверки (cron): ежечасно на 17-й минуте
+  cleanupTriggerPct: '90', // занятость диска, при которой запускается очистка
+  cleanupFreeTargetPct: '80', // прекращать очистку, когда занятость опустилась до
+  cleanupOsEnabled: 'true', // удалять старые индексы OpenSearch
+  cleanupOsKeepDays: '14', // индексы старше N дней — кандидаты на удаление
+  cleanupOsPrefixes: 'logstash-,ndr-,eve-,suricata-,selks-', // только эти префиксы (системные .kibana и др. не трогаются)
+  cleanupOsMaxDelete: '50', // максимум индексов за один запуск (страховка)
+  cleanupOsUrl: '', // URL OpenSearch; пусто — автопоиск (127.0.0.1/172.17.0.1/host.docker.internal:9200, docker exec)
+  cleanupCacheEnabled: 'true', // чистить кэш архивов источников хаба
+  cleanupCacheKeepDays: '14',
+  cleanupLogsEnabled: 'true', // удалять старые логи в указанных каталогах
+  cleanupLogDirs: '', // доп. каталоги логов через запятую (напр. /mnt/clearndr/logs)
+  cleanupLogKeepDays: '7',
+  cleanupFilesEnabled: 'false', // искать большие файлы
+  cleanupFileDirs: '', // где искать (через запятую); поиск идёт ТОЛЬКО здесь
+  cleanupLargeFileMb: '500',
+  cleanupFileKeepDays: '7',
+  cleanupFilesDelete: 'false', // false — только отчёт; true — удалять найденное
+  // ── Уведомления (вкладка «Настройки» → «Уведомления») ────────────────────────
+  notifyTgEnabled: 'false',
+  tgBotToken: '',
+  tgChatId: '',
+  tgProxy: '', // http(s)://user:pass@host:port или socks5://user:pass@host:port
+  tgApiBase: 'https://api.telegram.org',
+  notifyGotifyEnabled: 'false',
+  gotifyUrl: '',
+  gotifyToken: '', // app-токен Gotify (не клиентский)
+  gotifyPriority: '5',
+  notifyOnPipeline: 'true', // события конвейера: загрузка/сборка/экспорт
+  notifyOnVpn: 'true', // события WireGuard: поднятие/остановка туннеля
+  notifyOnDisk: 'true', // события диска: очистка, пороги занятости
 }

@@ -3,6 +3,8 @@ import { db } from '@/lib/db'
 import { wgFullTest, wgUp, wgDown, parseWgConfig, wgStatus, WgStatus } from '@/lib/engine/vpn'
 import { apiError } from '@/lib/api-error'
 import { guard } from '@/lib/security/guard'
+import { log } from '@/lib/engine/service'
+import { notifyEvent } from '@/lib/engine/notify'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,13 +44,22 @@ export async function GET(req: NextRequest) {
   if (g instanceof NextResponse) return g
   try {
     const res = await wgFullTest()
+    const upIfaces = new Set(res.status.interfaces.map((i) => i.name))
     const profiles = await db.vpnProfile.findMany()
+    // реальное состояние интерфейса каждого профиля — из `wg show interfaces`,
+    // а не из флага active (он отражает последнюю операцию и может врать):
+    // кнопка «Поднять» должна быть недоступна для поднятого туннеля
+    const withState = profiles.map((p) => {
+      const parsed = parseWgConfig(p.config)
+      const iface = parsed.ok ? parsed.iface ?? p.name : p.name
+      return { ...p, iface, ifaceUp: upIfaces.has(iface) }
+    })
     return NextResponse.json({
       available: res.status.available,
       error: res.status.error,
       interfaces: res.status.interfaces,
       tools: res.tools,
-      profiles,
+      profiles: withState,
     })
   } catch (e) {
     return apiError(e)
@@ -85,17 +96,33 @@ export async function POST(req: NextRequest) {
       const parsed = parseWgConfig(config ?? '')
       if (!parsed.ok) return NextResponse.json({ ok: false, error: parsed.error }, { status: 400 })
       const res = await wgUp(parsed.iface ?? name, config ?? '')
-      if (body.id) await persistProfileStatus(body.id, 'up', res.ok, res)
+      // alreadyUp — туннель реально поднят: сохраняем как действующий (active),
+      // а не как неудачную попытку; обычная ошибка — как раньше
+      if (body.id) await persistProfileStatus(body.id, 'up', res.ok || !!res.alreadyUp, res)
+      if (res.alreadyUp) {
+        // 409 Conflict: туннель уже поднят — повторный up недопустим (иначе
+        // wg-quick down+up рвал туннель и вешал web UI). Флаг alreadyUp
+        // позволяет UI показать это как подсказку, а не как ошибку.
+        await log('warn', 'vpn', `Повторное включение ${parsed.iface} отклонено: туннель уже поднят`)
+        return NextResponse.json({ ok: false, alreadyUp: true, error: res.error, notes: res.notes }, { status: 409 })
+      }
       if (res.ok) {
         const detail = `туннель ${parsed.iface} поднят`
+        await log('success', 'vpn', `Туннель ${parsed.iface} поднят${body.id ? ` (профиль ${body.id})` : ''}`)
+        void notifyEvent('vpn', 'success', `Туннель ${parsed.iface} поднят`, detail).catch(() => undefined)
         return NextResponse.json({ ok: true, detail, notes: res.notes, output: res.output })
       }
+      await log('error', 'vpn', `Не удалось поднять ${parsed.iface}: ${res.error ?? '—'}`)
+      void notifyEvent('vpn', 'error', `Не удалось поднять туннель ${parsed.iface}`, res.error ?? '—').catch(() => undefined)
       return NextResponse.json({ ok: false, error: res.error, notes: res.notes }, { status: 400 })
     }
 
     if (action === 'down') {
       const name = body.name ?? 'wg0'
       const res = await wgDown(name)
+      if (res.ok) await log('info', 'vpn', `Туннель ${name} остановлен`)
+      else await log('error', 'vpn', `Не удалось остановить ${name}: ${res.error ?? '—'}`)
+      void notifyEvent('vpn', res.ok ? 'info' : 'error', res.ok ? `Туннель ${name} остановлен` : `Не удалось остановить ${name}`, res.error ?? '').catch(() => undefined)
       if (body.id) await persistProfileStatus(body.id, 'down', res.ok, res)
       else if (!body.id && body.name) {
         const p = await db.vpnProfile.findFirst({ where: { name } })
