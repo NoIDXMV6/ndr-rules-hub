@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api, Dashboard, fmtTime, SourceItem } from '@/components/hub/api'
 import { useI18n, type Dictionary } from '@/lib/i18n'
+import { pickLocalizedNote } from '@/lib/localized-note'
 import { ChevronDown, FileUp, Pencil, Plus, RefreshCw, Trash2, Undo2 } from 'lucide-react'
 
 type BadgeKey = keyof Dictionary['sources']['badges']
@@ -46,7 +47,12 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
     const list = (data?.sources.list ?? []).filter((s) => !s.deletedAt)
     if (!search.trim()) return list
     const q = search.toLowerCase()
-    return list.filter((s) => s.name.toLowerCase().includes(q) || (s.notes ?? '').toLowerCase().includes(q))
+    return list.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.notes ?? '').toLowerCase().includes(q) ||
+        (s.notesEn ?? '').toLowerCase().includes(q),
+    )
   }, [data, search])
 
   const trash = useMemo(() => (data?.sources.list ?? []).filter((s) => !!s.deletedAt), [data])
@@ -187,6 +193,7 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
               <TableBody>
                 {sources.map((s) => {
                   const badgeKey = (s.badge && s.badge in BADGE_CLASSES ? s.badge : null) as BadgeKey | null
+                  const note = pickLocalizedNote(s.notes, s.notesEn, lang)
                   return (
                     <TableRow key={s.id} className="border-border/60">
                       <TableCell>
@@ -197,7 +204,7 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
                           <span className="font-medium text-foreground">{s.name}</span>
                           {badgeKey && <Badge variant="outline" className={BADGE_CLASSES[badgeKey]}>{t.sources.badges[badgeKey]}</Badge>}
                         </div>
-                        {s.notes && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{s.notes}</p>}
+                        {note && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{note}</p>}
                         {s.lastError && <p className="text-xs text-red-600 mt-0.5">{t.sources.errPrefix} {s.lastError}</p>}
                       </TableCell>
                       <TableCell className="text-muted-foreground text-xs">
@@ -411,7 +418,7 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState({
     name: '', category: 'ruleset', kind: 'url', url: '', authType: 'none',
-    priority: '100', notes: '', extraJson: '',
+    priority: '100', notes: '', notesEn: '', extraJson: '',
   })
   const [err, setErr] = useState<string | null>(null)
 
@@ -426,6 +433,7 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
         authType: form.authType,
         priority: Number(form.priority) || 100,
         notes: form.notes || null,
+        notesEn: form.notesEn || null,
         extraJson: form.extraJson || null,
         enabled: false,
       })
@@ -520,8 +528,13 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
             />
           </div>
           <div>
-            <Label className="text-foreground">{d.notes}</Label>
+            <Label className="text-foreground">{d.notesRu}</Label>
             <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="bg-card border-input" />
+          </div>
+          <div>
+            <Label className="text-foreground">{d.notesEn}</Label>
+            <Input value={form.notesEn} onChange={(e) => setForm({ ...form, notesEn: e.target.value })} className="bg-card border-input" />
+            <p className="text-xs text-muted-foreground mt-1">{d.notesHint}</p>
           </div>
           {err && <p className="text-sm text-red-600">{err}</p>}
         </div>
@@ -544,6 +557,7 @@ function EditSourceDialog({ source, onSaved }: { source: SourceItem; onSaved: ()
     authType: source.authType,
     priority: String(source.priority),
     notes: source.notes ?? '',
+    notesEn: source.notesEn ?? '',
     extraJson: source.extraJson ?? '',
   })
   const [err, setErr] = useState<string | null>(null)
@@ -557,6 +571,7 @@ function EditSourceDialog({ source, onSaved }: { source: SourceItem; onSaved: ()
         authType: form.authType,
         priority: Number(form.priority) || 100,
         notes: form.notes || null,
+        notesEn: form.notesEn || null,
         extraJson: form.extraJson || null,
       })
       setOpen(false)
@@ -611,8 +626,13 @@ function EditSourceDialog({ source, onSaved }: { source: SourceItem; onSaved: ()
             <p className="text-xs text-muted-foreground mt-1">{d.extraHelp}</p>
           </div>
           <div>
-            <Label className="text-foreground">{d.notes}</Label>
+            <Label className="text-foreground">{d.notesRu}</Label>
             <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="bg-card border-input" />
+          </div>
+          <div>
+            <Label className="text-foreground">{d.notesEn}</Label>
+            <Input value={form.notesEn} onChange={(e) => setForm({ ...form, notesEn: e.target.value })} className="bg-card border-input" />
+            <p className="text-xs text-muted-foreground mt-1">{d.notesHint}</p>
           </div>
           {err && <p className="text-sm text-red-600">{err}</p>}
         </div>

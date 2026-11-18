@@ -32,7 +32,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const data: Record<string, unknown> = {}
-  for (const k of ['name', 'category', 'kind', 'url', 'authType', 'extraJson', 'priority', 'badge', 'notes']) {
+  for (const k of ['name', 'category', 'kind', 'url', 'authType', 'extraJson', 'priority', 'badge', 'notes', 'notesEn']) {
     if (k in body) data[k] = body[k]
   }
   if ('enabled' in body) data.enabled = !!body.enabled

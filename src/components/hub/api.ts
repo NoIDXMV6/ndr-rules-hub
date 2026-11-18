@@ -30,6 +30,7 @@ export interface SourceItem {
   diffRemoved: number
   badge: string | null
   notes: string | null
+  notesEn: string | null
   builtin: boolean
   deletedAt: string | null
   ownerId?: string | null

@@ -245,7 +245,9 @@ export const ru = {
       extraJson: 'extraJson — параметры конвертера/авторизации (необязательно)',
       extraHelp:
         'Возможности: oinkcode, authKey, basicUser/basicPassword, sidStart, action (alert/drop), msgPrefix, perRule, maxRules, subPath (папка внутри архива)',
-      notes: 'Примечание',
+      notesRu: 'Примечание (рус.)',
+      notesEn: 'Примечание (англ.)',
+      notesHint: 'Примечание показывается на языке интерфейса — заполните оба поля',
       create: 'Создать',
       cancel: 'Отмена',
       save: 'Сохранить',

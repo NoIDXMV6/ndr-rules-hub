@@ -249,7 +249,9 @@ export const en: Dictionary = {
       extraJson: 'extraJson — converter/authentication parameters (optional)',
       extraHelp:
         'Supported: oinkcode, authKey, basicUser/basicPassword, sidStart, action (alert/drop), msgPrefix, perRule, maxRules, subPath (folder inside the archive)',
-      notes: 'Notes',
+      notesRu: 'Notes (Russian)',
+      notesEn: 'Notes (English)',
+      notesHint: 'The note is shown in the interface language — fill in both fields',
       create: 'Create',
       cancel: 'Cancel',
       save: 'Save',

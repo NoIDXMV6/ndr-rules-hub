@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
           id: s.id, name: s.name, category: s.category, kind: s.kind, url: s.url,
           authType: s.authType, enabled: s.enabled, priority: s.priority,
           status: s.status, lastFetchAt: s.lastFetchAt, lastError: s.lastError,
-          ruleCount: s.ruleCount, sizeBytes: s.sizeBytes, badge: s.badge, notes: s.notes,
+          ruleCount: s.ruleCount, sizeBytes: s.sizeBytes, badge: s.badge, notes: s.notes, notesEn: s.notesEn,
           diffAdded: s.diffAdded, diffChanged: s.diffChanged, diffRemoved: s.diffRemoved,
           builtin: s.builtin, extraJson: s.extraJson, deletedAt: s.deletedAt, ownerId: s.ownerId,
         })),

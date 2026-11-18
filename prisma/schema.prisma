@@ -36,7 +36,8 @@ model Source {
   diffChanged Int     @default(0)
   diffRemoved Int     @default(0)
   badge      String?  // recommended | duplicate | legacy | paid | converter
-  notes      String?  // анализ источника
+  notes      String?  // анализ источника (русский)
+  notesEn    String?  // анализ источника (английский) — показывается в EN-интерфейсе
   builtin    Boolean  @default(false)
   ownerId    String?  // Enterprise: пользователь-владелец («свои источники»); null — общий/каталог
   deletedAt  DateTime? // не null — источник в корзине (не участвует в загрузке/сборке)

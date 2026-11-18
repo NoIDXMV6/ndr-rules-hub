@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
         priority: Number(body.priority ?? 100),
         badge: body.badge ?? null,
         notes: body.notes ?? null,
+        notesEn: body.notesEn ?? null,
         builtin: false,
         // Enterprise: источник принадлежит создавшему пользователю («свои источники»)
         ownerId: g.user?.id ?? null,

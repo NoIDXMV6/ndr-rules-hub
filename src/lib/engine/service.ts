@@ -55,6 +55,16 @@ function availableNotes(authType: string): string {
   return `Выгрузка работает: успешная загрузка с текущего URL (ранее источник числился недоступным).${auth}`
 }
 
+/** Английский вариант availableNotes — пишется в notesEn (для EN-интерфейса) */
+function availableNotesEn(authType: string): string {
+  const auth = authType === 'authkey'
+    ? ' Authentication: abuse.ch Auth-Key ("Settings → abuse.ch Auth-Key").'
+    : authType === 'oinkcode'
+      ? ' Authentication: oinkcode (the "Settings" field).'
+      : ''
+  return `The feed works: a successful download from the current URL (the source was previously marked unavailable).${auth}`
+}
+
 export async function getSettings(): Promise<Record<string, string>> {
   const rows = await db.setting.findMany()
   const out: Record<string, string> = { ...DEFAULT_SETTINGS }
@@ -94,6 +104,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
           priority: s.priority ?? 100,
           badge: s.badge ?? null,
           notes: s.notes ?? null,
+          notesEn: s.notesEn ?? null,
           builtin: true,
         },
       })
@@ -101,7 +112,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
     await log('info', 'system', `Каталог инициализирован: ${SEED_SOURCES.length} источников`)
   } else {
     const rows = await db.source.findMany({
-      select: { id: true, name: true, builtin: true, deletedAt: true, category: true, kind: true, url: true, badge: true, notes: true, status: true, authType: true, extraJson: true },
+      select: { id: true, name: true, builtin: true, deletedAt: true, category: true, kind: true, url: true, badge: true, notes: true, notesEn: true, status: true, authType: true, extraJson: true },
     })
     const byName = new Map(rows.map((r) => [r.name, r]))
     for (const s of SEED_SOURCES) {
@@ -120,6 +131,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
             priority: s.priority ?? 100,
             badge: s.badge ?? null,
             notes: s.notes ?? null,
+            notesEn: s.notesEn ?? null,
             builtin: true,
           },
         })
@@ -129,24 +141,35 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
       if (cur.builtin && !cur.deletedAt) {
         // источник в корзине не синхронизируем — восстановит пользователь
         if (cur.status === 'ok') {
-          // Источник работает — каталог не должен «оживлять» устаревшие пометки:
-          // снимаем бейдж «недоступен» (после удачной загрузки он лжёт) и,
-          // если заметки не редактировались пользователем, заменяем шаблон
-          // «источник сломан» на актуальный текст. URL/kind/category рабочего
-          // источника не трогаем — докатка не должна ломать то, что работает.
-          if (cur.badge !== 'unavailable') continue
-          const fix: { badge?: string | null; notes?: string } = { badge: null }
-          if (s.notes && cur.notes === s.notes) fix.notes = availableNotes(cur.authType)
-          await db.source.update({ where: { id: cur.id }, data: fix })
-          updated.push(s.name)
+          const fix: { badge?: string | null; notes?: string; notesEn?: string } = {}
+          if (cur.badge === 'unavailable') {
+            // Источник работает — каталог не должен «оживлять» устаревшие пометки:
+            // снимаем бейдж «недоступен» (после удачной загрузки он лжёт) и,
+            // если заметки не редактировались пользователем, заменяем шаблон
+            // «источник сломан» на актуальный текст. URL/kind/category рабочего
+            // источника не трогаем — докатка не должна ломать то, что работает.
+            fix.badge = null
+            if (s.notes && cur.notes === s.notes) fix.notes = availableNotes(cur.authType)
+            if (s.notesEn && cur.notesEn === s.notesEn) fix.notesEn = availableNotesEn(cur.authType)
+          }
+          // Английское примечание — новое поле каталога: докатываем в ПУСТОЕ
+          // (непустое пользовательское не трогаем), рабочие источники не ломаем.
+          if (s.notesEn && !cur.notesEn) fix.notesEn = s.notesEn
+          if (Object.keys(fix).length) {
+            await db.source.update({ where: { id: cur.id }, data: fix })
+            updated.push(s.name)
+          }
           continue
         }
-        const patch: { category?: string; kind?: string; url?: string; badge?: string | null; notes?: string; authType?: string; extraJson?: string } = {}
+        const patch: { category?: string; kind?: string; url?: string; badge?: string | null; notes?: string; notesEn?: string; authType?: string; extraJson?: string } = {}
         if (cur.category !== s.category) patch.category = s.category
         if (cur.kind !== s.kind) patch.kind = s.kind
         if (s.url && cur.url !== s.url) patch.url = s.url
         if ((s.badge ?? null) !== cur.badge) patch.badge = s.badge ?? null
         if (s.notes && cur.notes !== s.notes) patch.notes = s.notes
+        // английское примечание синхронизируем как текст каталога: в пустое
+        // докатываем всегда, отличающееся пользовательское не затираем
+        if (s.notesEn && !cur.notesEn) patch.notesEn = s.notesEn
         if ((s.authType ?? 'none') !== cur.authType) patch.authType = s.authType ?? 'none'
         // extraJson докатывается, только если у источника его ещё нет —
         // пользовательские настройки конвертеров/авторизации не перезаписываются
@@ -279,6 +302,7 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     sizeBytes: number
     badge?: string | null
     notes?: string
+    notesEn?: string
     diffAdded?: number
     diffChanged?: number
     diffRemoved?: number
@@ -299,6 +323,7 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     patch.badge = null
     const seedEntry = SEED_SOURCES.find((s) => s.name === src.name)
     if (seedEntry?.notes && src.notes === seedEntry.notes) patch.notes = availableNotes(src.authType)
+    if (seedEntry?.notesEn && (src.notesEn ?? null) === seedEntry.notesEn) patch.notesEn = availableNotesEn(src.authType)
   }
   await db.source.update({ where: { id: src.id }, data: patch })
   // в журнале — вердикт «нужно ли обновлять правила в Suricata»:
