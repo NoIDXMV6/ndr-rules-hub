@@ -135,8 +135,14 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/db-heal.cjs /app/scripts/c
 VOLUME ["/app/data"]
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD node -e "fetch('http://127.0.0.1:3000/api/dashboard').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+# Healthcheck — ЛЁГКИЙ (/api/ping: JSON без обращения к БД), а не /api/dashboard.
+# Причина: сборка правил (с v1.24 — фоновая) занимает единственную SQLite-
+# коннекцию (connection_limit=1) и нагружает event loop, /api/dashboard
+# (ensureSeed + 5 запросов + wgStatus) в это окно не укладывался в таймаут —
+# работающий контейнер помечался unhealthy на время сборки. Диагностика БД:
+# curl http://127.0.0.1:3080/api/health (всегда 200 с отчётом).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/api/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "server.js"]
