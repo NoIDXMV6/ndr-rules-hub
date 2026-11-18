@@ -91,10 +91,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Clear NDR): стек управляется через смонтированный /var/run/docker.sock.
 # docker CLI — из официального образа (мультиарх); cli-plugins (compose) —
 # развёртывание стека MISP (misp-deploy.ts): misp-core/modules/nginx + MariaDB
-# + Valkey запускаются через docker compose -f data/misp/docker-compose.misp.yml.
+# + Valkey запускаются через docker compose -f data/misp/docker-compose.misp.yml
+# (compose-файл и .env генерируются в том данных при деплое, см. misp-deploy.ts).
+# ВАЖНО: в образе docker:cli плагин compose лежит в
+# /usr/local/libexec/docker/cli-plugins (см. Dockerfile-cli.template
+# docker-library/docker), путь /usr/local/lib/docker/cli-plugins в нём
+# НЕ существует — COPY с ним падает «not found». Кладём плагин на один из
+# стандартных путей поиска CLI-плагинов — /usr/local/lib/docker/cli-plugins.
 COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker:cli /usr/local/lib/docker/cli-plugins /usr/local/lib/docker/cli-plugins
-RUN docker compose version | head -1 || { echo 'FAIL: docker compose plugin missing'; exit 1; }
+COPY --from=docker:cli /usr/local/libexec/docker/cli-plugins /usr/local/lib/docker/cli-plugins
+# Проверка БЕЗ head в пайпе: «docker compose version | head -1 || ...» не
+# срабатывает — статус пайпа берётся от head (0), и FAIL не выводился бы даже
+# при отсутствии плагина.
+RUN docker compose version || { echo 'FAIL: docker compose plugin missing'; exit 1; }
 ARG TARGETARCH
 # stamusctl — только amd64 (arm64-сборок upstream не публикует; на других
 # архитектурах — режим SSH раздела «Обновление Clear NDR»)
