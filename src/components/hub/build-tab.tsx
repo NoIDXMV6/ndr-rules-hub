@@ -224,6 +224,8 @@ export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onC
           <CardContent className="space-y-3">
             <ServeRow label={t.build.serveFile} url={fileUrl} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
             <ServeRow label={t.build.serveArchive} url={tgzUrl} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+            {/* адрес сформирован из реального адреса браузера — подсказка о замене начала URL */}
+            <p className="text-xs text-muted-foreground">{t.tokens.urlOriginNote}</p>
             <div className="max-w-2xl">
               <Label className="text-foreground">{t.build.serveToken}</Label>
               <div className="mt-1 flex flex-wrap gap-2">
@@ -364,12 +366,18 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
       </CardHeader>
       <CardContent className="space-y-3">
         {created && (
-          <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 space-y-1">
+          <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 space-y-2">
             <p className="text-xs text-emerald-800 font-medium">{t.tokens.created}</p>
             <div className="flex gap-2 items-center">
               <code className="flex-1 min-w-0 truncate rounded border border-emerald-300 bg-white px-2 py-1 text-xs font-mono text-emerald-900" title={created}>{created}</code>
               <CopyBtn text={created} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
             </div>
+            {/* Полные адреса подключения: собраны на клиенте из window.location.origin —
+                реального адреса, с которого пользователь открыл хаб (домен / LAN / localhost) */}
+            <p className="text-xs text-emerald-800 font-medium pt-1">{t.tokens.createdUrlsTitle}</p>
+            <ServeRow label={t.tokens.createdUrlFile} url={`${origin}/api/export?token=${encodeURIComponent(created)}`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+            <ServeRow label={t.tokens.createdUrlArchive} url={`${origin}/api/export?archive=1&token=${encodeURIComponent(created)}`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+            <p className="text-[11px] text-emerald-900/80">{t.tokens.urlOriginNote}</p>
           </div>
         )}
         <div className="flex flex-wrap gap-2 items-end">
@@ -386,6 +394,20 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
           </Button>
         </div>
         {msg && <p className="text-sm text-red-600">{msg}</p>}
+
+        {/* Подробная инструкция подключения Clear NDR по токену (PULL) */}
+        <details className="rounded-lg border border-border">
+          <summary className="px-3 py-2 text-sm font-medium text-foreground cursor-pointer select-none">{t.tokens.howTitle}</summary>
+          <ol className="list-decimal ml-5 px-3 pb-3 space-y-1.5 text-sm text-muted-foreground">
+            <li>{t.tokens.howStep1}</li>
+            <li>{t.tokens.howStep2}</li>
+            <li>{t.tokens.howStep3}</li>
+            <li>{t.tokens.howStep4}</li>
+            <li>{t.tokens.howStep5}</li>
+            <li>{t.tokens.howStep6}</li>
+            <li>{t.tokens.howStep7}</li>
+          </ol>
+        </details>
 
         {tokens.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t.tokens.empty}</p>
@@ -422,7 +444,7 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
                         <div className="flex justify-end gap-1.5">
                           {role === 'user' && tk.own && !tk.revokedAt && !expired && (
                             <CopyBtn
-                              text={`${origin}/api/export?token=<${t.tokens.thPrefix.toLowerCase()}>`}
+                              text={`${origin}/api/export?token=${encodeURIComponent(tk.prefix)}…`}
                               copyLabel={t.tokens.urlFile}
                               copiedLabel={t.build.serveCopied}
                             />
@@ -441,6 +463,9 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
             </table>
           </div>
         )}
+        {/* Полный токен в БД не хранится (SHA-256) — URL с полным токеном виден только
+            при создании; для существующих токенов показан только префикс */}
+        {tokens.length > 0 && <p className="text-xs text-muted-foreground mt-1">{t.tokens.prefixUrlNote}</p>}
       </CardContent>
     </Card>
   )

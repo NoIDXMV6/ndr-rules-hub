@@ -16,6 +16,7 @@ import { clientIp, peekBlocked, rateLimit, recordFailure, resetRate } from '@/li
 import { issueMfaTicket, MFA_COOKIE, mfaCookieAttrs } from '@/lib/engine/mfa'
 import { getBotUsername, botDeepLink, sendTelegramText } from '@/lib/engine/telegram'
 import { requestIsHttps } from '@/lib/security/session'
+import { isLanIp } from '@/lib/security/lan'
 import { audit } from '@/lib/security/audit'
 
 export const dynamic = 'force-dynamic'
@@ -111,6 +112,11 @@ export async function POST(req: NextRequest) {
   resetRate(keyEmail)
   await db.user.update({ where: { id: user.id }, data: { failedLogins: 0, lockedUntil: null } })
 
+  // аварийное восстановление доступа: администратор, вошедший из локальной сети,
+  // может сбросить 2FA при входе (второй шаг недоступен/потерян). Клиент показывает
+  // кнопку только по этому флагу — сервер на сбросе всё равно перепроверяет условия.
+  const lanResetAvailable = user.role === 'admin' && isLanIp(ip)
+
   if (user.twoFactor === 'telegram') {
     if (!user.telegramChatId) {
       // чат не привязан — код доставить некуда; вход невозможен до /start боту или сброса 2FA администратором
@@ -121,6 +127,7 @@ export async function POST(req: NextRequest) {
           error: 'Telegram-чат не привязан (бот не может отправить вам код). Откройте бота и отправьте /start, затем повторите вход. Если бот недоступен — попросите администратора сбросить 2FA.',
           telegramStartRequired: true,
           botLink: botDeepLink(bot),
+          lanResetAvailable,
         },
         { status: 400 },
       )
@@ -136,8 +143,8 @@ export async function POST(req: NextRequest) {
     const ticket = await issueMfaTicket('login', user.id)
     const res = NextResponse.json(
       sent.ok
-        ? { ok: true, mfa: 'telegram', sent: true }
-        : { ok: true, mfa: 'telegram', sent: false, error: `Бот не смог доставить код: ${sent.error}. Проверьте, что бот не заблокирован, или попросите администратора сбросить 2FA.` },
+        ? { ok: true, mfa: 'telegram', sent: true, lanResetAvailable }
+        : { ok: true, mfa: 'telegram', sent: false, error: `Бот не смог доставить код: ${sent.error}. Проверьте, что бот не заблокирован, или попросите администратора сбросить 2FA.`, lanResetAvailable },
     )
     res.cookies.set(MFA_COOKIE, ticket.ticket, mfaCookieAttrs(ticket.expiresSec, requestIsHttps(req)))
     return res
@@ -146,7 +153,7 @@ export async function POST(req: NextRequest) {
   if (user.twoFactor === 'totp') {
     const ticket = await issueMfaTicket('login', user.id)
     void audit('login_2fa', { email, userId: user.id, ip, detail: 'ожидается код TOTP' })
-    const res = NextResponse.json({ ok: true, mfa: 'totp' })
+    const res = NextResponse.json({ ok: true, mfa: 'totp', lanResetAvailable })
     res.cookies.set(MFA_COOKIE, ticket.ticket, mfaCookieAttrs(ticket.expiresSec, requestIsHttps(req)))
     return res
   }

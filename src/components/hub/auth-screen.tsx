@@ -18,7 +18,7 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, type Captcha, type Me } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
-import { LogOut, RefreshCw, ShieldCheck, ExternalLink } from 'lucide-react'
+import { LogOut, RefreshCw, ShieldCheck, ExternalLink, Unlock } from 'lucide-react'
 
 export function AuthScreen({ me, onAuthed }: { me: Me; onAuthed: () => void }) {
   const { t } = useI18n()
@@ -144,6 +144,12 @@ function LoginForm({ onAuthed }: { onAuthed: () => void }) {
   const [mfaSent, setMfaSent] = useState(true)
   const [mfaBotLink, setMfaBotLink] = useState<string | null>(null)
   const [code, setCode] = useState('')
+  // аварийное восстановление: сброс 2FA администратором при входе из локальной сети
+  // (флаг приходит из ответа сервера — показывается только если сервер подтвердил LAN+admin)
+  const [lanReset, setLanReset] = useState(false)
+  const [resetPassword, setResetPassword] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
+  const [resetErr, setResetErr] = useState<string | null>(null)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -155,6 +161,9 @@ function LoginForm({ onAuthed }: { onAuthed: () => void }) {
         setMfa(r.mfa as 'telegram' | 'totp')
         setMfaSent(r.sent !== false)
         setMfaBotLink((r.botLink as string) ?? null)
+        setLanReset(r.lanResetAvailable === true)
+        setResetPassword('')
+        setResetErr(null)
         setCode('')
         return
       }
@@ -180,6 +189,25 @@ function LoginForm({ onAuthed }: { onAuthed: () => void }) {
       setError((err as Error).message)
     } finally {
       setBusy(false)
+    }
+  }
+
+  // аварийный сброс 2FA: пароль ещё раз подтверждает владельца; при успехе
+  // сервер выдаёт сессию сразу (2FA у учётной записи аннулируется)
+  const reset2fa = async () => {
+    setResetBusy(true)
+    setResetErr(null)
+    try {
+      const r = await api.loginReset2fa(resetPassword)
+      if (r.ok) {
+        onAuthed()
+        return
+      }
+      setResetErr((r.error as string) ?? 'error')
+    } catch (err) {
+      setResetErr((err as Error).message)
+    } finally {
+      setResetBusy(false)
     }
   }
 
@@ -222,6 +250,31 @@ function LoginForm({ onAuthed }: { onAuthed: () => void }) {
         <Button type="button" variant="outline" className="w-full border-input text-muted-foreground" onClick={() => { setMfa(null); setCode(''); void cap.reload() }}>
           {t.auth.backToCredentials}
         </Button>
+        {/* Аварийное восстановление: только когда сервер подтвердил «администратор + локальная сеть».
+            Кнопка вне submit-логики формы (type=button): сброс не должен отправлять код. */}
+        {lanReset && (
+          <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
+            <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
+              <Unlock className="h-4 w-4 shrink-0" /> {t.auth.lanResetTitle}
+            </div>
+            <p className="text-xs text-muted-foreground">{t.auth.lanResetDesc}</p>
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                value={resetPassword}
+                onChange={(e) => setResetPassword(e.target.value)}
+                className="bg-card border-input"
+                placeholder={t.auth.password}
+                autoComplete="current-password"
+              />
+              <Button type="button" variant="outline" className="border-amber-400 text-amber-800 shrink-0 whitespace-nowrap" disabled={resetBusy || !resetPassword} onClick={() => void reset2fa()}>
+                {resetBusy ? t.auth.lanResetBusy : t.auth.lanResetBtn}
+              </Button>
+            </div>
+            {resetErr && <p className="text-xs text-red-600">{resetErr}</p>}
+            <p className="text-[10px] text-muted-foreground">{t.auth.lanResetNote}</p>
+          </div>
+        )}
       </form>
     )
   }

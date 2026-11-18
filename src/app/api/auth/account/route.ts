@@ -10,13 +10,18 @@
 //   POST {action:'switch-totp', code}         — подтвердить кодом и включить 2FA=totp
 //   POST {action:'disable-2fa', password}     — выключить 2FA (нужен пароль)
 //   POST {action:'send-test'}                 — тестовое сообщение в привязанный чат
+//   POST {action:'update-profile', displayName, email, password} — изменить имя и/или email
+//                                               (подтверждение текущим паролем; email уникален)
+//   POST {action:'change-password', currentPassword, newPassword} — смена пароля
+//                                               (текущий проверяется; прочие сессии завершаются)
 // Смена метода требует успешного подтверждения кодом нового метода —
 // пользователь не может заблокировать сам себя неверной настройкой.
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireMultiUser, jsonError, sameOriginOk, guard } from '@/lib/security/guard'
-import { verifyPassword } from '@/lib/security/password'
+import { hashPassword, passwordIssues, verifyPassword } from '@/lib/security/password'
 import { clientIp, rateLimit } from '@/lib/security/ratelimit'
+import { getSession } from '@/lib/security/session'
 import { issueVerificationCode, verifyVerificationCode, verifyTotp, generateTotpSecret, otpauthUri, totpQrDataUrl } from '@/lib/engine/mfa'
 import { sendTelegramText, getBotUsername, botDeepLink } from '@/lib/engine/telegram'
 import { audit } from '@/lib/security/audit'
@@ -24,6 +29,7 @@ import { audit } from '@/lib/security/audit'
 export const dynamic = 'force-dynamic'
 
 const TG_USER_RE = /^[a-zA-Z0-9_]{4,32}$/
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/
 const ACTION_RULE = { limit: 20, windowMs: 5 * 60_000, blockMs: 10 * 60_000 }
 
 export async function GET(req: NextRequest) {
@@ -61,7 +67,17 @@ export async function POST(req: NextRequest) {
   const rl = rateLimit(`account:${g.user!.id}`, ACTION_RULE)
   if (!rl.ok) return NextResponse.json({ error: 'Слишком много действий — повторите позже' }, { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } })
 
-  const body = await req.json().catch(() => ({})) as { action?: string; username?: string; code?: string; password?: string; clientNow?: number }
+  const body = await req.json().catch(() => ({})) as {
+    action?: string
+    username?: string
+    code?: string
+    password?: string
+    clientNow?: number
+    displayName?: string
+    email?: string
+    currentPassword?: string
+    newPassword?: string
+  }
   const user = await db.user.findUnique({ where: { id: g.user!.id } })
   if (!user) return jsonError(404, 'Пользователь не найден')
 
@@ -181,7 +197,53 @@ export async function POST(req: NextRequest) {
         : NextResponse.json({ ok: false, error: sent.error }, { status: 502 })
     }
 
+    case 'update-profile': {
+      const displayName = String(body.displayName ?? '').trim()
+      const email = String(body.email ?? '').trim().toLowerCase()
+      const password = String(body.password ?? '')
+      if (!displayName || displayName.length > 100) return jsonError(400, 'Имя обязательно — до 100 символов')
+      if (!EMAIL_RE.test(email) || email.length > 200) return jsonError(400, 'Некорректный email')
+      // подтверждение текущим паролем: кто угодно за открытым компьютером не должен сметь
+      // сменить email (смена email — это и смена логина, и сброс уведомлений 2FA-кода)
+      if (!verifyPassword(password, user.passwordHash)) {
+        void audit('login_fail', { email: user.email, userId: user.id, ip, detail: 'смена данных аккаунта: неверный пароль' })
+        return NextResponse.json({ error: 'Неверный пароль' }, { status: 401 })
+      }
+      const taken = await db.user.findUnique({ where: { email }, select: { id: true } })
+      if (taken && taken.id !== user.id) return jsonError(400, 'Этот email уже занят другой учётной записью')
+      const emailChanged = email !== user.email
+      const nameChanged = displayName !== user.displayName
+      if (!emailChanged && !nameChanged) return NextResponse.json({ ok: true, email: user.email, displayName: user.displayName, message: 'Изменений нет — данные уже такие' })
+      await db.user.update({ where: { id: user.id }, data: { displayName, email } })
+      void audit('account_update', {
+        email: user.email,
+        userId: user.id,
+        ip,
+        detail: [nameChanged ? 'имя изменено' : null, emailChanged ? `email: ${user.email} → ${email}` : null].filter(Boolean).join('; '),
+      })
+      return NextResponse.json({ ok: true, email, displayName, emailChanged, message: 'Данные аккаунта обновлены' })
+    }
+
+    case 'change-password': {
+      const current = String(body.currentPassword ?? '')
+      const next = String(body.newPassword ?? '')
+      if (!verifyPassword(current, user.passwordHash)) {
+        void audit('login_fail', { email: user.email, userId: user.id, ip, detail: 'смена пароля: неверный текущий пароль' })
+        return NextResponse.json({ error: 'Неверный текущий пароль' }, { status: 401 })
+      }
+      if (next === current) return jsonError(400, 'Новый пароль совпадает с текущим')
+      const issues = passwordIssues(next)
+      if (issues.length) return jsonError(400, `Новый пароль не соответствует требованиям: ${issues.join(', ')}`)
+      await db.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(next) } })
+      // гигиена: прочие сессии (другие браузеры/устройства) завершаем — у них старый пароль
+      // мог быть утерян вместе с ноутбуком; текущая сессия сохраняется
+      const cur = await getSession(req, null).catch(() => null)
+      await db.session.deleteMany({ where: { userId: user.id, ...(cur ? { id: { not: cur.sessionId } } : {}) } })
+      void audit('password_change', { email: user.email, userId: user.id, ip, detail: 'пароль изменён (другие сессии завершены)' })
+      return NextResponse.json({ ok: true, message: 'Пароль изменён — при следующем входе используйте новый' })
+    }
+
     default:
-      return jsonError(400, 'action: save-telegram | send-telegram-code | switch-telegram | setup-totp | switch-totp | disable-2fa | send-test')
+      return jsonError(400, 'action: save-telegram | send-telegram-code | switch-telegram | setup-totp | switch-totp | disable-2fa | send-test | update-profile | change-password')
   }
 }

@@ -17,7 +17,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { api, type AccountInfo } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
-import { ExternalLink, KeyRound, MessageSquare, RefreshCw, Send, ShieldCheck, Timer, Unplug } from 'lucide-react'
+import { ExternalLink, KeyRound, MessageSquare, Pencil, RefreshCw, Send, ShieldCheck, Timer, Unplug, UserRoundCog } from 'lucide-react'
 
 export function AccountTab() {
   const { t, tr } = useI18n()
@@ -34,6 +34,16 @@ export function AccountTab() {
   const [totpSetup, setTotpSetup] = useState<{ otpauth: string; qrDataUrl: string | null; manualKey: string } | null>(null)
   // выключение 2FA
   const [disablePassword, setDisablePassword] = useState('')
+  // изменение данных аккаунта (имя/email) и смена пароля
+  const [editing, setEditing] = useState(false)
+  const [profileName, setProfileName] = useState('')
+  const [profileEmail, setProfileEmail] = useState('')
+  const [profilePassword, setProfilePassword] = useState('')
+  const [profileMsg, setProfileMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [curPassword, setCurPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newPassword2, setNewPassword2] = useState('')
+  const [passwordMsg, setPasswordMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -48,6 +58,60 @@ export function AccountTab() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const startEdit = () => {
+    if (!info) return
+    setProfileName(info.displayName)
+    setProfileEmail(info.email)
+    setProfilePassword('')
+    setProfileMsg(null)
+    setEditing(true)
+  }
+
+  const saveProfile = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setProfileMsg(null)
+    try {
+      const r = await api.accountAction({ action: 'update-profile', displayName: profileName, email: profileEmail, password: profilePassword })
+      if (r.ok) {
+        setProfileMsg({ ok: true, text: (r.message as string) ?? t.account.profileSaved })
+        setEditing(false)
+        await load()
+      } else {
+        setProfileMsg({ ok: false, text: (r.error as string) ?? 'error' })
+      }
+    } catch (err) {
+      setProfileMsg({ ok: false, text: (err as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const savePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (newPassword !== newPassword2) {
+      setPasswordMsg({ ok: false, text: t.account.passwordMismatch })
+      return
+    }
+    setBusy(true)
+    setPasswordMsg(null)
+    try {
+      const r = await api.accountAction({ action: 'change-password', currentPassword: curPassword, newPassword })
+      if (r.ok) {
+        setPasswordMsg({ ok: true, text: (r.message as string) ?? t.account.passwordChanged })
+        setCurPassword('')
+        setNewPassword('')
+        setNewPassword2('')
+      } else {
+        setPasswordMsg({ ok: false, text: (r.error as string) ?? 'error' })
+      }
+    } catch (err) {
+      setPasswordMsg({ ok: false, text: (err as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const act = async (body: Record<string, unknown>) => {
     setBusy(true)
@@ -79,18 +143,78 @@ export function AccountTab() {
 
   return (
     <div className="space-y-4 max-w-3xl">
-      {/* Сведения об учётной записи */}
+      {/* Сведения об учётной записи + изменение данных (имя, email) */}
       <Card className="bg-card border-border">
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-primary" /> {t.account.profileTitle}
+            <UserRoundCog className="h-4 w-4 text-primary" /> {t.account.profileTitle}
           </CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
-          <Row label={t.auth.displayName} value={info.displayName} />
-          <Row label={t.auth.email} value={info.email} mono />
-          <Row label={t.account.role} value={info.role === 'admin' ? t.users.roleAdmin : t.users.roleUser} />
-          <Row label={t.account.status} value={info.status} />
+        <CardContent className="space-y-3 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+            <Row label={t.auth.displayName} value={info.displayName} />
+            <Row label={t.auth.email} value={info.email} mono />
+            <Row label={t.account.role} value={info.role === 'admin' ? t.users.roleAdmin : t.users.roleUser} />
+            <Row label={t.account.status} value={info.status} />
+          </div>
+
+          {!editing && (
+            <Button size="sm" variant="outline" className="border-input text-foreground" onClick={startEdit}>
+              <Pencil className="h-3.5 w-3.5 mr-1.5" /> {t.account.profileEditBtn}
+            </Button>
+          )}
+
+          {editing && (
+            <form onSubmit={saveProfile} className="space-y-3 rounded-lg border border-border p-3">
+              <p className="text-sm font-medium text-foreground">{t.account.profileEditTitle}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-foreground">{t.account.profileName}</Label>
+                  <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} maxLength={100} className="bg-card border-input mt-1" required />
+                </div>
+                <div>
+                  <Label className="text-foreground">{t.account.profileEmail}</Label>
+                  <Input type="email" value={profileEmail} onChange={(e) => setProfileEmail(e.target.value.trim())} className="bg-card border-input font-mono mt-1" required autoComplete="email" />
+                </div>
+              </div>
+              <div className="max-w-sm">
+                <Label className="text-foreground">{t.auth.password}</Label>
+                <Input type="password" value={profilePassword} onChange={(e) => setProfilePassword(e.target.value)} className="bg-card border-input mt-1" required autoComplete="current-password" />
+                <p className="text-xs text-muted-foreground mt-1">{t.account.profilePasswordHint}</p>
+              </div>
+              {profileMsg && <p className={`text-sm whitespace-pre-wrap ${profileMsg.ok ? 'text-emerald-700' : 'text-red-600'}`}>{profileMsg.text}</p>}
+              <div className="flex gap-2">
+                <Button type="submit" size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={busy || !profilePassword}>{t.account.profileSave}</Button>
+                <Button type="button" size="sm" variant="outline" className="border-input text-muted-foreground" disabled={busy} onClick={() => setEditing(false)}>{t.account.cancel}</Button>
+              </div>
+            </form>
+          )}
+
+          {/* Смена пароля */}
+          <form onSubmit={savePassword} className="space-y-3 rounded-lg border border-border p-3">
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-4 w-4 text-muted-foreground" />
+              <p className="text-sm font-medium text-foreground">{t.account.passwordChangeTitle}</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <Label className="text-foreground">{t.account.currentPassword}</Label>
+                <Input type="password" value={curPassword} onChange={(e) => setCurPassword(e.target.value)} className="bg-card border-input mt-1" required autoComplete="current-password" />
+              </div>
+              <div>
+                <Label className="text-foreground">{t.account.newPassword}</Label>
+                <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="bg-card border-input mt-1" required autoComplete="new-password" />
+              </div>
+              <div>
+                <Label className="text-foreground">{t.account.newPasswordRepeat}</Label>
+                <Input type="password" value={newPassword2} onChange={(e) => setNewPassword2(e.target.value)} className="bg-card border-input mt-1" required autoComplete="new-password" />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">{tr('{n}+ символов, буквы и цифры', { n: '8' })}</p>
+            {newPassword && newPassword2 && newPassword !== newPassword2 && <p className="text-sm text-red-600">{t.account.passwordMismatch}</p>}
+            {passwordMsg && <p className={`text-sm whitespace-pre-wrap ${passwordMsg.ok ? 'text-emerald-700' : 'text-red-600'}`}>{passwordMsg.text}</p>}
+            <Button type="submit" size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={busy || !curPassword || !newPassword || newPassword !== newPassword2}>{t.account.passwordSave}</Button>
+          </form>
         </CardContent>
       </Card>
 

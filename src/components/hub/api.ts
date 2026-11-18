@@ -34,6 +34,7 @@ export interface SourceItem {
   builtin: boolean
   deletedAt: string | null
   ownerId?: string | null
+  createdAt?: string // порядок добавления — основа стабильной сортировки списка
 }
 
 /** Диф правил: агрегат по обновлению источников / сборке */
@@ -335,6 +336,9 @@ export const api = {
     fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<Record<string, unknown>>(r)),
   loginVerify: (code: string) =>
     fetch('/api/auth/login/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) }).then((r) => j<Record<string, unknown>>(r)),
+  // аварийный сброс 2FA администратором при входе из локальной сети (пароль в теле)
+  loginReset2fa: (password: string) =>
+    fetch('/api/auth/login/reset-2fa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }).then((r) => j<Record<string, unknown>>(r)),
   register: (data: { email: string; displayName: string; password: string; twoFactor: string; telegramUsername?: string; captchaId?: string; captchaAnswer?: string }) =>
     fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<Record<string, unknown>>(r)),
   registerVerify: (code: string) =>

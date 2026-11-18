@@ -199,7 +199,8 @@ describe('персональные токены скачивания', () => {
 
 describe('сессии', () => {
   it('истёкшая сессия удаляется и не проходит', async () => {
-    const u = await db.user.findUnique({ where: { email: 'user@example.com' } })!
+    const u = await db.user.findUnique({ where: { email: 'user@example.com' } })
+    if (!u) throw new Error('seed: user@example.com не найден')
     const { token } = await session.createSession(u.id, '10.0.2.1', 'agent', 1)
     const hash = (await import('@/lib/security/ids')).sha256hex(token)
     await db.session.update({ where: { tokenHash: hash }, data: { expiresAt: new Date(Date.now() - 2000) } })
@@ -209,7 +210,8 @@ describe('сессии', () => {
   })
 
   it('destroySession: выход убивает сессию по cookie', async () => {
-    const u = await db.user.findUnique({ where: { email: 'user@example.com' } })!
+    const u = await db.user.findUnique({ where: { email: 'user@example.com' } })
+    if (!u) throw new Error('seed: user@example.com не найден')
     const { token } = await session.createSession(u.id, '10.0.2.2', 'agent', null)
     const req = new Request('http://hub.local/', { headers: { cookie: `${session.SESSION_COOKIE}=${token}` } })
     expect(await session.getSession(req)).not.toBeNull()

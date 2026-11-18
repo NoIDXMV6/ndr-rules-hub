@@ -21,7 +21,9 @@ export async function GET(req: NextRequest) {
     maybeStartTelegramPoller()
     void checkReleaseBroadcast().catch(() => undefined)
     const [sources, builds, settings, logs, ruleAgg] = await Promise.all([
-      db.source.findMany({ orderBy: [{ enabled: 'desc' }, { priority: 'asc' }] }),
+      // стабильный порядок: по времени добавления — вкл/выкл источника НЕ перемещает
+      // его в списке (раньше orderBy по enabled перемещал строку при каждом toggle)
+      db.source.findMany({ orderBy: [{ createdAt: 'asc' }] }),
       db.build.findFirst({ orderBy: { createdAt: 'desc' } }),
       getSettings(),
       db.logEntry.findMany({ orderBy: { ts: 'desc' }, take: 50 }),
@@ -43,6 +45,7 @@ export async function GET(req: NextRequest) {
           ruleCount: s.ruleCount, sizeBytes: s.sizeBytes, badge: s.badge, notes: s.notes, notesEn: s.notesEn,
           diffAdded: s.diffAdded, diffChanged: s.diffChanged, diffRemoved: s.diffRemoved,
           builtin: s.builtin, extraJson: s.extraJson, deletedAt: s.deletedAt, ownerId: s.ownerId,
+          createdAt: s.createdAt,
         })),
       },
       rules: { inDb: ruleAgg._count._all, inBuild: builds?.totalRules ?? 0 },

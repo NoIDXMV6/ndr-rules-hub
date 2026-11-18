@@ -38,22 +38,41 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
   const [busyId, setBusyId] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // сортировка и фильтр статуса: по умолчанию — «порядок добавления», строка источника
+  // НЕ перемещается при включении/выключении (раньше список сортировался по enabled —
+  // и каждый toggle перескакивал через список)
+  const [sortBy, setSortBy] = useState<'created' | 'name' | 'priority' | 'rules' | 'updated'>('created')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled' | 'error' | 'never'>('all')
   // пользователь управляет только СВОИМИ источниками (ownerId = selfId);
   // общие (ownerId = null) — только вкл/выкл и загрузка; админ — любой
   const canManage = (s: SourceItem) => role !== 'user' || (!!s.ownerId && !!selfId && s.ownerId === selfId)
 
   const sources = useMemo(() => {
     // в основном списке — только активные (не в корзине)
-    const list = (data?.sources.list ?? []).filter((s) => !s.deletedAt)
-    if (!search.trim()) return list
-    const q = search.toLowerCase()
-    return list.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        (s.notes ?? '').toLowerCase().includes(q) ||
-        (s.notesEn ?? '').toLowerCase().includes(q),
-    )
-  }, [data, search])
+    let list = (data?.sources.list ?? []).filter((s) => !s.deletedAt)
+    // фильтр статуса
+    if (statusFilter === 'enabled') list = list.filter((s) => s.enabled)
+    else if (statusFilter === 'disabled') list = list.filter((s) => !s.enabled)
+    else if (statusFilter === 'error') list = list.filter((s) => s.status === 'error')
+    else if (statusFilter === 'never') list = list.filter((s) => s.status === 'never' || !s.lastFetchAt)
+    // поиск по названию и примечаниям (на двух языках)
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      list = list.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          (s.notes ?? '').toLowerCase().includes(q) ||
+          (s.notesEn ?? '').toLowerCase().includes(q),
+      )
+    }
+    const sorted = [...list]
+    if (sortBy === 'name') sorted.sort((a, b) => a.name.localeCompare(b.name, loc))
+    else if (sortBy === 'priority') sorted.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, loc))
+    else if (sortBy === 'rules') sorted.sort((a, b) => b.ruleCount - a.ruleCount || a.name.localeCompare(b.name, loc))
+    else if (sortBy === 'updated') sorted.sort((a, b) => new Date(b.lastFetchAt ?? 0).getTime() - new Date(a.lastFetchAt ?? 0).getTime())
+    else sorted.sort((a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime())
+    return sorted
+  }, [data, search, sortBy, statusFilter, loc])
 
   const trash = useMemo(() => (data?.sources.list ?? []).filter((s) => !!s.deletedAt), [data])
 
@@ -168,6 +187,32 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
               onChange={(e) => setSearch(e.target.value)}
               className="w-56 bg-card border-input"
             />
+            {/* фильтр статуса и сортировка: положение строк стабильно —
+                toggle вкл/выкл не перемещает источник */}
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
+              <SelectTrigger className="w-44 bg-card border-input" title={t.sources.filterLabel} aria-label={t.sources.filterLabel}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                <SelectItem value="all">{t.sources.filterAll}</SelectItem>
+                <SelectItem value="enabled">{t.sources.filterEnabled}</SelectItem>
+                <SelectItem value="disabled">{t.sources.filterDisabled}</SelectItem>
+                <SelectItem value="error">{t.sources.filterError}</SelectItem>
+                <SelectItem value="never">{t.sources.filterNever}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+              <SelectTrigger className="w-48 bg-card border-input" title={t.sources.sortLabel} aria-label={t.sources.sortLabel}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                <SelectItem value="created">{t.sources.sortCreated}</SelectItem>
+                <SelectItem value="name">{t.sources.sortName}</SelectItem>
+                <SelectItem value="priority">{t.sources.sortPriority}</SelectItem>
+                <SelectItem value="rules">{t.sources.sortRules}</SelectItem>
+                <SelectItem value="updated">{t.sources.sortUpdated}</SelectItem>
+              </SelectContent>
+            </Select>
             <Button onClick={fetchAll} disabled={busyId !== null} variant="outline" className="border-input text-foreground">
               <RefreshCw className={`h-4 w-4 mr-1.5 ${busyId === 'all' ? 'animate-spin' : ''}`} /> {t.sources.refreshAll}
             </Button>
@@ -191,6 +236,11 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
                 </TableRow>
               </TableHeader>
               <TableBody>
+                {sources.length === 0 && (
+                  <TableRow className="border-border/60">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-4">{t.sources.filterEmpty}</TableCell>
+                  </TableRow>
+                )}
                 {sources.map((s) => {
                   const badgeKey = (s.badge && s.badge in BADGE_CLASSES ? s.badge : null) as BadgeKey | null
                   const note = pickLocalizedNote(s.notes, s.notesEn, lang)

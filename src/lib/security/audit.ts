@@ -16,6 +16,8 @@ export type AuditKind =
   // 2FA / Telegram-верификация
   | 'login_2fa' | 'login_2fa_ok' | 'login_2fa_fail' | 'register_verify_fail'
   | '2fa_change' | '2fa_reset' | 'telegram_username'
+  // изменение данных аккаунта (имя/email) и пароля
+  | 'account_update' | 'password_change'
 
 export interface AuditCtx {
   email?: string

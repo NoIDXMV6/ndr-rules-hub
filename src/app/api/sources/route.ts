@@ -12,8 +12,10 @@ export async function GET(req: NextRequest) {
   try {
     await ensureSeed()
     // источник виден всем авторизованным (общий конвейер сборки),
-    // но управлять можно только своими (ownerId) или общими операционно
-    const sources = await db.source.findMany({ orderBy: [{ enabled: 'desc' }, { priority: 'asc' }] })
+    // но управлять можно только своими (ownerId) или общими операционно;
+    // стабильный порядок по времени добавления — положение в списке не зависит
+    // от enabled (вкл/выкл не перемещает источник)
+    const sources = await db.source.findMany({ orderBy: [{ createdAt: 'asc' }] })
     return NextResponse.json({ sources })
   } catch (e) {
     return apiError(e)
