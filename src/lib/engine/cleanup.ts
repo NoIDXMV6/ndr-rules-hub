@@ -267,7 +267,7 @@ async function cleanLogDirs(dryRun: boolean, dirs: string[], keepDays: number): 
 
 // ── Очиститель 3: индексы OpenSearch ─────────────────────────────────────────
 
-type EsChannel =
+export type EsChannel =
   | { kind: 'http'; base: string; headers: Record<string, string> }
   | { kind: 'docker'; container: string }
 
@@ -336,19 +336,22 @@ export async function resolveEsChannel(override?: string): Promise<{ channel: Es
   return { channel: null, tried }
 }
 
-async function esRequest(ch: EsChannel, method: string, p: string, timeoutMs = 30_000): Promise<{ status: number; body: string }> {
+async function esRequest(ch: EsChannel, method: string, p: string, body?: string, timeoutMs = 30_000): Promise<{ status: number; body: string }> {
   if (ch.kind === 'http') {
     const res = await request(`${ch.base}${p}`, {
       method,
-      headers: ch.headers,
+      headers: body ? { ...ch.headers, 'content-type': 'application/json' } : ch.headers,
+      body: body || undefined,
       dispatcher: esDispatcher(),
       headersTimeout: timeoutMs,
       bodyTimeout: timeoutMs,
     })
-    const body = await res.body.text()
-    return { status: res.statusCode, body }
+    const out = await res.body.text()
+    return { status: res.statusCode, body: out }
   }
-  const args = ['exec', ch.container, 'curl', '-sk', '--noproxy', '*', '--max-time', String(Math.ceil(timeoutMs / 1000)), '-w', '\n%{http_code}', '-X', method, `http://127.0.0.1:9200${p}`]
+  const args = ['exec', ch.container, 'curl', '-sk', '--noproxy', '*', '--max-time', String(Math.ceil(timeoutMs / 1000)), '-w', '\n%{http_code}', '-X', method]
+  if (body) args.push('-H', 'content-type: application/json', '-d', body)
+  args.push(`http://127.0.0.1:9200${p}`)
   try {
     const r = await execFileP('docker', args, { timeout: timeoutMs + 10_000 })
     const out = r.stdout
@@ -367,9 +370,20 @@ interface OsIndex {
   sizeBytes: number
 }
 
+/** POST/GET c JSON-телом (поиск индексов для коннектора Clear NDR → MISP) */
+export async function esQuery(
+  ch: EsChannel,
+  method: string,
+  p: string,
+  body: Record<string, unknown> | undefined,
+  timeoutMs = 30_000,
+): Promise<{ status: number; body: string }> {
+  return esRequest(ch, method, p, body ? JSON.stringify(body) : undefined, timeoutMs)
+}
+
 /** Список индексов с датой создания и размером (/_cat/indices) */
 export async function listOsIndices(ch: EsChannel): Promise<OsIndex[]> {
-  const r = await esRequest(ch, 'GET', '/_cat/indices?format=json&h=index,creation.date,store.size', 20_000)
+  const r = await esRequest(ch, 'GET', '/_cat/indices?format=json&h=index,creation.date,store.size', undefined, 20_000)
   if (r.status !== 200) throw new Error(`OpenSearch вернул HTTP ${r.status}: ${r.body.slice(0, 160)}`)
   let arr: Array<Record<string, string>> = []
   try {

@@ -336,6 +336,18 @@ export const api = {
   notifyAction: (body: Record<string, unknown>) =>
     fetch('/api/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
   notifyState: () => fetch('/api/notify', { cache: 'no-store' }).then((r) => j<{ gotify: { containerRunning: boolean; url?: string; port: number } }>(r)),
+  // MISP: связь, развёртывание стека, коннекторы событий
+  mispState: () =>
+    fetch('/api/misp', { cache: 'no-store' }).then((r) =>
+      j<{
+        connection: { url: string; authKeySet: boolean; ok: boolean; version?: string | null; error?: string }
+        deploy: { containerRunning: boolean; url?: string; port: number }
+        ingest: { tokenSet: boolean }
+        connectors: Array<{ id: string; enabled: boolean; interval: number; lastRun: string; lastStatus: string; lastCount: number }>
+      }>(r),
+    ),
+  mispAction: (body: Record<string, unknown>) =>
+    fetch('/api/misp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),
   // обновление Clear NDR
   updateStatus: () => fetch('/api/clearndr-update', { cache: 'no-store' }).then((r) => j<UpdateStatus>(r)),
   updateRun: (runId: string, tail = 24000) => fetch(`/api/clearndr-update?log=${encodeURIComponent(runId)}&tail=${tail}`, { cache: 'no-store' }).then((r) => j<UpdateRunStatus>(r)),

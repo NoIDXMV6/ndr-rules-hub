@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { ensureSeed, getSettings } from '@/lib/engine/service'
 import { maybeStartCleanupScheduler } from '@/lib/engine/cleanup'
 import { maybeStartTelegramPoller, checkReleaseBroadcast } from '@/lib/engine/telegram'
+import { ensureConnectorLoop } from '@/lib/engine/misp-connectors'
 import { wgStatus } from '@/lib/engine/vpn'
 import { apiError } from '@/lib/api-error'
 import { guard, sanitizeSettings } from '@/lib/security/guard'
@@ -19,6 +20,8 @@ export async function GET(req: NextRequest) {
     // Telegram-поллер (привязка чатов, коды 2FA) + проверка рассылки о версии —
     // тоже один раз на процесс; ошибки не роняют дашборд
     maybeStartTelegramPoller()
+    // цикл коннекторов MISP (60 c): как и остальные — один раз на процесс
+    ensureConnectorLoop()
     void checkReleaseBroadcast().catch(() => undefined)
     const [sources, builds, settings, logs, ruleAgg] = await Promise.all([
       // стабильный порядок: по времени добавления — вкл/выкл источника НЕ перемещает

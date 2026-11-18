@@ -76,6 +76,11 @@ export const SECRET_SETTING_KEYS = [
   'clearndrExportToken',
   'tgBotToken', // токен Telegram-бота
   'gotifyToken', // app-токен Gotify
+  'mispIngestToken', // токен webhook-приёмника /api/misp/ingest
+  'mispConnWazuhPass', // пароль Wazuh Indexer
+  'mispConnZabbixPassword', // пароль Zabbix API
+  'mispConnZabbixToken', // API-токен Zabbix
+  'mispConnMikrotikPass', // пароль RouterOS REST
 ]
 
 export function sanitizeSettings<T extends Record<string, string>>(settings: T, role: GuardCtx['role']): T {

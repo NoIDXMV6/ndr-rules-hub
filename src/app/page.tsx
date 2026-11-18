@@ -14,6 +14,7 @@ import { VpnTab } from '@/components/hub/vpn-tab'
 import { UpdateTab } from '@/components/hub/update-tab'
 import { OsdTab } from '@/components/hub/osd-tab'
 import { IntegrationsTab } from '@/components/hub/integrations-tab'
+import { MispTab } from '@/components/hub/misp-tab'
 import { SettingsTab } from '@/components/hub/settings-tab'
 import { LogsTab } from '@/components/hub/logs-tab'
 import { UsersTab } from '@/components/hub/users-tab'
@@ -29,7 +30,7 @@ import {
   Activity, Bell, Blocks, ChartColumn, Check, ChevronDown, CircleHelp, Database,
   Download, FolderTree, Globe, Info, Layers, LayoutDashboard, Library,
   LifeBuoy, LogOut, Network, Package, RefreshCw, ScrollText, Settings,
-  Shield, UserRound, Users, Wifi, Wrench,
+  Share2, Shield, UserRound, Users, Wifi, Wrench,
 } from 'lucide-react'
 
 type Role = 'admin' | 'user' | 'anon'
@@ -90,6 +91,7 @@ export default function Home() {
     if (admin) {
       allowed.add('vpn')
       allowed.add('integrations') // «Уведомления и сервисы» в меню «Интеграции»
+      allowed.add('misp') // платформа threat intelligence + коннекторы
       allowed.add('settings')
       allowed.add('logs')
       if (me?.multiUser) allowed.add('users')
@@ -243,9 +245,14 @@ export default function Home() {
             <OsdTab data={data} onChange={refresh} />
           </TabsContent>
           {isAdmin && (
-            <TabsContent value="integrations" className="mt-4">
-              <IntegrationsTab data={data} onChange={refresh} />
-            </TabsContent>
+            <>
+              <TabsContent value="integrations" className="mt-4">
+                <IntegrationsTab data={data} onChange={refresh} />
+              </TabsContent>
+              <TabsContent value="misp" className="mt-4">
+                <MispTab data={data} onChange={refresh} />
+              </TabsContent>
+            </>
           )}
           {isAdmin && (
             <>
@@ -312,7 +319,10 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAcco
     { value: 'update', label: t.tabs.update, icon: ico(Download) },
     { value: 'osd', label: t.tabs.osd, icon: ico(ChartColumn) },
   ]
-  if (isAdmin) integrations.push({ value: 'vpn', label: t.tabs.vpn, icon: ico(Network) })
+  if (isAdmin) {
+    integrations.push({ value: 'misp', label: t.tabs.misp, icon: ico(Share2) })
+    integrations.push({ value: 'vpn', label: t.tabs.vpn, icon: ico(Network) })
+  }
 
   const groups: MenuGroupDef[] = [
     { kind: 'direct', key: 'overview', item: { value: 'overview', label: t.tabs.overview, icon: ico(LayoutDashboard) } },

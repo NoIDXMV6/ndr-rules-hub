@@ -617,4 +617,48 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   // ── 2FA / Telegram-бот / рассылка о версиях ─────────────────────────────────
   releaseBroadcastEnabled: 'true', // уведомлять всех с привязанным Telegram о новой версии
   releaseNotes: '', // текст «что нового», добавляемый к рассылке о версии
+  // ── MISP (вкладка «Интеграции» → «MISP») ────────────────────────────────────
+  mispUrl: '', // базовый URL MISP (коннекторы и источник-фид; деплой подставляет сам)
+  mispDistribution: '1', // распределение событий: 0 org,1 community,2 connected,3 all
+  mispThreatLevel: '2', // threat level: 1 High … 4 Undefined
+  mispPublished: 'false', // публиковать события сразу (false — на согласование)
+  mispTagPrefix: 'ndr-hub', // тег-метка, добавляемый ко всем событиям хаба
+  mispDeployPort: '8408', // порт хоста для ndr-misp-nginx
+  mispDeployBaseUrl: '', // BASE_URL стека MISP (http://<адрес>:порт); пусто — автоподстановка
+  mispIngestToken: '', // токен webhook-приёмника /api/misp/ingest (uuWAF и др.)
+  // коннекторы: включение, интервал (мин), состояние последнего запуска
+  mispConnClearndrEnabled: 'false',
+  mispConnClearndrInterval: '15',
+  mispConnClearndrIndex: 'logstash-*', // индекс Suricata-алертов Clear NDR
+  mispConnClearndrLastRun: '',
+  mispConnClearndrLastStatus: '',
+  mispConnClearndrLastCount: '0',
+  mispConnWazuhEnabled: 'false',
+  mispConnWazuhUrl: '', // Wazuh Indexer (https://<хост>:9200)
+  mispConnWazuhUser: 'admin',
+  mispConnWazuhPass: '',
+  mispConnWazuhIndex: 'wazuh-states-vulnerabilities-*',
+  mispConnWazuhInterval: '60',
+  mispConnWazuhLastRun: '',
+  mispConnWazuhLastStatus: '',
+  mispConnWazuhLastCount: '0',
+  mispConnZabbixEnabled: 'false',
+  mispConnZabbixUrl: '', // http://<хост>/api_jsonrpc.php
+  mispConnZabbixUser: 'Admin',
+  mispConnZabbixPassword: '',
+  mispConnZabbixToken: '', // API-токен Zabbix 5.4+ (альтернатива user/pass)
+  mispConnZabbixMinSeverity: '2', // минимальная важность проблем (0..5)
+  mispConnZabbixInterval: '15',
+  mispConnZabbixLastRun: '',
+  mispConnZabbixLastStatus: '',
+  mispConnZabbixLastCount: '0',
+  mispConnMikrotikEnabled: 'false',
+  mispConnMikrotikUrl: '', // https://<роутер>/rest (RouterOS v7, REST включён)
+  mispConnMikrotikUser: 'admin',
+  mispConnMikrotikPass: '',
+  mispConnMikrotikLists: '', // фильтр названий address-list через запятую (пусто — все)
+  mispConnMikrotikInterval: '15',
+  mispConnMikrotikLastRun: '',
+  mispConnMikrotikLastStatus: '',
+  mispConnMikrotikLastCount: '0',
 }

@@ -44,91 +44,92 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
 
   return (
     <div className="space-y-4">
+      {/* ── Единая группа «Токены источников»: snort.org, ET Pro, abuse.ch, MISP ── */}
       <Card className="bg-card border-border">
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">{t.settings.snortTitle}</CardTitle>
-          <CardDescription>{t.settings.snortDesc}</CardDescription>
+          <CardTitle className="text-base">{t.settings.tokensTitle}</CardTitle>
+          <CardDescription>{t.settings.tokensDesc}</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="max-w-xl">
-            <Label className="text-foreground">{t.settings.oinkcode}</Label>
-            <div className="flex gap-2">
-              <Input
-                type={showOink ? 'text' : 'password'}
-                value={s.oinkcode ?? ''}
-                onChange={(e) => set('oinkcode', e.target.value.trim())}
-                className="bg-card border-input font-mono"
-                placeholder={t.settings.oinkPlaceholder}
-              />
-              <Button variant="outline" className="border-input text-foreground shrink-0" onClick={() => setShowOink(!showOink)}>
-                {showOink ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
+        <CardContent className="space-y-4">
+          {/* snort.org: oinkcode аккаунта + отдельный код ET Pro */}
+          <div className="space-y-3 rounded-lg border border-border p-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t.settings.snortTitle}</p>
+              <p className="text-xs text-muted-foreground">{t.settings.snortDesc}</p>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {t.settings.oinkHelp}
-            </p>
-          </div>
-          <div className="max-w-xl">
-            <Label className="text-foreground">{t.settings.etProOinkcode}</Label>
-            <div className="flex gap-2">
-              <Input
-                type={showEtPro ? 'text' : 'password'}
-                value={s.etProOinkcode ?? ''}
-                onChange={(e) => set('etProOinkcode', e.target.value.trim())}
-                className="bg-card border-input font-mono"
-                placeholder={t.settings.etProPlaceholder}
-              />
-              <Button variant="outline" className="border-input text-foreground shrink-0" onClick={() => setShowEtPro(!showEtPro)}>
-                {showEtPro ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <Label className="text-foreground">{t.settings.oinkcode}</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type={showOink ? 'text' : 'password'}
+                    value={s.oinkcode ?? ''}
+                    onChange={(e) => set('oinkcode', e.target.value.trim())}
+                    className="bg-card border-input font-mono"
+                    placeholder={t.settings.oinkPlaceholder}
+                  />
+                  <Button variant="outline" className="border-input text-foreground shrink-0" onClick={() => setShowOink(!showOink)}>
+                    {showOink ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">{t.settings.oinkHelp}</p>
+              </div>
+              <div>
+                <Label className="text-foreground">{t.settings.etProOinkcode}</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type={showEtPro ? 'text' : 'password'}
+                    value={s.etProOinkcode ?? ''}
+                    onChange={(e) => set('etProOinkcode', e.target.value.trim())}
+                    className="bg-card border-input font-mono"
+                    placeholder={t.settings.etProPlaceholder}
+                  />
+                  <Button variant="outline" className="border-input text-foreground shrink-0" onClick={() => setShowEtPro(!showEtPro)}>
+                    {showEtPro ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">{t.settings.etProHelp}</p>
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">
-              {t.settings.etProHelp}
-            </p>
           </div>
-        </CardContent>
-      </Card>
 
-      <Card className="bg-card border-border">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">{t.settings.abusechTitle}</CardTitle>
-          <CardDescription>{t.settings.abusechDesc}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="max-w-xl">
-            <Label className="text-foreground">{t.settings.abusechKey}</Label>
-            <Input
-              type="password"
-              value={s.abusechAuthKey ?? ''}
-              onChange={(e) => set('abusechAuthKey', e.target.value.trim())}
-              className="bg-card border-input font-mono"
-              placeholder={t.settings.abusechPlaceholder}
-            />
-            <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">
-              {t.settings.abusechHelp}
-            </p>
+          {/* abuse.ch: Auth-Key (ThreatFox, URLhaus) */}
+          <div className="space-y-3 rounded-lg border border-border p-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t.settings.abusechTitle}</p>
+              <p className="text-xs text-muted-foreground">{t.settings.abusechDesc}</p>
+            </div>
+            <div className="max-w-xl">
+              <Label className="text-foreground">{t.settings.abusechKey}</Label>
+              <Input
+                type="password"
+                value={s.abusechAuthKey ?? ''}
+                onChange={(e) => set('abusechAuthKey', e.target.value.trim())}
+                className="bg-card border-input font-mono"
+                placeholder={t.settings.abusechPlaceholder}
+              />
+              <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">{t.settings.abusechHelp}</p>
+            </div>
           </div>
-        </CardContent>
-      </Card>
 
-      <Card className="bg-card border-border">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">{t.settings.mispTitle}</CardTitle>
-          <CardDescription>{t.settings.mispDesc}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="max-w-xl">
-            <Label className="text-foreground">{t.settings.mispKey}</Label>
-            <Input
-              type="password"
-              value={s.mispAuthKey ?? ''}
-              onChange={(e) => set('mispAuthKey', e.target.value.trim())}
-              className="bg-card border-input font-mono"
-              placeholder={t.settings.mispPlaceholder}
-            />
-            <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">
-              {t.settings.mispHelp}
-            </p>
+          {/* MISP: ключ REST API (источники-фиды; коннекторы — вкладка «MISP») */}
+          <div className="space-y-3 rounded-lg border border-border p-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t.settings.mispTitle}</p>
+              <p className="text-xs text-muted-foreground">{t.settings.mispDesc}</p>
+            </div>
+            <div className="max-w-xl">
+              <Label className="text-foreground">{t.settings.mispKey}</Label>
+              <Input
+                type="password"
+                value={s.mispAuthKey ?? ''}
+                onChange={(e) => set('mispAuthKey', e.target.value.trim())}
+                className="bg-card border-input font-mono"
+                placeholder={t.settings.mispPlaceholder}
+              />
+              <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">{t.settings.mispHelp}</p>
+              <p className="text-xs text-muted-foreground mt-1">{t.settings.mispTabHint}</p>
+            </div>
           </div>
         </CardContent>
       </Card>
