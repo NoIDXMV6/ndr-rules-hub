@@ -109,15 +109,16 @@ export default function Home() {
         : tr(t.messages.fetchAllDiff, { a: f.diff?.added ?? 0, c: f.diff?.changed ?? 0, rm: f.diff?.removed ?? 0, u: f.unchangedSources ?? 0 })
       const fetchTxt = tr(t.messages.cycleFetch, { ok: f.ok, failed: f.failed, diff: diffTxt })
       setMessage({ ok: f.failed === 0, text: fetchTxt })
-      const b = await api.build(true)
-      const chgTxt = b.ok && b.changes
+      // сборка идёт фоном: buildWait опрашивает /api/build/progress до завершения
+      const b = await api.buildWait(true)
+      const chgTxt = b?.ok && b.changes
         ? (b.unchanged ? t.messages.buildNoChanges : tr(t.messages.buildChanges, { a: b.changes.added, c: b.changes.changed, rm: b.changes.removed }))
         : ''
       setMessage({
-        ok: !!b.ok,
-        text: b.ok
+        ok: !!b?.ok,
+        text: b?.ok
           ? `${fetchTxt}\n${tr(t.messages.cycleBuilt, { total: b.total ?? 0, file: b.fileName ?? '—', changes: chgTxt })}`
-          : tr(t.messages.cycleBuildError, { err: b.error ?? '—' }),
+          : tr(t.messages.cycleBuildError, { err: b?.error ?? '—' }),
       })
       await refresh()
     } catch (e) {

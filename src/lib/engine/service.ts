@@ -6,12 +6,13 @@ import { SEED_SOURCES, DEFAULT_SETTINGS } from './seed'
 import { fetchSource, FetchSourceCfg, CACHE_DIR, EXPORTS_DIR, DATA_DIR } from './fetcher'
 import {
   mergeSources, renderFinalFile, hashRule, conflictKey, findConflictingDuplicates, dedupeConflicting,
-  sanitizeSciriusCompat, findSciriusSidConflicts, renderPerSourceFiles, SourceRules, DedupPolicy, BuildStats, BuiltRule,
+  sanitizeSciriusCompat, findSciriusSidConflicts, renderPerSourceFiles, SourceRules, DedupPolicy, BuildStats, BuiltRule, ArchiveInfo,
 } from './build'
 import { saveExportFile, pushToClearndr, ClearndrExportCfg } from './exporter'
 import { SidMapper, remapToClearndrBlock } from './sidmap'
 import { ruleCategory, applyCategoryAndRuleFilter } from './categories'
 import { notifyEvent } from './notify'
+import { startBuildProgress, isBuildActive, setBuildStage, addBuildLog, finishBuildProgress, failBuildProgress } from './build-progress'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { execFile } from 'child_process'
@@ -406,13 +407,22 @@ export async function buildFinal(origin = 'manual'): Promise<{
   /** состав правил не изменился — переимпортировать файл в Clear NDR/Suricata не требуется */
   unchanged?: boolean
 }> {
+  // Прогресс сборки: для ручного запуска задание создаёт POST /api/build,
+  // для cron/пайплайна — создаём здесь, если активного задания ещё нет
+  // (состояние в памяти процесса, UI опрашивает GET /api/build/progress)
+  if (!isBuildActive()) startBuildProgress(origin)
   const settings = await getSettings()
   const sources = await db.source.findMany({
     where: { enabled: true, deletedAt: null },
     orderBy: { priority: 'asc' },
     include: { rules: true },
   })
-  if (sources.length === 0) return { ok: false, error: 'Нет включённых источников — сначала загрузите правила' }
+  if (sources.length === 0) {
+    failBuildProgress('Нет включённых источников — сначала загрузите правила')
+    return { ok: false, error: 'Нет включённых источников — сначала загрузите правила' }
+  }
+  setBuildStage('db-read', 5)
+  addBuildLog(`Чтение источников из базы: ${sources.length} шт., правил на входе ${sources.reduce((n, s) => n + s.rules.length, 0).toLocaleString('ru-RU')}`)
 
   const srcRules: SourceRules[] = sources.map((s) => ({
     sourceId: s.id,
@@ -434,6 +444,7 @@ export async function buildFinal(origin = 'manual'): Promise<{
   // Фильтр категорий и пользовательских исключений правил (раздел «Категории»):
   // правила включённых источников дополнительно проходят через выключенные
   // категории и персональные выключатели (RuleOverride, sid → enabled).
+  setBuildStage('filter', 10)
   const catPrefs = await db.category.findMany()
   const overrides = await db.ruleOverride.findMany()
   const catEnabled = new Map(catPrefs.map((c) => [c.name, c.enabled]))
@@ -454,6 +465,7 @@ export async function buildFinal(origin = 'manual'): Promise<{
       total += s.rules.length
     }
     await log('info', 'build', `Фильтр категорий/правил: исключено по категориям ${excludedByCategory}, по правилам ${excludedByRule}; осталось ${total} правил на входе слияния`)
+    addBuildLog(`Фильтр категорий/правил: исключено ${excludedByCategory + excludedByRule}, осталось ${total.toLocaleString('ru-RU')} правил`)
   }
 
   const policy: Partial<DedupPolicy> = {
@@ -464,9 +476,13 @@ export async function buildFinal(origin = 'manual'): Promise<{
     privateSidStart: parseInt(settings.privateSidStart || '1000000000', 10),
   }
 
+  setBuildStage('merge', 15)
+  addBuildLog(`Слияние ${sources.length} источников с дедупликацией…`)
   const { rules: merged, stats } = mergeSources(srcRules, policy)
   stats.excludedByCategory = excludedByCategory
   stats.excludedByRule = excludedByRule
+  setBuildStage('conflict-dedup', 45)
+  addBuildLog(`Слияние завершено: дубликатов по SID ${stats.duplicateBySid}, по содержимому ${stats.duplicateByContent}, несовместимых ${stats.incompatibleDropped}`)
 
   // Гейт Clear NDR: правила-близнецы (совпадают после снятия sid/reference:*)
   // роняют импорт с «conflicting SID in same source». Убираем их ВСЕГДА,
@@ -474,10 +490,12 @@ export async function buildFinal(origin = 'manual'): Promise<{
   const dedup = dedupeConflicting(merged)
   const rules = dedup.rules
   stats.conflictingRemoved = dedup.removed
+  addBuildLog(`Конфликтных близнецов Clear NDR удалено: ${dedup.removed}`)
   const conflicting = findConflictingDuplicates(rules)
   if (conflicting.length > 0) {
     const sample = conflicting.slice(0, 5).map(([a, b]) => `sid ${a.sid}/${b.sid}`).join(', ')
     await log('error', 'build', `Сборка прервана: ${conflicting.length} конфликтных дубликатов (${sample}); файл не записан`)
+    failBuildProgress(`конфликтные дубликаты содержимого: ${conflicting.length}`)
     return { ok: false, error: `конфликтные дубликаты содержимого: ${conflicting.length}` }
   }
   stats.uniqueSids = rules.length
@@ -487,31 +505,40 @@ export async function buildFinal(origin = 'manual'): Promise<{
   // с «conflicting SID (33) in same source». Переносим настоящий sid в начало
   // опций проблемных правил (ДО перенумерации: remap тоже заменяет первое
   // вхождение sid — после санитайза это гарантированно настоящий sid).
+  setBuildStage('sanitize', 55)
   const sanitized = sanitizeSciriusCompat(rules)
   if (sanitized.failed.length > 0) {
     const sample = sanitized.failed.slice(0, 3).map((f) => `sid ${f.sid}`).join(', ')
     await log('error', 'build', `Сборка прервана: ${sanitized.failed.length} правил не удалось привести к формату парсера Clear NDR (${sample}); файл не записан`, sanitized.failed[0])
+    failBuildProgress(`правила, несовместимые с парсером Clear NDR: ${sanitized.failed.length}`)
     return { ok: false, error: `правила, несовместимые с парсером Clear NDR: ${sanitized.failed.length}` }
   }
   stats.sanitizedForScirius = sanitized.rewritten
+  addBuildLog(`Адаптировано под парсер Clear NDR: ${sanitized.rewritten}`)
 
   // Политика SID: всё, что вне свободного clearndr-блока 1e9..1.1e9, переносится
   // детерминированно (карта общая с python-конвейером, data/sidmap.json).
   // Гейт: при дубликатах или выходе за блок сборка падает — плохой файл не пишется.
+  setBuildStage('remap', 62)
   const mapper = new SidMapper()
   await mapper.load()
   const remap = remapToClearndrBlock(sanitized.rules, mapper)
   await mapper.save()
   stats.renumbered = remap.renumbered
+  addBuildLog(`Remap SID в clearndr-блок: перенесено ${remap.renumbered} (диапазон ${remap.minSid}..${remap.maxSid})`)
 
   // Финальная проверка глазами scirius: уникальность «видимых» SID всего набора
+  setBuildStage('sid-check', 68)
   const sidConflicts = findSciriusSidConflicts(sanitized.rules)
   if (sidConflicts.size > 0) {
     const sample = [...sidConflicts.entries()].slice(0, 5).map(([sid, n]) => `sid ${sid} ×${n}`).join(', ')
     await log('error', 'build', `Сборка прервана: парсер Clear NDR увидит дубликаты SID (${sample}); файл не записан`)
+    failBuildProgress(`видимые парсеру Clear NDR дубликаты SID: ${sidConflicts.size}`)
     return { ok: false, error: `видимые парсеру Clear NDR дубликаты SID: ${sidConflicts.size}` }
   }
 
+  setBuildStage('render', 72)
+  addBuildLog(`Рендер итогового файла: ${sanitized.rules.length.toLocaleString('ru-RU')} правил…`)
   const content = renderFinalFile(sanitized.rules, {
     sources: sources.map((s) => s.name),
     stats,
@@ -522,6 +549,7 @@ export async function buildFinal(origin = 'manual'): Promise<{
   // новым файлом — путь тот же) и сравниваем по sid + строке правила: что добавилось,
   // изменилось, удалилось в итоговом наборе. Если состав не изменился — переимпортировать
   // файл в Clear NDR/Suricata не требуется (заголовок «Сгенерировано» не в счёт).
+  setBuildStage('diff', 82)
   const prevBuild = await db.build.findFirst({ orderBy: { createdAt: 'desc' } })
   let prevMap: Map<number, string> | null = null
   if (prevBuild) {
@@ -547,21 +575,33 @@ export async function buildFinal(origin = 'manual'): Promise<{
     stats.changes = changes
   }
   const unchanged = changes !== null && changes.added + changes.changed + changes.removed === 0
+  addBuildLog(changes === null
+    ? 'Диф: первая сборка — сравнивать не с чем'
+    : unchanged
+      ? 'Диф vs предыдущей сборки: изменений нет'
+      : `Диф vs предыдущей сборки: +${changes.added} добавлено, ~${changes.changed} изменено, −${changes.removed} удалено`)
 
+  setBuildStage('save', 88)
   const { filePath, sizeBytes } = await saveExportFile(fileName, content)
   const sha256 = (await import('crypto')).createHash('sha256').update(content).digest('hex')
+  addBuildLog(`Файл записан: ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ)`)
 
   // Вариант сохранения: tgz-архив, правила разбиты по файлам-источникам.
   // Такой архив импортируется в Clear NDR как источник с datatype "sigs":
   // каждый <источник>.rules становится отдельной категорией.
   if (settings.buildFormat === 'file+tgz') {
+    setBuildStage('archive', 91)
     try {
-      stats.archive = await buildPerSourceArchive(sanitized.rules, fileName, stats)
+      const arch: ArchiveInfo = await buildPerSourceArchive(sanitized.rules, fileName, stats)
+      stats.archive = arch
+      addBuildLog(`Архив по источникам: ${arch.fileName} (${arch.files.length} файл(ов))`)
     } catch (e) {
       await log('warn', 'build', `Архив по источникам не создан: ${(e as Error).message}`)
+      addBuildLog(`Архив по источникам не создан: ${(e as Error).message}`)
     }
   }
 
+  setBuildStage('db-write', 96)
   const build = await db.build.create({
     data: {
       totalRules: sanitized.rules.length,
@@ -582,6 +622,7 @@ export async function buildFinal(origin = 'manual'): Promise<{
       ? '; состав правил не изменился — переимпортировать в Clear NDR/Suricata не требуется'
       : `; изменения набора vs предыдущей сборки: +${changes.added} добавлено, ~${changes.changed} изменено, −${changes.removed} удалено`
   await log(unchanged ? 'info' : 'success', 'build', `Собран итоговый набор: ${sanitized.rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}; адаптировано под парсер Clear NDR: ${sanitized.rewritten}${catNote}${archiveNote}${changeNote}`)
+  finishBuildProgress({ ok: true, total: sanitized.rules.length, fileName, changes, unchanged })
   return { ok: true, buildId: build.id, total: sanitized.rules.length, fileName, changes, unchanged }
 }
 
@@ -602,7 +643,7 @@ async function buildPerSourceArchive(
   rules: BuiltRule[],
   baseFileName: string,
   stats: BuildStats
-): Promise<BuildStats['archive']> {
+): Promise<ArchiveInfo> {
   const perSource = renderPerSourceFiles(rules)
   if (perSource.length === 0) throw new Error('нет правил для архива')
   const base = baseFileName.replace(/\.rules$/i, '')

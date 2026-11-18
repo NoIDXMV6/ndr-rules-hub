@@ -285,7 +285,26 @@ export const api = {
   createSource: (data: Record<string, unknown>) =>
     fetch('/api/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ source: SourceItem }>(r)),
   build: (exportAfter: boolean) =>
-    fetch('/api/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ export: exportAfter }) }).then((r) => j<{ ok: boolean; total?: number; fileName?: string; error?: string; changes?: RulesDiff | null; unchanged?: boolean; export?: { ok: boolean; error?: string; detail?: string } }>(r)),
+    fetch('/api/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ export: exportAfter }) }).then((r) => j<{ ok: boolean; jobId: string; alreadyRunning?: boolean; origin?: string; error?: string }>(r)),
+  buildProgress: () => fetch('/api/build/progress', { cache: 'no-store' }).then((r) => j<{ progress: BuildProgressInfo | null }>(r)),
+  /** Запустить сборку и дождаться завершения (опрос /api/build/progress).
+   *  onProgress вызывается на каждый опрос — вкладка «Сборка» рисует по нему прогрессбар.
+   *  Возвращает результат сборки (или null — маршрут прогресса недоступен/таймаут). */
+  buildWait: async (exportAfter: boolean, onProgress?: (p: BuildProgressInfo) => void): Promise<BuildResultInfo | null> => {
+    const start = await api.build(exportAfter)
+    if (!start.ok) throw new Error(start.error ?? 'не удалось запустить сборку')
+    const started = Date.now()
+    while (Date.now() - started < 15 * 60_000) {
+      const pr = await api.buildProgress().catch(() => null)
+      const p = pr?.progress ?? null
+      if (p) onProgress?.(p)
+      if (p && !p.active) return p.result
+      // маршрут прогресса недоступен (старый сервер) — не зависаем
+      if (!p && Date.now() - started > 5000) return null
+      await new Promise((res) => setTimeout(res, 1000))
+    }
+    return null
+  },
   exportPush: () => fetch('/api/export', { method: 'POST' }).then((r) => j<{ ok: boolean; error?: string; detail?: string; pushedTo?: string }>(r)),
   exportFiles: () => fetch('/api/export', { method: 'PUT' }).then((r) => j<{ files: Array<{ name: string; size: number; mtime: string }> }>(r)),
   rules: (params: string) => fetch(`/api/rules?${params}`, { cache: 'no-store' }).then((r) => j<{ total: number; rules: RuleRow[] }>(r)),
@@ -359,6 +378,10 @@ export const api = {
   createToken: (data: { name: string; ttlDays?: number }) =>
     fetch('/api/tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; token?: { id: string; token: string; name: string; prefix: string; expiresAt: string | null }; error?: string }>(r)),
   revokeToken: (id: string) => fetch(`/api/tokens/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
+  restoreToken: (id: string) =>
+    fetch(`/api/tokens/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'restore' }) }).then((r) => j<{ ok: boolean }>(r)),
+  deleteToken: (id: string) =>
+    fetch(`/api/tokens/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete' }) }).then((r) => j<{ ok: boolean }>(r)),
 }
 
 // ── Раздел «Обновление Clear NDR» ────────────────────────────────────────────
@@ -615,6 +638,38 @@ export interface DownloadTokenItem {
   owner?: string
   ownerName?: string
   own: boolean
+}
+
+// ── Прогресс сборки (GET /api/build/progress) ──────────────────────────────
+
+/** Фазы сборки — совпадают с кодами в src/lib/engine/build-progress.ts */
+export const BUILD_STAGES = [
+  'db-read', 'filter', 'merge', 'conflict-dedup', 'sanitize', 'remap', 'sid-check',
+  'render', 'diff', 'save', 'archive', 'db-write', 'export', 'done',
+] as const
+
+export interface BuildProgressInfo {
+  jobId: string
+  origin: string
+  active: boolean
+  stage: string
+  percent: number
+  startedAt: string
+  finishedAt: string | null
+  error: string | null
+  log: Array<{ ts: string; msg: string }>
+  result: BuildResultInfo | null
+}
+
+/** Финальный результат сборки (из GET /api/build/progress после завершения) */
+export interface BuildResultInfo {
+  ok: boolean
+  error?: string
+  total?: number
+  fileName?: string
+  changes?: RulesDiff | null
+  unchanged?: boolean
+  export?: { ok: boolean; error?: string; detail?: string; pushedTo?: string } | null
 }
 
 // lang — язык интерфейса (единицы и формат даты); по умолчанию ru — для совместимости

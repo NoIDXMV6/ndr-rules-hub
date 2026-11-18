@@ -1,33 +1,32 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { api, Dashboard, DownloadTokenItem, fmtSize, fmtTime } from '@/components/hub/api'
+import { Progress } from '@/components/ui/progress'
+import { api, Dashboard, DownloadTokenItem, BuildProgressInfo, fmtSize, fmtTime } from '@/components/hub/api'
 import { useI18n, type Lang } from '@/lib/i18n'
-import { Check, Copy, Download, FileArchive, Hammer, KeyRound, Link2, Plus, Save, Send, Trash2 } from 'lucide-react'
+import { copyToClipboard } from '@/lib/utils'
+import { Ban, Check, Copy, Download, FileArchive, Hammer, KeyRound, Plus, RotateCcw, Send, Trash2 } from 'lucide-react'
 
 export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onChange: () => void; role?: 'admin' | 'user' | 'anon' }) {
   const { t, tr, lang, loc } = useI18n()
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [files, setFiles] = useState<Array<{ name: string; size: number; mtime: string }>>([])
-  // PULL-схема: готовые URL отдачи + ключ serveToken (правится прямо здесь)
+  // прогресс сборки: POST /api/build запускает сборку фоном и возвращает jobId,
+  // статус опрашивается из GET /api/build/progress (фаза + процент + журнал)
+  const [prog, setProg] = useState<BuildProgressInfo | null>(null)
+  const logRef = useRef<HTMLPreElement>(null)
+  // адрес, с которого открыт хаб — для готовых URL подключения в карточке токенов
   const [origin, setOrigin] = useState('')
-  const [serveToken, setServeToken] = useState('')
-  const [serveBusy, setServeBusy] = useState(false)
-  const [serveMsg, setServeMsg] = useState<string | null>(null)
 
   useEffect(() => {
     setOrigin(window.location.origin)
   }, [])
-
-  useEffect(() => {
-    setServeToken(data?.settings?.serveToken ?? '')
-  }, [data?.settings?.serveToken])
 
   const loadFiles = useCallback(async () => {
     try {
@@ -42,26 +41,40 @@ export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onC
     void loadFiles()
   }, [loadFiles])
 
+  // если сборка уже идёт (запущена другим окном или по cron) — сразу показываем прогресс
+  useEffect(() => {
+    api.buildProgress().then((r) => {
+      if (r.progress?.active) setProg(r.progress)
+    }).catch(() => undefined)
+  }, [])
+
+  // автопрокрутка журнала сборки
+  useEffect(() => {
+    const el = logRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [prog?.log.length])
+
   const doBuild = async (exportAfter: boolean) => {
     setBusy(true)
     setMsg(null)
     try {
-      const r = await api.build(exportAfter)
-      if (r.ok) {
+      // запуск фоном + опрос прогресса (фаза/процент/журнал) до завершения сборки
+      const res = await api.buildWait(exportAfter, (p) => setProg(p))
+      if (res?.ok) {
         // вердикт по изменениям набора vs предыдущей сборки: нужен ли переимпорт в Clear NDR
-        const changes = r.changes
-          ? (r.unchanged
+        const changes = res.changes
+          ? (res.unchanged
               ? t.messages.buildNoChanges
-              : tr(t.messages.buildChanges, { a: r.changes.added, c: r.changes.changed, rm: r.changes.removed }))
+              : tr(t.messages.buildChanges, { a: res.changes.added, c: res.changes.changed, rm: res.changes.removed }))
           : ''
         setMsg(tr(t.messages.buildDone, {
-          n: r.total?.toLocaleString(loc) ?? '—',
-          file: r.fileName ?? '—',
+          n: res.total?.toLocaleString(loc) ?? '—',
+          file: res.fileName ?? '—',
           changes,
-          export: r.export ? (r.export.ok ? t.messages.buildExportDone : tr(t.messages.buildExportErr, { err: r.export.error ?? '—' })) : '',
+          export: res.export ? (res.export.ok ? t.messages.buildExportDone : tr(t.messages.buildExportErr, { err: res.export.error ?? '—' })) : '',
         }))
       } else {
-        setMsg(tr(t.messages.fetchErr, { err: r.error ?? '—' }))
+        setMsg(tr(t.messages.fetchErr, { err: res?.error ?? '—' }))
       }
       onChange()
       await loadFiles()
@@ -91,30 +104,7 @@ export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onC
   const chg = b?.stats?.changes
   const chgUnchanged = !!chg && chg.added + chg.changed + chg.removed === 0
   const chgTitle = chg ? tr(t.build.changesHint, { a: chg.added, c: chg.changed, rm: chg.removed }) : undefined
-
-  const tokenQs = serveToken ? `?token=${encodeURIComponent(serveToken)}` : ''
-  const fileUrl = `${origin}/api/export${tokenQs}`
-  const tgzUrl = serveToken ? `${origin}/api/export?archive=1&token=${encodeURIComponent(serveToken)}` : `${origin}/api/export?archive=1`
-
-  const genServeToken = () => {
-    const bytes = crypto.getRandomValues(new Uint8Array(16))
-    setServeToken(Array.from(bytes).map((v) => v.toString(16).padStart(2, '0')).join(''))
-    setServeMsg(null)
-  }
-
-  const saveServeToken = async () => {
-    setServeBusy(true)
-    setServeMsg(null)
-    try {
-      await api.saveSettings({ ...(data?.settings ?? {}), serveToken })
-      setServeMsg(t.build.serveTokenSaved)
-      onChange()
-    } catch (e) {
-      setServeMsg(tr(t.messages.fetchErr, { err: (e as Error).message }))
-    } finally {
-      setServeBusy(false)
-    }
-  }
+  const showProg = busy && !!prog
 
   return (
     <div className="space-y-4">
@@ -134,6 +124,23 @@ export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onC
           </div>
         </CardHeader>
         <CardContent>
+          {showProg && prog && (
+            <div className="mb-4 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-medium text-foreground">
+                  {tr(t.build.progTitle, { stage: stageLabel(t, prog.stage) })}
+                </span>
+                <span className="text-muted-foreground tabular-nums">{prog.percent}%</span>
+              </div>
+              <Progress value={prog.percent} />
+              <pre
+                ref={logRef}
+                className="rounded-lg border border-border bg-zinc-950 text-zinc-100 p-3 text-xs font-mono max-h-48 overflow-auto whitespace-pre-wrap"
+              >
+                {(prog.log.map((l) => l.msg).join('\n')) || '…'}
+              </pre>
+            </div>
+          )}
           {msg && <p className="text-sm mb-3 text-emerald-700">{msg}</p>}
           {b ? (
             <div className="space-y-3">
@@ -212,52 +219,6 @@ export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onC
         </CardContent>
       </Card>
 
-      {/* PULL-карточка с глобальным ключом serveToken — только админ (у пользователя свои токены) */}
-      {role !== 'user' ? (
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Link2 className="h-4 w-4 text-primary" /> {t.build.serveTitle}
-            </CardTitle>
-            <CardDescription>{t.build.serveDesc}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <ServeRow label={t.build.serveFile} url={fileUrl} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
-            <ServeRow label={t.build.serveArchive} url={tgzUrl} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
-            {/* адрес сформирован из реального адреса браузера — подсказка о замене начала URL */}
-            <p className="text-xs text-muted-foreground">{t.tokens.urlOriginNote}</p>
-            <div className="max-w-2xl">
-              <Label className="text-foreground">{t.build.serveToken}</Label>
-              <div className="mt-1 flex flex-wrap gap-2">
-                <Input
-                  value={serveToken}
-                  onChange={(e) => { setServeToken(e.target.value.trim()); setServeMsg(null) }}
-                  className="bg-card border-input font-mono flex-1 min-w-56"
-                  placeholder="32-hex…"
-                />
-                <Button variant="outline" className="border-input text-foreground shrink-0" onClick={genServeToken} title={t.build.serveTokenGen}>
-                  <KeyRound className="h-4 w-4 mr-1.5" /> {t.build.serveTokenGen}
-                </Button>
-                <Button onClick={saveServeToken} disabled={serveBusy} className="bg-primary hover:bg-primary/90 text-primary-foreground shrink-0">
-                  <Save className="h-4 w-4 mr-1.5" /> {t.build.serveTokenSave}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">{t.build.serveTokenEmpty}</p>
-              {serveMsg && <p className="text-xs text-emerald-700 mt-1">{serveMsg}</p>}
-            </div>
-            <div>
-              <p className="text-sm font-medium text-foreground mb-1">{t.build.serveStepsTitle}</p>
-              <ol className="list-decimal ml-5 space-y-1 text-sm text-muted-foreground">
-                <li>{t.build.serveStep1}</li>
-                <li>{t.build.serveStep2}</li>
-                <li>{t.build.serveStep3}</li>
-                <li>{t.build.serveStep4}</li>
-              </ol>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
       {/* Токены скачивания (Enterprise): у пользователя — только свои, у админа — все */}
       {role === 'admin' || role === 'user' ? (
         <TokensCard role={role === 'user' ? 'user' : 'admin'} origin={origin} lang={lang} />
@@ -291,6 +252,12 @@ export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onC
   )
 }
 
+/** Локализованное название фазы сборки (коды фаз — из build-progress.ts) */
+function stageLabel(t: ReturnType<typeof useI18n>['t'], stage: string): string {
+  const map = t.build.progStage as Record<string, string | undefined>
+  return map[stage] ?? stage
+}
+
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-card/50 p-3">
@@ -300,7 +267,7 @@ function MiniStat({ label, value }: { label: string; value: string }) {
   )
 }
 
-/** Токены скачивания правил (Enterprise): создание, готовые URL, отзыв */
+/** Токены скачивания правил (Enterprise): создание, готовые URL, отзыв/возврат/удаление */
 function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: string; lang: Lang }) {
   const { t, tr, loc } = useI18n()
   const [tokens, setTokens] = useState<DownloadTokenItem[]>([])
@@ -356,6 +323,31 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
     }
   }
 
+  const restore = async (tk: DownloadTokenItem) => {
+    setBusy(true)
+    try {
+      await api.restoreToken(tk.id)
+      await refresh()
+    } catch (e) {
+      setMsg((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (tk: DownloadTokenItem) => {
+    if (!window.confirm(tr(t.tokens.deleteConfirm, { name: tk.name }))) return
+    setBusy(true)
+    try {
+      await api.deleteToken(tk.id)
+      await refresh()
+    } catch (e) {
+      setMsg((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <Card className="bg-card border-border">
       <CardHeader className="pb-2">
@@ -372,11 +364,13 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
               <code className="flex-1 min-w-0 truncate rounded border border-emerald-300 bg-white px-2 py-1 text-xs font-mono text-emerald-900" title={created}>{created}</code>
               <CopyBtn text={created} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
             </div>
-            {/* Полные адреса подключения: собраны на клиенте из window.location.origin —
-                реального адреса, с которого пользователь открыл хаб (домен / LAN / localhost) */}
+            {/* Адреса для Clear NDR — БЕЗ токена: токен (выше) вставляется в поле
+                «Optional authorization key» источника. Так пользователь видит ровно
+                то, что нужно вставить в каждое поле формы Clear NDR, без путаницы. */}
             <p className="text-xs text-emerald-800 font-medium pt-1">{t.tokens.createdUrlsTitle}</p>
-            <ServeRow label={t.tokens.createdUrlFile} url={`${origin}/api/export?token=${encodeURIComponent(created)}`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
-            <ServeRow label={t.tokens.createdUrlArchive} url={`${origin}/api/export?archive=1&token=${encodeURIComponent(created)}`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+            <ServeRow label={t.tokens.createdUrlFile} url={`${origin}/api/export`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+            <ServeRow label={t.tokens.createdUrlArchive} url={`${origin}/api/export?archive=1`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+            <p className="text-[11px] text-emerald-900/80">{t.tokens.authkeyHint}</p>
             <p className="text-[11px] text-emerald-900/80">{t.tokens.urlOriginNote}</p>
           </div>
         )}
@@ -395,7 +389,8 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
         </div>
         {msg && <p className="text-sm text-red-600">{msg}</p>}
 
-        {/* Подробная инструкция подключения Clear NDR по токену (PULL) */}
+        {/* Подробная инструкция подключения Clear NDR по токену (PULL) —
+            включая включение периодических обновлений в самом Clear NDR */}
         <details className="rounded-lg border border-border">
           <summary className="px-3 py-2 text-sm font-medium text-foreground cursor-pointer select-none">{t.tokens.howTitle}</summary>
           <ol className="list-decimal ml-5 px-3 pb-3 space-y-1.5 text-sm text-muted-foreground">
@@ -428,6 +423,7 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
               <tbody>
                 {tokens.map((tk) => {
                   const expired = tk.expiresAt ? new Date(tk.expiresAt).getTime() < Date.now() : false
+                  const canManage = role === 'admin' || tk.own
                   return (
                     <tr key={tk.id} className="border-t border-border/60 text-foreground">
                       <td className="px-3 py-1.5">{tk.name}</td>
@@ -441,20 +437,23 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
                       <td className="px-3 py-1.5 tabular-nums">{tk.downloadCount.toLocaleString(loc)}{tk.bytesServed > 0 ? ` · ${fmtSize(tk.bytesServed, lang)}` : ''}</td>
                       <td className="px-3 py-1.5 text-muted-foreground">{tk.expiresAt ? fmtTime(tk.expiresAt, lang) : t.tokens.noExpiry}</td>
                       <td className="px-3 py-1.5">
-                        <div className="flex justify-end gap-1.5">
-                          {role === 'user' && tk.own && !tk.revokedAt && !expired && (
-                            <CopyBtn
-                              text={`${origin}/api/export?token=${encodeURIComponent(tk.prefix)}…`}
-                              copyLabel={t.tokens.urlFile}
-                              copiedLabel={t.build.serveCopied}
-                            />
-                          )}
-                          {!tk.revokedAt && (
-                            <Button size="sm" variant="outline" className="border-red-300 text-red-600" disabled={busy} onClick={() => revoke(tk)} title={t.tokens.revoke}>
+                        {canManage && (
+                          <div className="flex justify-end gap-1.5">
+                            {!tk.revokedAt && !expired && (
+                              <Button size="sm" variant="outline" className="border-amber-300 text-amber-700" disabled={busy} onClick={() => revoke(tk)} title={t.tokens.revoke}>
+                                <Ban className="h-4 w-4" />
+                              </Button>
+                            )}
+                            {tk.revokedAt && !expired && (
+                              <Button size="sm" variant="outline" className="border-emerald-300 text-emerald-700" disabled={busy} onClick={() => restore(tk)} title={t.tokens.restore}>
+                                <RotateCcw className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <Button size="sm" variant="outline" className="border-red-300 text-red-600" disabled={busy} onClick={() => remove(tk)} title={t.tokens.deleteBtn}>
                               <Trash2 className="h-4 w-4" />
                             </Button>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   )
@@ -463,8 +462,9 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
             </table>
           </div>
         )}
-        {/* Полный токен в БД не хранится (SHA-256) — URL с полным токеном виден только
-            при создании; для существующих токенов показан только префикс */}
+        {/* Полный токен в БД не хранится (SHA-256) — показывается один раз при создании;
+            для существующих токенов виден только префикс. Адрес источника в Clear NDR
+            от токена не зависит: Uri постоянный, ключ меняется в поле authkey. */}
         {tokens.length > 0 && <p className="text-xs text-muted-foreground mt-1">{t.tokens.prefixUrlNote}</p>}
       </CardContent>
     </Card>
@@ -472,32 +472,49 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
 }
 
 function CopyBtn({ text, copyLabel, copiedLabel }: { text: string; copyLabel: string; copiedLabel: string }) {
+  const { t } = useI18n()
   const [copied, setCopied] = useState(false)
+  const [failed, setFailed] = useState(false)
   return (
-    <Button
-      size="sm"
-      variant="outline"
-      className="border-input text-foreground shrink-0"
-      onClick={() => {
-        navigator.clipboard?.writeText(text).then(() => {
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        }).catch(() => undefined)
-      }}
-    >
-      {copied ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <Copy className="h-3.5 w-3.5 mr-1.5" />} {copied ? copiedLabel : copyLabel}
-    </Button>
+    <div className="shrink-0">
+      <Button
+        size="sm"
+        variant="outline"
+        className="border-input text-foreground"
+        onClick={async () => {
+          setFailed(false)
+          const ok = await copyToClipboard(text)
+          if (ok) {
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          } else {
+            setFailed(true)
+            setTimeout(() => setFailed(false), 4000)
+          }
+        }}
+      >
+        {copied ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <Copy className="h-3.5 w-3.5 mr-1.5" />} {copied ? copiedLabel : copyLabel}
+      </Button>
+      {failed && <p className="text-[11px] text-red-600 mt-1">{t.build.copyErr}</p>}
+    </div>
   )
 }
 
 function ServeRow({ label, url, copyLabel, copiedLabel }: { label: string; url: string; copyLabel: string; copiedLabel: string }) {
+  const { t } = useI18n()
   const [copied, setCopied] = useState(false)
-  const copy = () => {
+  const [failed, setFailed] = useState(false)
+  const copy = async () => {
     if (!url) return
-    navigator.clipboard?.writeText(url).then(() => {
+    setFailed(false)
+    const ok = await copyToClipboard(url)
+    if (ok) {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
-    }).catch(() => undefined)
+    } else {
+      setFailed(true)
+      setTimeout(() => setFailed(false), 4000)
+    }
   }
   return (
     <div>
@@ -508,6 +525,7 @@ function ServeRow({ label, url, copyLabel, copiedLabel }: { label: string; url: 
           {copied ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <Copy className="h-3.5 w-3.5 mr-1.5" />} {copied ? copiedLabel : copyLabel}
         </Button>
       </div>
+      {failed && <p className="text-[11px] text-red-600 mt-1">{t.build.copyErr}</p>}
     </div>
   )
 }

@@ -13,7 +13,7 @@ Exact instructions for automatic delivery of the final ruleset from **NDR Rules 
 | Who initiates | Clear NDR fetches the file from the Hub itself | The Hub pushes the file to Clear NDR itself |
 | Network access | Clear NDR → Hub (HTTP 3080) | Hub → Clear NDR (HTTPS 443) |
 | Configured in Clear NDR | a “HTTP URL” source + a schedule | nothing (the source is created automatically) |
-| Configured in the Hub | nothing (optionally — a serving key serveToken, “Build” tab) | “Clear NDR REST” mode, base URL, token |
+| Configured in the Hub | nothing (in Enterprise — a personal token, “Build & Export” → “Rule download tokens”; the legacy global serveToken is still accepted by the serving side but can only be managed via the API) | “Clear NDR REST” mode, base URL, token |
 | Auto-update | Clear NDR’s built-in scheduler | the Hub’s built-in cron (or a cron on Clear NDR) |
 | When to choose | Hub and Clear NDR on the same network | the Hub is unreachable from Clear NDR (DMZ, NAT) |
 
@@ -125,7 +125,7 @@ sequenceDiagram
 
 ### Serving key (URL protection) and the per-source archive format
 
-`/api/export` can be protected by a key — the **serveToken** setting, “Build” tab → “Serve by URL” (generation, saving and ready-made URLs live there; an empty key means the URL is open). The key is passed in one of two ways:
+`/api/export` can be protected by a key. The legacy **serveToken** setting is still accepted by the serving side (backward compatibility), but its UI card (“Serve by URL”) was removed as a duplicate of the personal tokens — the key can be changed via `PUT /api/settings` if needed. The key is passed in one of two ways:
 
 - `GET /api/export?token=<key>` — a URL parameter;
 - the source’s **authkey** field in Clear NDR — scirius will send it as the `Authorization: <key>` header (rules/models.py → `update_ruleset_http`).

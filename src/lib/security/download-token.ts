@@ -94,3 +94,24 @@ export async function revokeDownloadToken(id: string, userId?: string): Promise<
   void audit('token_revoke', { userId: row.userId, detail: `prefix=${row.prefix}` })
   return true
 }
+
+/** Вернуть ранее отозванный токен (владелец или администратор): отзывается заново в любой момент. */
+export async function restoreDownloadToken(id: string, userId?: string): Promise<boolean> {
+  const row = await db.downloadToken.findUnique({ where: { id } })
+  if (!row) return false
+  if (userId && row.userId !== userId) return false
+  if (!row.revokedAt) return false // активный токен возвращать нечего
+  await db.downloadToken.update({ where: { id }, data: { revokedAt: null } })
+  void audit('token_restore', { userId: row.userId, detail: `prefix=${row.prefix}` })
+  return true
+}
+
+/** Удалить токен из списка навсегда (владелец или администратор). Статистика исчезает вместе с ним. */
+export async function deleteDownloadToken(id: string, userId?: string): Promise<boolean> {
+  const row = await db.downloadToken.findUnique({ where: { id } })
+  if (!row) return false
+  if (userId && row.userId !== userId) return false
+  await db.downloadToken.delete({ where: { id } })
+  void audit('token_delete', { userId: row.userId, detail: `prefix=${row.prefix} name=${row.name}` })
+  return true
+}

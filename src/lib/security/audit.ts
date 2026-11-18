@@ -11,7 +11,7 @@ const MAX_EVENTS = 20000
 export type AuditKind =
   | 'register' | 'login_ok' | 'login_fail' | 'login_lock' | 'login_pending' | 'login_disabled'
   | 'logout' | 'verify' | 'disable' | 'enable' | 'role_change' | 'delete_user'
-  | 'token_create' | 'token_revoke' | 'download' | 'download_denied'
+  | 'token_create' | 'token_revoke' | 'token_restore' | 'token_delete' | 'download' | 'download_denied'
   | 'ratelimit' | 'queue_full'
   // 2FA / Telegram-верификация
   | 'login_2fa' | 'login_2fa_ok' | 'login_2fa_fail' | 'register_verify_fail'

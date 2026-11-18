@@ -1,5 +1,12 @@
+// Сборка набора правил — асинхронная: POST запускает сборку фоном и сразу
+// возвращает jobId; клиент опрашивает GET /api/build/progress и рисует
+// прогрессбар с журналом сборки. Сборка — самая тяжёлая операция хаба
+// (SQLite + слияние десятков тысяч правил + валидация): по одной за раз —
+// очередь «build» (maxConcurrent=1); если сборка уже идёт (например, по cron),
+// повторный POST возвращает её jobId, а не ставит дубликат в очередь.
 import { NextResponse } from 'next/server'
 import { buildFinal, exportLatestBuild, getSettings } from '@/lib/engine/service'
+import { startBuildProgress, getBuildProgress, setBuildStage, addBuildLog, finishBuildProgress, failBuildProgress } from '@/lib/engine/build-progress'
 import { apiError } from '@/lib/api-error'
 import { guard } from '@/lib/security/guard'
 import { withQueue, QueueFullError } from '@/lib/security/queue'
@@ -12,17 +19,48 @@ export async function POST(req: Request) {
   if (g instanceof NextResponse) return g
   try {
     const body = await req.json().catch(() => ({}))
-    // сборка — самая тяжёлая операция (SQLite + валидация Suricata): одна за раз,
-    // лишние клики ждут в очереди или получают 429 вместо дублей сборки
-    const build = await withQueue('build', () => buildFinal('manual'))
-    if (!build.ok) return NextResponse.json(build, { status: 400 })
-    let exportRes: { ok: boolean; error?: string; detail?: string; pushedTo?: string } | null = null
-    if (body?.export) {
-      const s = await getSettings()
-      if (s.clearndrExportMode !== 'file' && s.clearndrExportMode !== 'disabled') exportRes = await exportLatestBuild()
-      else exportRes = { ok: true, detail: 'файл готов к скачиванию/импорту' }
+    const cur = getBuildProgress()
+    if (cur?.active) {
+      return NextResponse.json({ ok: true, jobId: cur.jobId, alreadyRunning: true, origin: cur.origin })
     }
-    return NextResponse.json({ ...build, export: exportRes })
+    const job = startBuildProgress('manual')
+    // запуск в фоне: ответ уходит сразу, статус — через GET /api/build/progress
+    void withQueue('build', async () => {
+      try {
+        const build = await buildFinal('manual')
+        if (!build.ok) {
+          // failBuildProgress уже вызван в buildFinal на гейтах — на всякий случай дубль
+          failBuildProgress(build.error ?? 'ошибка сборки')
+          return
+        }
+        let exportRes: { ok: boolean; error?: string; detail?: string; pushedTo?: string } | null = null
+        if (body?.export) {
+          setBuildStage('export', 97)
+          const s = await getSettings()
+          if (s.clearndrExportMode !== 'file' && s.clearndrExportMode !== 'disabled') {
+            addBuildLog(`Экспорт в Clear NDR (режим ${s.clearndrExportMode})…`)
+            exportRes = await exportLatestBuild()
+            addBuildLog(exportRes?.ok ? 'Экспорт выполнен' : `Ошибка экспорта: ${exportRes?.error ?? '—'}`)
+          } else {
+            exportRes = { ok: true, detail: 'файл готов к скачиванию/импорту' }
+          }
+        }
+        finishBuildProgress({
+          ok: true,
+          total: build.total,
+          fileName: build.fileName,
+          changes: build.changes ?? null,
+          unchanged: build.unchanged,
+          export: exportRes,
+        })
+      } catch (e) {
+        failBuildProgress(e instanceof Error ? e.message : String(e))
+      }
+    }).catch((e) => {
+      // очередь (не сама сборка) отклонила запуск
+      failBuildProgress(e instanceof Error ? e.message : String(e))
+    })
+    return NextResponse.json({ ok: true, jobId: job.jobId })
   } catch (e) {
     if (e instanceof QueueFullError) return NextResponse.json({ error: e.message }, { status: 429, headers: { 'Retry-After': String(e.retryAfterSec) } })
     return apiError(e)
