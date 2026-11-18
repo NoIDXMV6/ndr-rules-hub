@@ -48,9 +48,16 @@ export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onC
     try {
       const r = await api.build(exportAfter)
       if (r.ok) {
+        // вердикт по изменениям набора vs предыдущей сборки: нужен ли переимпорт в Clear NDR
+        const changes = r.changes
+          ? (r.unchanged
+              ? t.messages.buildNoChanges
+              : tr(t.messages.buildChanges, { a: r.changes.added, c: r.changes.changed, rm: r.changes.removed }))
+          : ''
         setMsg(tr(t.messages.buildDone, {
           n: r.total?.toLocaleString(loc) ?? '—',
           file: r.fileName ?? '—',
+          changes,
           export: r.export ? (r.export.ok ? t.messages.buildExportDone : tr(t.messages.buildExportErr, { err: r.export.error ?? '—' })) : '',
         }))
       } else {
@@ -80,6 +87,10 @@ export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onC
 
   const b = data?.lastBuild
   const mode = data?.settings.clearndrExportMode ?? 'file'
+  // диф последней сборки vs предыдущей: «что изменилось в итоговом наборе»
+  const chg = b?.stats?.changes
+  const chgUnchanged = !!chg && chg.added + chg.changed + chg.removed === 0
+  const chgTitle = chg ? tr(t.build.changesHint, { a: chg.added, c: chg.changed, rm: chg.removed }) : undefined
 
   const tokenQs = serveToken ? `?token=${encodeURIComponent(serveToken)}` : ''
   const fileUrl = `${origin}/api/export${tokenQs}`
@@ -135,6 +146,15 @@ export function BuildTab({ data, onChange, role }: { data: Dashboard | null; onC
                   <Badge variant="outline" className="border-input text-foreground"><FileArchive className="h-3 w-3 mr-1 inline" />{b.stats.archive.fileName}</Badge>
                 ) : null}
                 <Badge variant="outline" className={b.source === 'cron' ? 'border-sky-700 text-sky-700' : 'border-input text-muted-foreground'}>{b.source === 'cron' ? t.build.bySchedule : t.build.manual}</Badge>
+                {chg && (
+                  <Badge
+                    variant="outline"
+                    title={chgTitle}
+                    className={chgUnchanged ? 'border-emerald-300 text-emerald-700' : 'border-amber-300 text-amber-700'}
+                  >
+                    {chgUnchanged ? t.build.changesNone : tr(t.build.changesBadge, { a: chg.added, c: chg.changed, rm: chg.removed })}
+                  </Badge>
+                )}
                 <a href="/api/export" download className="ml-auto">
                   <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">
                     <Download className="h-4 w-4 mr-1.5" /> {t.build.download}

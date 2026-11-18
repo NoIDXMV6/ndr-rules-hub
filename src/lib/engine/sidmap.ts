@@ -12,12 +12,16 @@ import { createHash } from 'crypto'
 import { promises as fs } from 'fs'
 import path from 'path'
 import type { BuiltRule } from './build'
+import { DATA_DIR } from './fetcher'
 
 export const SID_BLOCK_START = 1_000_000_000
 export const SID_BLOCK_SIZE = 100_000_000
 export const SID_BLOCK_END = SID_BLOCK_START + SID_BLOCK_SIZE - 1
 
-export const SIDMAP_PATH = path.join(process.cwd(), 'data', 'sidmap.json')
+// карта SID живёт в каталоге данных (RULES_DATA_DIR, по умолчанию ./data):
+// раньше путь был жёстко cwd/data, из-за чего тесты с RULES_DATA_DIR писали
+// в data/ проекта, а при отличии каталогов карта терялась бы между сборками
+export const SIDMAP_PATH = path.join(DATA_DIR, 'sidmap.json')
 
 export function hashSlot(key: string): number {
   const h = createHash('md5').update(key, 'utf8').digest('hex')

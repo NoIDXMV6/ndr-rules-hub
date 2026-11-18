@@ -170,7 +170,8 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
 }
 
 /** Загрузка одного источника и сохранение правил в БД */
-export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; error?: string; count: number; note?: string }> {
+export interface SourceFetchDiff { added: number; changed: number; removed: number; unchanged: boolean }
+export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; error?: string; count: number; note?: string; diff?: SourceFetchDiff }> {
   const src = await db.source.findUnique({ where: { id: sourceId } })
   if (!src) return { ok: false, error: 'источник не найден', count: 0 }
   if (src.deletedAt) return { ok: false, error: 'источник в корзине — сначала восстановите его', count: 0 }
@@ -230,10 +231,9 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     if (!prev || r.rev > prev.rev) bySid.set(r.sid, r)
   }
 
-  await db.rule.deleteMany({ where: { sourceId: src.id } })
   const rows = [...bySid.values()].map((r) => ({
     sourceId: src.id,
-    sid: r.sid,
+    sid: r.sid!, // bySid наполняется только правилами с sid !== null (фильтр выше)
     rev: r.rev,
     action: r.action,
     proto: r.proto,
@@ -244,6 +244,29 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     suricataOk: r.suricataOk,
     compatNotes: r.compatNotes?.slice(0, 500) ?? null,
   }))
+
+  // Диф загрузки: что изменилось vs предыдущей версии источника. Считается ДО
+  // удаления старых строк: sid есть только в новом наборе — добавлено; sid в обоих,
+  // но строка правила изменилась — изменено; sid исчез — удалено. Если изменений
+  // нет — пересборка/переимпорт правил для Suricata не требуется.
+  const prevRows = await db.rule.findMany({ where: { sourceId: src.id }, select: { sid: true, raw: true } })
+  const prevRaw = new Map(prevRows.map((r) => [r.sid, r.raw]))
+  const nextRaw = new Map(rows.map((r) => [r.sid, r.raw]))
+  let diffAdded = 0
+  let diffChanged = 0
+  for (const [sid, raw] of nextRaw) {
+    const prev = prevRaw.get(sid)
+    if (prev === undefined) diffAdded++
+    else if (prev !== raw) diffChanged++
+  }
+  let diffRemoved = 0
+  for (const sid of prevRaw.keys()) if (!nextRaw.has(sid)) diffRemoved++
+  const hasDiff = diffAdded + diffChanged + diffRemoved > 0
+  // «первая загрузка» — источник ещё ни разу не загружался успешно (нет отметки
+  // времени и старых правил): сравнивать не с чем, диф не показываем как изменения
+  const firstFetch = !src.lastFetchAt && prevRows.length === 0
+
+  await db.rule.deleteMany({ where: { sourceId: src.id } })
   for (let i = 0; i < rows.length; i += 500) {
     await db.rule.createMany({ data: rows.slice(i, i + 500) })
   }
@@ -256,12 +279,18 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     sizeBytes: number
     badge?: string | null
     notes?: string
+    diffAdded?: number
+    diffChanged?: number
+    diffRemoved?: number
   } = {
     status: 'ok',
     lastError: null,
     lastFetchAt: new Date(),
     ruleCount: rows.length,
     sizeBytes: res.sizeBytes,
+    diffAdded,
+    diffChanged,
+    diffRemoved,
   }
   // бейдж «недоступен» — свойство каталога на момент добавления; после удачной
   // загрузки он лжёт: снимаем, а шаблонные заметки о сломанном состоянии
@@ -272,26 +301,63 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     if (seedEntry?.notes && src.notes === seedEntry.notes) patch.notes = availableNotes(src.authType)
   }
   await db.source.update({ where: { id: src.id }, data: patch })
-  await log('success', 'fetch', `Загружено «${src.name}»: ${rows.length} правил (${dt} с)${res.cacheNote ? ' — ВНИМАНИЕ: работали от кэша' : ''}`)
-  return { ok: true, count: rows.length, note: res.cacheNote }
+  // в журнале — вердикт «нужно ли обновлять правила в Suricata»:
+  // первая загрузка (не с чем сравнивать) / изменений нет / перечень изменений
+  const diffNote = firstFetch
+    ? ' — первая загрузка (сравнение не с чем)'
+    : hasDiff
+      ? `; изменения: +${diffAdded} добавлено, ~${diffChanged} изменено, −${diffRemoved} удалено`
+      : ' — изменений нет (обновлять правила в Suricata не требуется)'
+  await log('success', 'fetch', `Загружено «${src.name}»: ${rows.length} правил (${dt} с)${diffNote}${res.cacheNote ? ' — ВНИМАНИЕ: работали от кэша' : ''}`)
+  return {
+    ok: true,
+    count: rows.length,
+    note: res.cacheNote,
+    diff: { added: diffAdded, changed: diffChanged, removed: diffRemoved, unchanged: !firstFetch && !hasDiff },
+  }
 }
 
-/** Загрузить все включённые источники (источники в корзине не участвуют) */
-export async function fetchAllSources(origin = 'manual'): Promise<{ ok: number; failed: number; errors: string[] }> {
+/** Загрузить все включённые источники (источники в корзине не участвуют).
+ *  Возвращает агрегированный диф: сколько правил добавлено/изменено/удалено
+ *  суммарно по всем источникам и сколько источников без изменений —
+ *  по этому вердикту видно, нужно ли пересобрать/переимпортировать правила. */
+export async function fetchAllSources(origin = 'manual'): Promise<{
+  ok: number
+  failed: number
+  errors: string[]
+  diff: { added: number; changed: number; removed: number }
+  unchangedSources: number
+  changesTotal: number
+}> {
   const sources = await db.source.findMany({ where: { enabled: true, deletedAt: null }, orderBy: { priority: 'asc' } })
   let ok = 0
   let failed = 0
   const errors: string[] = []
+  const diff = { added: 0, changed: 0, removed: 0 }
+  let unchangedSources = 0
   for (const s of sources) {
     const r = await fetchSourceById(s.id)
-    if (r.ok) ok++
-    else {
+    if (r.ok) {
+      ok++
+      if (r.diff) {
+        diff.added += r.diff.added
+        diff.changed += r.diff.changed
+        diff.removed += r.diff.removed
+        if (r.diff.unchanged) unchangedSources++
+      }
+    } else {
       failed++
       errors.push(`${s.name}: ${r.error}`)
     }
   }
-  await log(ok && !failed ? 'success' : failed ? 'error' : 'warn', 'fetch', `Обновление завершено (${origin}): успешно ${ok}, с ошибками ${failed}`)
-  return { ok, failed, errors }
+  const changesTotal = diff.added + diff.changed + diff.removed
+  const verdict = failed > 0
+    ? ''
+    : changesTotal === 0
+      ? '; изменений нет — обновление правил в Suricata не требуется'
+      : `; изменения: +${diff.added} добавлено, ~${diff.changed} изменено, −${diff.removed} удалено (без изменений: ${unchangedSources})`
+  await log(ok && !failed ? (changesTotal === 0 ? 'info' : 'success') : failed ? 'error' : 'warn', 'fetch', `Обновление завершено (${origin}): успешно ${ok}, с ошибками ${failed}${verdict}`)
+  return { ok, failed, errors, diff, unchangedSources, changesTotal }
 }
 
 /** Сборка итогового файла правил */
@@ -301,6 +367,10 @@ export async function buildFinal(origin = 'manual'): Promise<{
   buildId?: string
   total?: number
   fileName?: string
+  /** диф итогового набора vs предыдущей сборки (null — не с чем сравнить: первой сборки не было) */
+  changes?: { added: number; changed: number; removed: number } | null
+  /** состав правил не изменился — переимпортировать файл в Clear NDR/Suricata не требуется */
+  unchanged?: boolean
 }> {
   const settings = await getSettings()
   const sources = await db.source.findMany({
@@ -413,6 +483,37 @@ export async function buildFinal(origin = 'manual'): Promise<{
     stats,
   })
   const fileName = settings.buildFileName || 'clearndr-import.rules'
+
+  // Диф набора vs предыдущей сборки: читаем ПРЕДЫДУЩИЙ файл экспорта (ДО перезаписи
+  // новым файлом — путь тот же) и сравниваем по sid + строке правила: что добавилось,
+  // изменилось, удалилось в итоговом наборе. Если состав не изменился — переимпортировать
+  // файл в Clear NDR/Suricata не требуется (заголовок «Сгенерировано» не в счёт).
+  const prevBuild = await db.build.findFirst({ orderBy: { createdAt: 'desc' } })
+  let prevMap: Map<number, string> | null = null
+  if (prevBuild) {
+    try {
+      prevMap = parseExportRules(await fs.readFile(prevBuild.filePath, 'utf8'))
+    } catch {
+      prevMap = null // файла предыдущей сборки нет (очищен/другой том) — сравнить не с чем
+    }
+  }
+  const newMap = new Map(sanitized.rules.map((r) => [r.sid, r.raw]))
+  let changes: { added: number; changed: number; removed: number } | null = null
+  if (prevMap) {
+    let added = 0
+    let changed = 0
+    for (const [sid, raw] of newMap) {
+      const prev = prevMap.get(sid)
+      if (prev === undefined) added++
+      else if (prev !== raw) changed++
+    }
+    let removed = 0
+    for (const sid of prevMap.keys()) if (!newMap.has(sid)) removed++
+    changes = { added, changed, removed }
+    stats.changes = changes
+  }
+  const unchanged = changes !== null && changes.added + changes.changed + changes.removed === 0
+
   const { filePath, sizeBytes } = await saveExportFile(fileName, content)
   const sha256 = (await import('crypto')).createHash('sha256').update(content).digest('hex')
 
@@ -441,8 +542,25 @@ export async function buildFinal(origin = 'manual'): Promise<{
   })
   const archiveNote = stats.archive ? `; архив по источникам: ${stats.archive.fileName} (${stats.archive.files.length} файл(ов), ${(stats.archive.sizeBytes / 1e6).toFixed(1)} МБ)` : ''
   const catNote = stats.excludedByCategory || stats.excludedByRule ? `; исключено: по категориям ${stats.excludedByCategory ?? 0}, по правилам ${stats.excludedByRule ?? 0}` : ''
-  await log('success', 'build', `Собран итоговый набор: ${sanitized.rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}; адаптировано под парсер Clear NDR: ${sanitized.rewritten}${catNote}${archiveNote}`)
-  return { ok: true, buildId: build.id, total: sanitized.rules.length, fileName }
+  const changeNote = changes === null
+    ? '; первая сборка (сравнение не с чем)'
+    : unchanged
+      ? '; состав правил не изменился — переимпортировать в Clear NDR/Suricata не требуется'
+      : `; изменения набора vs предыдущей сборки: +${changes.added} добавлено, ~${changes.changed} изменено, −${changes.removed} удалено`
+  await log(unchanged ? 'info' : 'success', 'build', `Собран итоговый набор: ${sanitized.rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}; адаптировано под парсер Clear NDR: ${sanitized.rewritten}${catNote}${archiveNote}${changeNote}`)
+  return { ok: true, buildId: build.id, total: sanitized.rules.length, fileName, changes, unchanged }
+}
+
+/** Разобрать файл экспорта предыдущей сборки: sid → строка правила (комментарии пропускаются).
+ *  Итоговый файл всегда содержит настоящий sid первым совпадением регэкспа (sanitizeSciriusCompat). */
+function parseExportRules(content: string): Map<number, string> {
+  const out = new Map<number, string>()
+  for (const line of content.split('\n')) {
+    if (!line || line.startsWith('#')) continue
+    const m = /sid *: *(\d+)/.exec(line)
+    if (m) out.set(parseInt(m[1], 10), line)
+  }
+  return out
 }
 
 /** Собрать tgz-архив: один .rules-файл на каждый источник + README.txt */
@@ -518,6 +636,15 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
       ? `Полный цикл (${origin}): собрано ${buildRes.total ?? 0} правил${buildRes.fileName ? ` → ${buildRes.fileName}` : ''}`
       : `Ошибка сборки: ${buildRes.error ?? '—'}`
     const parts = [`загрузка: успешно ${fetchRes.ok}, ошибок ${fetchRes.failed}`, buildRes.ok ? `сборка: ${buildRes.total ?? 0} правил` : `сборка: ОШИБКА — ${buildRes.error}`]
+    // диф обновления: видно сразу в push-уведомлении, нужно ли переимпортировать правила
+    if (buildRes.ok) {
+      if (fetchRes.changesTotal === 0) parts.push('изменения правил: нет — обновлять Suricata не требуется')
+      else parts.push(`изменения правил: +${fetchRes.diff.added} добавлено, ~${fetchRes.diff.changed} изменено, −${fetchRes.diff.removed} удалено (без изменений: ${fetchRes.unchangedSources})`)
+      if (buildRes.changes) {
+        if (buildRes.unchanged) parts.push('состав итогового набора не изменился — переимпортировать файл не требуется')
+        else parts.push(`итоговый набор vs предыдущей сборки: +${buildRes.changes.added} ~${buildRes.changes.changed} −${buildRes.changes.removed}`)
+      }
+    }
     if (exportRes) parts.push(exportRes.ok ? 'экспорт: выполнен' : `экспорт: ${exportRes.error}`)
     if (fetchRes.errors.length) parts.push(`ошибки загрузки: ${fetchRes.errors.slice(0, 5).join('; ')}`)
     await notifyEvent('pipeline', buildRes.ok && fetchRes.failed === 0 ? 'success' : fetchRes.failed || !buildRes.ok ? 'error' : 'warn', title, parts.join('\n'))
@@ -529,7 +656,7 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
 }
 
 // ── Планировщик ──────────────────────────────────────────────────────────────
-let cronTask: cron.ScheduledTask | null = null
+let cronTask: { stop: () => void; destroy?: () => void } | null = null
 
 export async function reinitScheduler() {
   if (cronTask) {

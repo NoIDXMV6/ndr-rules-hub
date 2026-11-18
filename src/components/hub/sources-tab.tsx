@@ -66,9 +66,15 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
     setMsg(tr(t.messages.fetchOneLoading, { name: s.name }))
     try {
       const r = await api.fetchSource(s.id)
+      // диф загрузки: что изменилось vs предыдущей версии источника
+      const diff = r.ok && r.diff
+        ? (r.diff.unchanged
+            ? t.messages.fetchOneNoChanges
+            : tr(t.messages.fetchOneDiff, { a: r.diff.added, c: r.diff.changed, rm: r.diff.removed }))
+        : ''
       setMsg(
         r.ok
-          ? tr(t.messages.fetchOneOk, { name: s.name, n: r.count.toLocaleString(loc), note: r.note ? `\n⚠ ${r.note}` : '' })
+          ? tr(t.messages.fetchOneOk, { name: s.name, n: r.count.toLocaleString(loc), diff, note: r.note ? `\n⚠ ${r.note}` : '' })
           : tr(t.messages.fetchErr, { err: r.error ?? '—' }),
       )
       onChange()
@@ -84,7 +90,11 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
     setMsg(t.messages.fetchAllLoading)
     try {
       const r = await api.fetchAll()
-      setMsg(tr(t.messages.fetchAllDone, { ok: r.ok, failed: r.failed, first: r.errors.length ? ' — ' + r.errors[0] : '' }))
+      // вердикт по изменениям: пересборка/переимпорт правил нужна только при наличии дифа
+      const diff = (r.changesTotal ?? 0) === 0
+        ? t.messages.fetchAllNoChanges
+        : tr(t.messages.fetchAllDiff, { a: r.diff?.added ?? 0, c: r.diff?.changed ?? 0, rm: r.diff?.removed ?? 0, u: r.unchangedSources ?? 0 })
+      setMsg(tr(t.messages.fetchAllDone, { ok: r.ok, failed: r.failed, diff, first: r.errors.length ? ' — ' + r.errors[0] : '' }))
       onChange()
     } finally {
       setBusyId(null)
@@ -194,7 +204,10 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
                         {kindLabel(s)}
                         {s.authType !== 'none' && <div className="text-emerald-600">{s.authType}</div>}
                       </TableCell>
-                      <TableCell className="tabular-nums text-foreground">{s.ruleCount ? s.ruleCount.toLocaleString(loc) : '—'}</TableCell>
+                      <TableCell className="tabular-nums text-foreground">
+                        {s.ruleCount ? s.ruleCount.toLocaleString(loc) : '—'}
+                        {s.lastFetchAt && <FetchDiffLine s={s} />}
+                      </TableCell>
                       <TableCell className="tabular-nums text-muted-foreground">{s.priority}</TableCell>
                       <TableCell>
                         {s.status === 'ok' && <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-300">{t.sources.statusOk}</Badge>}
@@ -237,6 +250,24 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
 
       <AnalysisCard />
     </div>
+  )
+}
+
+/** Диф последней загрузки источника (строка под количеством правил):
+ *  +добавлено ~изменено −удалено; ноль — «без изменений», переимпорт правил
+ *  в Suricata после такого обновления не требуется. */
+function FetchDiffLine({ s }: { s: SourceItem }) {
+  const { t, tr, loc } = useI18n()
+  const a = s.diffAdded
+  const c = s.diffChanged
+  const rm = s.diffRemoved
+  if (a + c + rm === 0) return <p className="text-[11px] text-muted-foreground mt-0.5">{t.sources.diffNone}</p>
+  return (
+    <p className="text-[11px] mt-0.5" title={tr(t.sources.diffTooltip, { a, c, rm })}>
+      {a > 0 && <span className="text-emerald-700">+{a.toLocaleString(loc)} </span>}
+      {c > 0 && <span className="text-amber-700">~{c.toLocaleString(loc)} </span>}
+      {rm > 0 && <span className="text-red-600">−{rm.toLocaleString(loc)}</span>}
+    </p>
   )
 }
 

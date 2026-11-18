@@ -44,6 +44,8 @@ export interface BuildStats {
   excludedByRule?: number
   /** архив tgz с файлами по источникам (если включён формат сборки file+tgz) */
   archive?: ArchiveInfo
+  /** диф итогового набора vs предыдущей сборки: добавлено/изменено/удалено (null/нет — не с чем сравнивать) */
+  changes?: { added: number; changed: number; removed: number }
   perSource: Record<string, { total: number; kept: number; droppedSid: number; droppedContent: number; droppedCompat: number }>
   sidsReplaced: Array<{ sid: number; newSid: number; source: string; keptRev: number; droppedRev: number; keptSource: string }>
 }
@@ -310,7 +312,7 @@ export function mergeSources(
         continue
       }
       // конфликт SID — выбираем победителя
-      const winner = pickWinner(existing, { src, rule, kept: false }, p)
+      const winner = pickWinner(existing, { src, rule }, p)
       stats.duplicateBySid++
       if (winner !== existing) {
         existing.kept = false

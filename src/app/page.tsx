@@ -102,12 +102,21 @@ export default function Home() {
     setMessage(null)
     try {
       const f = await api.fetchAll()
-      setMessage({ ok: f.failed === 0, text: tr(t.messages.cycleFetch, { ok: f.ok, failed: f.failed }) })
+      // диф обновления: сколько правил добавлено/изменено/удалено суммарно;
+      // изменений нет — переимпорт правил в Suricata не требуется
+      const diffTxt = f.failed === 0 && (f.changesTotal ?? 0) === 0
+        ? t.messages.fetchAllNoChanges
+        : tr(t.messages.fetchAllDiff, { a: f.diff?.added ?? 0, c: f.diff?.changed ?? 0, rm: f.diff?.removed ?? 0, u: f.unchangedSources ?? 0 })
+      const fetchTxt = tr(t.messages.cycleFetch, { ok: f.ok, failed: f.failed, diff: diffTxt })
+      setMessage({ ok: f.failed === 0, text: fetchTxt })
       const b = await api.build(true)
+      const chgTxt = b.ok && b.changes
+        ? (b.unchanged ? t.messages.buildNoChanges : tr(t.messages.buildChanges, { a: b.changes.added, c: b.changes.changed, rm: b.changes.removed }))
+        : ''
       setMessage({
         ok: !!b.ok,
         text: b.ok
-          ? tr(t.messages.cycleBuilt, { total: b.total ?? 0, file: b.fileName ?? '—' })
+          ? `${fetchTxt}\n${tr(t.messages.cycleBuilt, { total: b.total ?? 0, file: b.fileName ?? '—', changes: chgTxt })}`
           : tr(t.messages.cycleBuildError, { err: b.error ?? '—' }),
       })
       await refresh()
@@ -196,7 +205,7 @@ export default function Home() {
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
         {/* баннеры сообщений — вне липкого блока, чтобы высота блока была постоянной */}
         {message && (
-          <div className={`my-2 rounded-lg text-sm ${message.ok ? 'bg-emerald-50 text-emerald-800 border border-emerald-200/60' : 'bg-red-50 text-red-700 border border-red-200/60'} px-3 py-2`}>
+          <div className={`my-2 rounded-lg text-sm whitespace-pre-line ${message.ok ? 'bg-emerald-50 text-emerald-800 border border-emerald-200/60' : 'bg-red-50 text-red-700 border border-red-200/60'} px-3 py-2`}>
             {message.text}
           </div>
         )}

@@ -24,11 +24,22 @@ export interface SourceItem {
   lastError: string | null
   ruleCount: number
   sizeBytes: number
+  // диф последней загрузки vs предыдущей: добавлено/изменено/удалено
+  diffAdded: number
+  diffChanged: number
+  diffRemoved: number
   badge: string | null
   notes: string | null
   builtin: boolean
   deletedAt: string | null
   ownerId?: string | null
+}
+
+/** Диф правил: агрегат по обновлению источников / сборке */
+export interface RulesDiff {
+  added: number
+  changed: number
+  removed: number
 }
 
 export interface WgPeer {
@@ -77,6 +88,7 @@ export interface BuildStats {
   sanitizedForScirius?: number
   excludedByCategory?: number
   excludedByRule?: number
+  changes?: RulesDiff
   archive?: { fileName: string; filePath: string; sizeBytes: number; files: Array<{ name: string; rules: number; sha256: string }> }
   perSource: Record<string, { total: number; kept: number; droppedSid: number; droppedContent: number; droppedCompat: number }>
 }
@@ -261,8 +273,8 @@ async function j<T>(res: Response): Promise<T> {
 
 export const api = {
   dashboard: () => fetch('/api/dashboard', { cache: 'no-store' }).then((r) => j<Dashboard>(r)),
-  fetchAll: () => fetch('/api/fetch-all', { method: 'POST' }).then((r) => j<{ ok: number; failed: number; errors: string[] }>(r)),
-  fetchSource: (id: string) => fetch(`/api/sources/${id}/fetch`, { method: 'POST' }).then((r) => j<{ ok: boolean; count: number; error?: string; note?: string }>(r)),
+  fetchAll: () => fetch('/api/fetch-all', { method: 'POST' }).then((r) => j<{ ok: number; failed: number; errors: string[]; diff?: RulesDiff; unchangedSources?: number; changesTotal?: number }>(r)),
+  fetchSource: (id: string) => fetch(`/api/sources/${id}/fetch`, { method: 'POST' }).then((r) => j<{ ok: boolean; count: number; error?: string; note?: string; diff?: RulesDiff & { unchanged: boolean } }>(r)),
   patchSource: (id: string, data: Partial<SourceItem>) =>
     fetch(`/api/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ source: SourceItem }>(r)),
   deleteSource: (id: string) => fetch(`/api/sources/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean; trashed?: boolean; purged?: boolean }>(r)),
@@ -271,7 +283,7 @@ export const api = {
   createSource: (data: Record<string, unknown>) =>
     fetch('/api/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ source: SourceItem }>(r)),
   build: (exportAfter: boolean) =>
-    fetch('/api/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ export: exportAfter }) }).then((r) => j<{ ok: boolean; total?: number; fileName?: string; error?: string; export?: { ok: boolean; error?: string; detail?: string } }>(r)),
+    fetch('/api/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ export: exportAfter }) }).then((r) => j<{ ok: boolean; total?: number; fileName?: string; error?: string; changes?: RulesDiff | null; unchanged?: boolean; export?: { ok: boolean; error?: string; detail?: string } }>(r)),
   exportPush: () => fetch('/api/export', { method: 'POST' }).then((r) => j<{ ok: boolean; error?: string; detail?: string; pushedTo?: string }>(r)),
   exportFiles: () => fetch('/api/export', { method: 'PUT' }).then((r) => j<{ files: Array<{ name: string; size: number; mtime: string }> }>(r)),
   rules: (params: string) => fetch(`/api/rules?${params}`, { cache: 'no-store' }).then((r) => j<{ total: number; rules: RuleRow[] }>(r)),
