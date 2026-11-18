@@ -15,7 +15,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const src = await db.source.findUnique({ where: { id } })
     if (!src) return NextResponse.json({ error: 'источник не найден' }, { status: 404 })
     const res = await fetchSourceById(id)
-    return NextResponse.json(res, { status: res.ok ? 200 : 400 })
+    // 429 — гейт частоты snort.org (15 минут): браузер/скрипты видят Retry-After
+    const status = res.ok ? 200 : res.rateLimited ? 429 : 400
+    return NextResponse.json(res, { status, headers: res.retryAfterSec ? { 'Retry-After': String(res.retryAfterSec) } : undefined })
   } catch (e) {
     return apiError(e)
   }

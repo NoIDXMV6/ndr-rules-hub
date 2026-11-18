@@ -70,6 +70,7 @@ export function sameOriginOk(req: Request): boolean {
 export const SECRET_SETTING_KEYS = [
   'serveToken',
   'oinkcode',
+  'etProOinkcode', // oinkcode ET Pro (Proofpoint) — отдельно от снортовского
   'abusechAuthKey',
   'mispAuthKey', // ключ REST API MISP
   'clearndrExportToken',

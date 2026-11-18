@@ -82,7 +82,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         },
         {
           title: '2. Загрузка',
-          text: 'HTTP(S)-загрузка с авторизацией: для snort.org ссылки приводятся к канонической форме `/reg-rules/<файл>/<oinkcode>`, архив проверяется по magic-байтам gzip, поддерживаются кэш (`cacheTtlMinutes`), свой User-Agent и зеркала (`extra.mirrorUrls` — при сетевой ошибке или не-200 основном URL по очереди пробуются зеркала). При сбое используется ранее скачанный архив. Учитывайте лимиты snort.org: registered — не чаще раза в 15 минут.',
+          text: 'HTTP(S)-загрузка с авторизацией: для snort.org ссылки приводятся к канонической форме `/reg-rules/<файл>/<oinkcode>`, архив проверяется по magic-байтам gzip, поддерживаются кэш (`cacheTtlMinutes`), свой User-Agent и зеркала (`extra.mirrorUrls` — при сетевой ошибке или не-200 основном URL по очереди пробуются зеркала). При сбое используется ранее скачанный архив. Лимит snort.org (не чаще 1 раза в 15 минут) хаб соблюдает сам: повторные обновления snort-источников до истечения 15 минут откладываются с ответом 429 и заголовком Retry-After (в cron/«Обновить все» источник просто пропускается), чтобы oinkcode не заблокировали.',
         },
         {
           title: '3. Парсинг и конвертация',
@@ -248,7 +248,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'зеркала (`extra.mirrorUrls`) — при сетевой ошибке или не-200 ответе основного URL по очереди пробуются зеркала; в зеркала тоже подставляется авторизация (`%%AUTHKEY%%`);',
         'свой User-Agent (`userAgent` в extra) — некоторые серверы (например, ptrules.com) блокируют не-браузерный UA;',
         'фиды abuse.ch (ThreatFox, URLhaus) требуют бесплатный Auth-Key: auth.abuse.ch → Create Key → вставить в «Настройках»; без ключа сервер отвечает HTTP 401/410;',
-        'ET Pro — платный набор: URL содержит плейсхолдер `%%OINKCODE%%`, в который подставляется oinkcode из «Настроек»; включайте только с действующей лицензией ET Pro;',
+        'ET Pro — платный набор: у него СВОЙ oinkcode (Proofpoint), он НЕ совпадает с кодом snort.org. Код задаётся в «Настройки» → «Oinkcode ET Pro» (или в extra источника) и подставляется вместо плейсхолдера `%%OINKCODE%%`; включайте только с действующей лицензией ET Pro;',
         'Zeek intel-фиды (.intel, TSV с Intel::ADDR/DOMAIN/URL) и атрибуты MISP JSON конвертируются в правила автоматически: IP — чанками по 500, домены — DNS-правила, URL — HTTP-правила;',
         'интеграция с MISP: источники «MISP Suricata Export» и «MISP Attributes» — замените misp.example.local на адрес вашего MISP и задайте ключ в «Настройках → MISP API Key» (заголовок Authorization, нужна привилегия perm_auth);',
         'локальные архивы (data/archives) — запасной путь при недоступности snort.org.',
@@ -377,7 +377,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         },
         {
           title: '2. Fetching',
-          text: 'Authenticated HTTP(S) download: snort.org links are normalized to the canonical `/reg-rules/<file>/<oinkcode>` form, the archive is verified by gzip magic bytes; caching (`cacheTtlMinutes`), a custom User-Agent and mirrors (`extra.mirrorUrls` — on a network error or non-200 of the primary URL the mirrors are tried one by one) are supported. On failure a previously downloaded archive is used. Mind the snort.org limits: registered — no more than once every 15 minutes.',
+          text: 'Authenticated HTTP(S) download: snort.org links are normalized to the canonical `/reg-rules/<file>/<oinkcode>` form, the archive is verified by gzip magic bytes; caching (`cacheTtlMinutes`), a custom User-Agent and mirrors (`extra.mirrorUrls` — on a network error or non-200 of the primary URL the mirrors are tried one by one) are supported. On failure a previously downloaded archive is used. The snort.org limit (one download per 15 minutes) is enforced by the hub itself: extra refreshes of snort.org sources within 15 minutes are deferred with HTTP 429 and a Retry-After header (in cron / “Refresh all” the source is just skipped) so your oinkcode is not blocked.',
         },
         {
           title: '3. Parsing and conversion',
@@ -540,7 +540,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'mirrors (`extra.mirrorUrls`) — on a network error or non-200 response of the primary URL the mirrors are tried one by one; authorization (`%%AUTHKEY%%`) is substituted in mirrors as well;',
         'a custom User-Agent (`userAgent` in extra) — some servers (e.g. ptrules.com) block non-browser user agents;',
         'abuse.ch feeds (ThreatFox, URLhaus) require a free Auth-Key: auth.abuse.ch → Create Key → paste it in “Settings”; without the key the server answers HTTP 401/410;',
-        'ET Pro is a paid ruleset: the URL contains the `%%OINKCODE%%` placeholder substituted with the oinkcode from “Settings”; enable it only with an active ET Pro license;',
+        'ET Pro is a paid ruleset with its OWN oinkcode (Proofpoint) that is NOT the snort.org code. Set it in “Settings” → “ET Pro Oinkcode” (or in the source extra) — it is substituted for the `%%OINKCODE%%` placeholder; enable it only with an active ET Pro license;',
         'Zeek intel feeds (.intel, TSV with Intel::ADDR/DOMAIN/URL) and MISP JSON attributes are converted into rules automatically: IPs — in chunks of 500, domains — DNS rules, URLs — HTTP rules;',
         'MISP integration: the “MISP Suricata Export” and “MISP Attributes” sources — replace misp.example.local with your MISP address and set the key in “Settings → MISP API Key” (Authorization header, the perm_auth privilege is required);',
         'local archives (data/archives) are the fallback path when snort.org is unreachable.',

@@ -66,6 +66,51 @@ export interface ExtraCfg {
   mirrorUrls?: string[]
 }
 
+// ── Определение провайдера по URL ────────────────────────────────────────────
+
+/** ET Pro (Proofpoint, rules.emergingthreatspro.com): у набора СВОЙ oinkcode,
+ *  он НЕ совпадает с oinkcode snort.org — глобальный снортовский код к нему
+ *  не подставляется (иначе источник «молча» ходил со чужим кодом). */
+export function isEtProUrl(url?: string | null): boolean {
+  if (!url) return false
+  try {
+    const h = new URL(url).hostname.toLowerCase().replace(/^www\./, '')
+    return h === 'emergingthreatspro.com' || h.endsWith('.emergingthreatspro.com')
+  } catch {
+    return false
+  }
+}
+
+/** snort.org (зарегистрированные/подписочные наборы): официальное ограничение
+ *  частоты загрузок — не чаще 1 раза в 15 минут (suricata-update проверяет то
+ *  же: «Last download less than 15 minutes ago»); при нарушении сервер отвечает
+ *  403 и может заблокировать oinkcode. */
+export function isSnortOrgUrl(url?: string | null): boolean {
+  if (!url) return false
+  try {
+    const h = new URL(url).hostname.toLowerCase().replace(/^www\./, '')
+    return h === 'snort.org' || h.endsWith('.snort.org')
+  } catch {
+    return false
+  }
+}
+
+/** Минимальный интервал между загрузками snort.org (официальный лимит) */
+export const SNORT_MIN_FETCH_INTERVAL_MS = 15 * 60 * 1000
+
+/** Гейт частоты загрузок snort.org: считаем от последней ПОПЫТКИ (lastFetchAt
+ *  обновляется и при ошибке — запрос к snort.org уже ушёл и учтён их лимитом). */
+export function snortRateGate(
+  lastFetchAt: Date | null | undefined,
+  now = Date.now(),
+): { blocked: boolean; retryAfterSec: number; elapsedMin: number } {
+  if (!lastFetchAt) return { blocked: false, retryAfterSec: 0, elapsedMin: 0 }
+  const elapsed = now - lastFetchAt.getTime()
+  const elapsedMin = Math.max(0, Math.floor(elapsed / 60_000))
+  if (elapsed >= SNORT_MIN_FETCH_INTERVAL_MS) return { blocked: false, retryAfterSec: 0, elapsedMin }
+  return { blocked: true, retryAfterSec: Math.ceil((SNORT_MIN_FETCH_INTERVAL_MS - elapsed) / 1000), elapsedMin }
+}
+
 export function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): string {
   if (cfg.authType === 'oinkcode' && extra.oinkcode) {
     const code = extra.oinkcode.trim()

@@ -16,6 +16,10 @@ services:
     environment:
       # Oinkcode аккаунта snort.org (можно также задать через UI → Настройки)
       - OINKCODE=${OINKCODE:-}
+      # Oinkcode ET Pro (Proofpoint) — СВОЙ код, не совпадает со снортовским;
+      # подставляется только в источник «ET Pro Ruleset». Можно также задать
+      # через UI → Настройки → «Oinkcode ET Pro (Proofpoint)»
+      - ETPRO_OINKCODE=${ETPRO_OINKCODE:-}
       - DATABASE_URL=file:/app/data/hub.db
       - RULES_DATA_DIR=/app/data
       - WG_CONFIG_DIR=/app/data/wireguard

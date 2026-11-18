@@ -18,6 +18,7 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
   const { t, tr } = useI18n()
   const [s, setS] = useState<Record<string, string>>({})
   const [showOink, setShowOink] = useState(false)
+  const [showEtPro, setShowEtPro] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -65,6 +66,24 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               {t.settings.oinkHelp}
+            </p>
+          </div>
+          <div className="max-w-xl">
+            <Label className="text-foreground">{t.settings.etProOinkcode}</Label>
+            <div className="flex gap-2">
+              <Input
+                type={showEtPro ? 'text' : 'password'}
+                value={s.etProOinkcode ?? ''}
+                onChange={(e) => set('etProOinkcode', e.target.value.trim())}
+                className="bg-card border-input font-mono"
+                placeholder={t.settings.etProPlaceholder}
+              />
+              <Button variant="outline" className="border-input text-foreground shrink-0" onClick={() => setShowEtPro(!showEtPro)}>
+                {showEtPro ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">
+              {t.settings.etProHelp}
             </p>
           </div>
         </CardContent>

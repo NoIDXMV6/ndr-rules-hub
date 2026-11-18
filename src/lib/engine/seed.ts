@@ -436,8 +436,8 @@ export const SEED_SOURCES: SeedSource[] = [
     enabled: false,
     priority: 25,
     badge: 'paid',
-    notes: 'Платный набор ET Pro (~40 000 правил, обновляется ежедневно: продвинутая малварь, C2, web-атаки; поверх ET Open). ВАЖНО: у ET Pro СВОЙ oinkcode, он НЕ совпадает с кодом snort.org — выдается Proofpoint после покупки подписки (etadmin.proofpoint.com/etpro, формат $oinkcode/suricata-<версия>/etpro.rules.tar.gz). Код подставляется вместо %%OINKCODE%%: укажите его в extraJson источника ({"oinkcode":"…"}) — иначе будет взят общий «Oinkcode» из «Настроек» (тот, что для snort.org). Без действующего кода сервер вернёт ошибку.',
-    notesEn: 'Paid ET Pro ruleset (~40,000 rules, updated daily: advanced malware, C2, web attacks; a superset of ET Open). IMPORTANT: ET Pro has its OWN oinkcode, it is NOT the snort.org code — issued by Proofpoint after purchasing the subscription (etadmin.proofpoint.com/etpro, $oinkcode/suricata-<version>/etpro.rules.tar.gz format). The code is substituted for %%OINKCODE%%: set it in the source extraJson ({"oinkcode":"…"}) — otherwise the common "Oinkcode" from "Settings" (the snort.org one) is used. Without a valid code the server returns an error.',
+    notes: 'Платный набор ET Pro (~40 000 правил, обновляется ежедневно: продвинутая малварь, C2, web-атаки; поверх ET Open). ВАЖНО: у ET Pro СВОЙ oinkcode, он НЕ совпадает с кодом snort.org — выдается Proofpoint после покупки подписки (etadmin.proofpoint.com/etpro, формат $oinkcode/suricata-<версия>/etpro.rules.tar.gz). Код подставляется вместо %%OINKCODE%%: укажите его в «Настройки» → «Oinkcode ET Pro» (или в extra источника {"oinkcode":"…"}). Снортовский код к этому источнику не применяется. Без действующего кода сервер вернёт ошибку.',
+    notesEn: 'Paid ET Pro ruleset (~40,000 rules, updated daily: advanced malware, C2, web attacks; a superset of ET Open). IMPORTANT: ET Pro has its OWN oinkcode, it is NOT the snort.org code — issued by Proofpoint after purchasing the subscription (etadmin.proofpoint.com/etpro, $oinkcode/suricata-<version>/etpro.rules.tar.gz format). The code is substituted for %%OINKCODE%%: set it in “Settings” → “ET Pro Oinkcode” (or in the source extra {"oinkcode":"…"}). The snort.org code is NOT applied to this source. Without a valid code the server returns an error.',
   },
   {
     name: 'Cobalt Strike C2 IPs (CriticalPathSecurity, Zeek intel)',
@@ -549,6 +549,9 @@ export const SEED_SOURCES: SeedSource[] = [
 
 export const DEFAULT_SETTINGS: Record<string, string> = {
   oinkcode: process.env.OINKCODE || '',
+  // oinkcode ET Pro (Proofpoint) — НЕ совпадает с кодом snort.org, подставляется
+  // только в источник «ET Pro Ruleset» (rules.emergingthreatspro.com)
+  etProOinkcode: process.env.ETPRO_OINKCODE || '',
   abusechAuthKey: process.env.ABUSECH_AUTH_KEY || '', // Auth-Key abuse.ch (ThreatFox/URLhaus, сегмент пути выгрузки)
   mispAuthKey: process.env.MISP_AUTH_KEY || '', // ключ REST API MISP (заголовок Authorization)
   dedupSidStrategy: 'highest-rev', // highest-rev | source-priority | renumber-private

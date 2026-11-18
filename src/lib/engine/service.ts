@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { db } from '@/lib/db'
 import { SEED_SOURCES, DEFAULT_SETTINGS } from './seed'
-import { fetchSource, FetchSourceCfg, CACHE_DIR, EXPORTS_DIR, DATA_DIR } from './fetcher'
+import { fetchSource, FetchSourceCfg, CACHE_DIR, EXPORTS_DIR, DATA_DIR, isEtProUrl, isSnortOrgUrl, snortRateGate } from './fetcher'
 import {
   mergeSources, renderFinalFile, hashRule, conflictKey, findConflictingDuplicates, dedupeConflicting,
   sanitizeSciriusCompat, findSciriusSidConflicts, renderPerSourceFiles, SourceRules, DedupPolicy, BuildStats, BuiltRule, ArchiveInfo,
@@ -193,12 +193,29 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
   return { seeded: count === 0, catalogAdded: added, catalogUpdated: updated }
 }
 
-/** Загрузка одного источника и сохранение правил в БД */
+/** Загрузка одного источника и сохранение правил в БД.
+ *  rateLimited/retryAfterSec — срабатывал гейт частоты snort.org (15 минут между
+ *  загрузками): API отвечает 429 с заголовком Retry-After. */
 export interface SourceFetchDiff { added: number; changed: number; removed: number; unchanged: boolean }
-export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; error?: string; count: number; note?: string; diff?: SourceFetchDiff }> {
+export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; error?: string; count: number; note?: string; diff?: SourceFetchDiff; rateLimited?: boolean; retryAfterSec?: number }> {
   const src = await db.source.findUnique({ where: { id: sourceId } })
   if (!src) return { ok: false, error: 'источник не найден', count: 0 }
   if (src.deletedAt) return { ok: false, error: 'источник в корзине — сначала восстановите его', count: 0 }
+
+  // Лимит snort.org: официальное ограничение частоты загрузок — не чаще 1 раза
+  // в 15 минут (suricata-update проверяет то же). Без гейта пользователь мог
+  // «Обновить» источник сколько угодно раз: snort.org отвечает 403 и может
+  // заблокировать oinkcode. lastFetchAt обновляется и при ошибке (запрос к
+  // snort.org уже ушёл и учтён их лимитом), поэтому гейт считает попытки.
+  // Действует и на cron/«Обновить все» — там источник просто пропускается.
+  if (isSnortOrgUrl(src.url)) {
+    const gate = snortRateGate(src.lastFetchAt)
+    if (gate.blocked) {
+      const msg = `snort.org: между загрузками должно пройти 15 минут (последняя попытка ${gate.elapsedMin} мин назад). Повторите через ~${Math.max(1, Math.ceil(gate.retryAfterSec / 60))} мин — лимит защищает ваш oinkcode от блокировки на стороне snort.org.`
+      await log('warn', 'fetch', `«${src.name}»: обновление отложено — ${msg}`)
+      return { ok: false, error: msg, count: 0, rateLimited: true, retryAfterSec: gate.retryAfterSec }
+    }
+  }
 
   const settings = await getSettings()
   const cfg: FetchSourceCfg = {
@@ -211,13 +228,28 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     extraJson: src.extraJson,
     format: src.format,
   }
-  // подстановка глобального oinkcode
+  // подстановка oinkcode. ET Pro (rules.emergingthreatspro.com) имеет СВОЙ код
+  // Proofpoint: глобальный oinkcode snort.org к нему НЕ подставляется (раньше
+  // ET Pro «молча» ходил со снортовским кодом и получал отказ сервера).
   if (src.authType === 'oinkcode') {
     let extra: Record<string, unknown> = {}
     try {
       extra = src.extraJson ? JSON.parse(src.extraJson) : {}
     } catch { /* ignore */ }
-    if (!extra.oinkcode && settings.oinkcode) extra.oinkcode = settings.oinkcode
+    if (isEtProUrl(src.url)) {
+      if (!extra.oinkcode && settings.etProOinkcode) extra.oinkcode = settings.etProOinkcode
+      // без кода URL с %%OINKCODE%% уйдёт как есть и ответит непонятной ошибкой —
+      // сразу говорим, где ввести код ET Pro
+      if (!(extra.oinkcode ?? '').toString().trim() && (src.url ?? '').includes('%%OINKCODE%%')) {
+        return {
+          ok: false,
+          error: 'У источника ET Pro не задан oinkcode — укажите код Proofpoint в «Настройки» → «Oinkcode ET Pro» (он НЕ совпадает с oinkcode snort.org) или в extra источника {"oinkcode":"…"}',
+          count: 0,
+        }
+      }
+    } else if (!extra.oinkcode && settings.oinkcode) {
+      extra.oinkcode = settings.oinkcode
+    }
     cfg.extraJson = JSON.stringify(extra)
   }
   // подстановка глобального Auth-Key abuse.ch (ThreatFox/URLhaus и др.)
@@ -363,15 +395,24 @@ export async function fetchAllSources(origin = 'manual'): Promise<{
   diff: { added: number; changed: number; removed: number }
   unchangedSources: number
   changesTotal: number
+  /** источников пропущено по лимиту snort.org (15 минут между загрузками) —
+   *  не ошибка: Talos обновляет наборы раз в сутки, повторная загрузка чуть позже */
+  skippedSnortLimit: number
 }> {
   const sources = await db.source.findMany({ where: { enabled: true, deletedAt: null }, orderBy: { priority: 'asc' } })
   let ok = 0
   let failed = 0
+  let skippedSnortLimit = 0
   const errors: string[] = []
   const diff = { added: 0, changed: 0, removed: 0 }
   let unchangedSources = 0
   for (const s of sources) {
     const r = await fetchSourceById(s.id)
+    if (r.rateLimited) {
+      // гейт snort.org (15 мин) — ожидаемый пропуск, а не сбой загрузки
+      skippedSnortLimit++
+      continue
+    }
     if (r.ok) {
       ok++
       if (r.diff) {
@@ -386,13 +427,15 @@ export async function fetchAllSources(origin = 'manual'): Promise<{
     }
   }
   const changesTotal = diff.added + diff.changed + diff.removed
+  const skippedNote = skippedSnortLimit > 0 ? `, пропущено по лимиту snort.org: ${skippedSnortLimit}` : ''
+  // «изменений нет» честно только если ни один источник не был пропущен по лимиту
   const verdict = failed > 0
     ? ''
-    : changesTotal === 0
+    : changesTotal === 0 && skippedSnortLimit === 0
       ? '; изменений нет — обновление правил в Suricata не требуется'
       : `; изменения: +${diff.added} добавлено, ~${diff.changed} изменено, −${diff.removed} удалено (без изменений: ${unchangedSources})`
-  await log(ok && !failed ? (changesTotal === 0 ? 'info' : 'success') : failed ? 'error' : 'warn', 'fetch', `Обновление завершено (${origin}): успешно ${ok}, с ошибками ${failed}${verdict}`)
-  return { ok, failed, errors, diff, unchangedSources, changesTotal }
+  await log(ok && !failed ? (changesTotal === 0 && skippedSnortLimit === 0 ? 'info' : 'success') : failed ? 'error' : 'warn', 'fetch', `Обновление завершено (${origin}): успешно ${ok}, с ошибками ${failed}${skippedNote}${verdict}`)
+  return { ok, failed, errors, diff, unchangedSources, changesTotal, skippedSnortLimit }
 }
 
 /** Сборка итогового файла правил */

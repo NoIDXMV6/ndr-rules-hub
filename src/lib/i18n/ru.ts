@@ -607,7 +607,11 @@ PersistentKeepalive = 25
     oinkcode: 'Oinkcode',
     oinkPlaceholder: '32-символьный код из профиля snort.org',
     oinkHelp:
-      'Берётся в профиле snort.org → Oinkcode. Используется автоматически всеми источниками с типом «oinkcode». Учитывайте лимит: snort.org ограничивает число загрузок в сутки — для частых обновлений держите включённым один зарегистрированный набор.',
+      'Берётся в профиле snort.org → Oinkcode. Используется автоматически всеми источниками snort.org с типом «oinkcode» (кроме ET Pro). Лимит snort.org — не чаще 1 раза в 15 минут: хаб сам отложит лишние обновления (ответ 429 с Retry-After), чтобы ваш oinkcode не заблокировали.',
+    etProOinkcode: 'Oinkcode ET Pro (Proofpoint)',
+    etProPlaceholder: '32-символьный код ET Pro из кабинета Proofpoint',
+    etProHelp:
+      'У ET Pro СВОЙ oinkcode — он НЕ совпадает с кодом snort.org и подставляется только в источник «ET Pro Ruleset» (rules.emergingthreatspro.com) вместо %%OINKCODE%%. Выдаётся Proofpoint после покупки подписки (etadmin.proofpoint.com/etpro); без действующего кода сервер вернёт ошибку. Индивидуальный код конкретного источника можно задать в его extra: {"oinkcode":"…"}.',
     dedupTitle: 'Политики дедупликации и сборки',
     sidStrategy: 'Стратегия разрешения конфликтов SID',
     strategyHighestRev: 'оставлять правило с максимальным rev',

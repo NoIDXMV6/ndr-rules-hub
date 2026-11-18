@@ -611,7 +611,11 @@ PersistentKeepalive = 25
     oinkcode: 'Oinkcode',
     oinkPlaceholder: '32-character code from your snort.org profile',
     oinkHelp:
-      'Taken from your snort.org profile → Oinkcode. Used automatically by every source with the “oinkcode” auth type. Mind the limits: snort.org caps the number of downloads per day — for frequent updates keep a single registered ruleset enabled.',
+      'Taken from your snort.org profile → Oinkcode. Applied automatically to every snort.org source with the “oinkcode” auth type (except ET Pro). snort.org allows one download per 15 minutes: the hub itself defers extra refreshes (HTTP 429 with Retry-After) so your oinkcode does not get blocked.',
+    etProOinkcode: 'ET Pro Oinkcode (Proofpoint)',
+    etProPlaceholder: '32-character ET Pro code from the Proofpoint console',
+    etProHelp:
+      'ET Pro has its OWN oinkcode — it is NOT the snort.org code and is substituted only into the “ET Pro Ruleset” source (rules.emergingthreatspro.com) for %%OINKCODE%%. Issued by Proofpoint after purchasing the subscription (etadmin.proofpoint.com/etpro); without a valid code the server returns an error. A per-source code can be set in its extra: {"oinkcode":"…"}.',
     dedupTitle: 'Deduplication and build policies',
     sidStrategy: 'SID conflict resolution strategy',
     strategyHighestRev: 'keep the rule with the highest rev',
