@@ -228,6 +228,15 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     if (!extra.authKey && settings.abusechAuthKey) extra.authKey = settings.abusechAuthKey
     cfg.extraJson = JSON.stringify(extra)
   }
+  // подстановка глобального ключа MISP REST API (заголовок Authorization)
+  if (src.authType === 'misp') {
+    let extra: Record<string, unknown> = {}
+    try {
+      extra = src.extraJson ? JSON.parse(src.extraJson) : {}
+    } catch { /* ignore */ }
+    if (!extra.mispAuthKey && settings.mispAuthKey) extra.mispAuthKey = settings.mispAuthKey
+    cfg.extraJson = JSON.stringify(extra)
+  }
 
   const t0 = Date.now()
   const res = await fetchSource(cfg)

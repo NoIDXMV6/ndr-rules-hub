@@ -169,6 +169,8 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
     s.kind === 'local' ? t.sources.kinds.local
       : s.category === 'ip-list' ? t.sources.kinds.ipList
       : s.category === 'domain-list' ? t.sources.kinds.domainList
+      : s.category === 'zeek-intel' ? t.sources.kinds.zeekIntel
+      : s.category === 'misp' ? t.sources.kinds.misp
       : s.kind === 'tarball' ? t.sources.kinds.tarball
       : t.sources.kinds.ruleset
 
@@ -522,6 +524,8 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
                   <SelectItem value="ip-list">{d.catIpList}</SelectItem>
                   <SelectItem value="domain-list">{d.catDomainList}</SelectItem>
                   <SelectItem value="url-list">{d.catUrlList}</SelectItem>
+                  <SelectItem value="zeek-intel">{d.catZeekIntel}</SelectItem>
+                  <SelectItem value="misp">{d.catMisp}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -558,6 +562,7 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
                   <SelectItem value="none">{d.authNone}</SelectItem>
                   <SelectItem value="oinkcode">{d.authOinkcode}</SelectItem>
                   <SelectItem value="authkey">{d.authAuthkey}</SelectItem>
+                  <SelectItem value="misp">{d.authMisp}</SelectItem>
                   <SelectItem value="basic">{d.authBasic}</SelectItem>
                 </SelectContent>
               </Select>
@@ -661,6 +666,7 @@ function EditSourceDialog({ source, onSaved }: { source: SourceItem; onSaved: ()
                   <SelectItem value="none">{d.authNone}</SelectItem>
                   <SelectItem value="oinkcode">{d.authOinkcode}</SelectItem>
                   <SelectItem value="authkey">{d.authAuthkeyShort}</SelectItem>
+                  <SelectItem value="misp">{d.authMispShort}</SelectItem>
                   <SelectItem value="basic">{d.authBasicShort}</SelectItem>
                 </SelectContent>
               </Select>

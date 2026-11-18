@@ -6,7 +6,7 @@ import { promisify } from 'util'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { parseRuleText, ParsedRule } from './parser'
-import { convertIpList, convertDomainList, convertUrlList, ConvertOptions } from './convert'
+import { convertIpList, convertDomainList, convertUrlList, convertZeekIntel, convertMispJson, ConvertOptions } from './convert'
 import { hashRule } from './build'
 
 const execFileP = promisify(execFile)
@@ -18,10 +18,10 @@ export const EXPORTS_DIR = path.join(DATA_DIR, 'exports')
 export interface FetchSourceCfg {
   id: string
   name: string
-  category: string // ruleset | ip-list | domain-list | url-list
+  category: string // ruleset | ip-list | domain-list | url-list | zeek-intel | misp
   kind: string // url | tarball | local
   url?: string | null
-  authType: string // none | oinkcode | authkey | basic
+  authType: string // none | oinkcode | authkey | basic | misp (MISP: ключ в заголовке Authorization)
   extraJson?: string | null
   format: string
 }
@@ -57,6 +57,9 @@ export interface ExtraCfg {
   // переопределение User-Agent (некоторые серверы блокируют не-браузерные UA,
   // например ptrules.com отвечает 403 на clearndr-rules-hub/…)
   userAgent?: string
+  // MISP: ключ REST API (заголовок Authorization). Подставляется из настройки
+  // «MISP API Key» для источников с авторизацией «misp»
+  mispAuthKey?: string
   // резервные URL (зеркала): если основной URL недоступен (сетевая ошибка,
   // HTTP != 200, не-архив), пробуются зеркала по очереди — например, архив
   // GitHub-репозитория, когда официальный сайт источника лежит (PAW Patrules)
@@ -67,6 +70,10 @@ export function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): st
   if (cfg.authType === 'oinkcode' && extra.oinkcode) {
     const code = extra.oinkcode.trim()
     if (code) {
+      // ET Pro (и прочие path-based oinkcode-схемы): плейсхолдер %%OINKCODE%%
+      // в seed-URL заменяется на код, например
+      //   https://rules.emergingthreats.net/%%OINKCODE%%/suricata-7.0/emerging-all.rules
+      if (url.includes('%%OINKCODE%%')) return url.replaceAll('%%OINKCODE%%', code)
       // Каноническая форма авторизации snort.org — oinkcode как сегмент пути:
       //   https://www.snort.org/reg-rules/<файл>.tar.gz/<oinkcode>
       // Ссылки из личного кабинета (https://snort.org/downloads/registered/<файл>.tar.gz)
@@ -95,11 +102,12 @@ export function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): st
   return url
 }
 
-/** Скрыть Auth-Key в URL перед логированием (ключ — сегмент пути у abuse.ch v2) */
+/** Скрыть Auth-Key в URL перед логированием (ключ — сегмент пути у abuse.ch v2, ET Pro — %%OINKCODE%%) */
 export function maskAuthKey(url: string): string {
   return url
     .replace(/\/v2\/files\/exports\/([^/]+)\//i, '/v2/files/exports/***/')
     .replace(/([?&]auth-key=)[^&]+/i, '$1***')
+    .replace(/\/%%OINKCODE%%|\/[0-9a-f]{16,}(?=\/)/i, '/***')
 }
 
 /** У настоящего tar.gz первые два байта — 0x1f 0x8b (magic gzip) */
@@ -107,13 +115,16 @@ export function isGzip(body: Buffer): boolean {
   return body.length >= 2 && body[0] === 0x1f && body[1] === 0x8b
 }
 
-async function httpGet(url: string, extra: ExtraCfg): Promise<{ status: number; body: Buffer; finalUrl: string }> {
+async function httpGet(url: string, extra: ExtraCfg, cfg?: FetchSourceCfg): Promise<{ status: number; body: Buffer; finalUrl: string }> {
   const res = await fetch(url, {
     redirect: 'follow',
     signal: AbortSignal.timeout(120_000),
     headers: {
       'User-Agent': extra.userAgent || 'clearndr-rules-hub/1.0 (rules updater)',
-      ...(cfg_basic(extra)),
+      ...cfg_basic(extra),
+      // MISP: ключ REST API передаётся заголовком Authorization (без «Bearer»):
+      //   Authorization: <authkey>
+      ...(cfg?.authType === 'misp' && extra.mispAuthKey ? { Authorization: extra.mispAuthKey.trim() } : {}),
     },
   })
   const body = Buffer.from(await res.arrayBuffer())
@@ -345,7 +356,7 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
       for (const cand of candidates) {
         let res: Awaited<ReturnType<typeof httpGet>>
         try {
-          res = await httpGet(applyAuth(cand, cfg, extra), extra)
+          res = await httpGet(applyAuth(cand, cfg, extra), extra, cfg)
         } catch (e) {
           attemptErrors.push(netErrText(e, cand))
           continue
@@ -396,7 +407,7 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
     for (const cand of candidates) {
       let res: Awaited<ReturnType<typeof httpGet>>
       try {
-        res = await httpGet(applyAuth(cand, cfg, extra), extra)
+        res = await httpGet(applyAuth(cand, cfg, extra), extra, cfg)
       } catch (e) {
         attemptErrors.push(netErrText(e, cand))
         continue
@@ -418,6 +429,16 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
       }
       if (cfg.category === 'url-list') {
         const conv = convertUrlList(text, convOpts(extra, cfg))
+        return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
+      }
+      // Zeek intel (TSV, Intel::ADDR/DOMAIN/URL) — конвертация в правила
+      if (cfg.category === 'zeek-intel') {
+        const conv = convertZeekIntel(text, convOpts(extra, cfg))
+        return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
+      }
+      // MISP attributes (JSON, restSearch) — конвертация в правила
+      if (cfg.category === 'misp') {
+        const conv = convertMispJson(text, convOpts(extra, cfg))
         return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
       }
       return { ok: true, rules: parseRuleText(text), sizeBytes: text.length }

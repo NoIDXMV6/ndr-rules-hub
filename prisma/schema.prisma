@@ -17,11 +17,11 @@ datasource db {
 model Source {
   id         String   @id @default(cuid())
   name       String   @unique
-  category   String   // ruleset | ip-list | domain-list | url-list
+  category   String   // ruleset | ip-list | domain-list | url-list | zeek-intel | misp
   kind       String   // url | tarball | local | upload  (tarball = архив с .rules внутри)
   url        String?
   format     String   @default("auto") // snort2 | snort3 | suricata | auto
-  authType   String   @default("none") // none | oinkcode | authkey | basic
+  authType   String   @default("none") // none | oinkcode | authkey | basic | misp (MISP: ключ в заголовке Authorization)
   extraJson  String?  // настройки конвертера/авторизации (proto, ports, msgPrefix, sidRange, header)
   enabled    Boolean  @default(true)
   priority   Int      @default(100) // чем ниже, тем выше приоритет при конфликте SID

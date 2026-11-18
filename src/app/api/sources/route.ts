@@ -29,8 +29,8 @@ export async function POST(req: NextRequest) {
   if (!body?.name || !body?.category || !body?.kind) {
     return NextResponse.json({ error: 'Требуются поля: name, category, kind' }, { status: 400 })
   }
-  if (!['ruleset', 'ip-list', 'domain-list', 'url-list'].includes(body.category)) {
-    return NextResponse.json({ error: 'category: ruleset | ip-list | domain-list | url-list' }, { status: 400 })
+  if (!['ruleset', 'ip-list', 'domain-list', 'url-list', 'zeek-intel', 'misp'].includes(body.category)) {
+    return NextResponse.json({ error: 'category: ruleset | ip-list | domain-list | url-list | zeek-intel | misp' }, { status: 400 })
   }
   if (!['url', 'tarball', 'local'].includes(body.kind)) {
     return NextResponse.json({ error: 'kind: url | tarball | local' }, { status: 400 })

@@ -94,6 +94,28 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
 
       <Card className="bg-card border-border">
         <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t.settings.mispTitle}</CardTitle>
+          <CardDescription>{t.settings.mispDesc}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="max-w-xl">
+            <Label className="text-foreground">{t.settings.mispKey}</Label>
+            <Input
+              type="password"
+              value={s.mispAuthKey ?? ''}
+              onChange={(e) => set('mispAuthKey', e.target.value.trim())}
+              className="bg-card border-input font-mono"
+              placeholder={t.settings.mispPlaceholder}
+            />
+            <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">
+              {t.settings.mispHelp}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-card border-border">
+        <CardHeader className="pb-2">
           <CardTitle className="text-base">{t.settings.dedupTitle}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">

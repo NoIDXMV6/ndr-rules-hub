@@ -71,6 +71,7 @@ export const SECRET_SETTING_KEYS = [
   'serveToken',
   'oinkcode',
   'abusechAuthKey',
+  'mispAuthKey', // ключ REST API MISP
   'clearndrExportToken',
   'tgBotToken', // токен Telegram-бота
   'gotifyToken', // app-токен Gotify

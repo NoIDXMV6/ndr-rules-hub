@@ -4,10 +4,10 @@
 
 export interface SeedSource {
   name: string
-  category: 'ruleset' | 'ip-list' | 'domain-list' | 'url-list'
+  category: 'ruleset' | 'ip-list' | 'domain-list' | 'url-list' | 'zeek-intel' | 'misp'
   kind: 'url' | 'tarball' | 'local'
   url?: string
-  authType?: 'none' | 'oinkcode' | 'authkey' | 'basic'
+  authType?: 'none' | 'oinkcode' | 'authkey' | 'basic' | 'misp'
   extraJson?: string
   enabled?: boolean
   priority?: number
@@ -401,6 +401,94 @@ export const SEED_SOURCES: SeedSource[] = [
     extraJson: JSON.stringify({ sidStart: 1100800, msgPrefix: 'PHISHING-ARMY known phishing domain', maxRules: 5000 }),
   },
 
+  // ── Новые фиды по итогам анализа открытых каталогов (11.2026): ET blockrules,
+  // Binary Defense, ET Pro, Zeek intel CriticalPathSecurity, MISP ─────────────
+  {
+    name: 'ET Compromised IPs (blockrules)',
+    category: 'ip-list',
+    kind: 'url',
+    url: 'https://rules.emergingthreats.net/blockrules/compromised-ips.txt',
+    enabled: true,
+    priority: 114,
+    badge: 'converter',
+    notes: 'Угнанные/компрометированные хосты от Proofpoint (ET blockrules, обычный текст, обновляется ежедневно). Конвертируется в правила чанками по 500 IP. Дополняет Spamhaus DROP и Feodo.',
+    notesEn: 'Compromised hosts from Proofpoint (ET blockrules, plain text, updated daily). Converted into rules in chunks of 500 IPs. Complements Spamhaus DROP and Feodo.',
+    extraJson: JSON.stringify({ sidStart: 1101000, msgPrefix: 'ET-COMPROMISED compromised host IP' }),
+  },
+  {
+    name: 'Binary Defense Banlist (атакующие IP)',
+    category: 'ip-list',
+    kind: 'url',
+    url: 'https://binarydefense.com/banlist.txt',
+    enabled: true,
+    priority: 115,
+    badge: 'converter',
+    notes: 'Активные сканеры, брутфорсеры и ботнет-узлы от Binary Defense Systems (обычный текст, обновляется регулярно). Конвертируется в правила; пересекается с CINS/Blocklist.de — дедупликация в сборке убирает повторяющиеся IP.',
+    notesEn: 'Active scanners, brute-forcers and botnet nodes by Binary Defense Systems (plain text, updated regularly). Converted into rules; overlaps with CINS/Blocklist.de — build deduplication removes repeated IPs.',
+    extraJson: JSON.stringify({ sidStart: 1101100, msgPrefix: 'BINARY-DEFENSE known malicious IP' }),
+  },
+  {
+    name: 'ET Pro Ruleset (Emerging Threats Pro)',
+    category: 'ruleset',
+    kind: 'url',
+    url: 'https://rules.emergingthreats.net/%%OINKCODE%%/suricata-7.0/emerging-all.rules',
+    authType: 'oinkcode',
+    enabled: false,
+    priority: 25,
+    badge: 'paid',
+    notes: 'Платный набор ET Pro (~40 000 правил, обновляется ежедневно: продвинутая малварь, C2, web-атаки; поверх ET Open). Требуется платный oinkcode (лицензия ET Pro): он подставляется вместо %%OINKCODE%% из настройки «Oinkcode». Включайте после оформления подписки на proofpoint.com — без действующего кода сервер вернёт ошибку.',
+    notesEn: 'Paid ET Pro ruleset (~40,000 rules, updated daily: advanced malware, C2, web attacks; a superset of ET Open). Requires a paid oinkcode (ET Pro license): substituted for %%OINKCODE%% from the "Oinkcode" setting. Enable after subscribing at proofpoint.com — without a valid code the server returns an error.',
+  },
+  {
+    name: 'Cobalt Strike C2 IPs (CriticalPathSecurity, Zeek intel)',
+    category: 'zeek-intel',
+    kind: 'url',
+    url: 'https://raw.githubusercontent.com/CriticalPathSecurity/Zeek-Intelligence-Feeds/master/cobaltstrike_ips.intel',
+    enabled: true,
+    priority: 116,
+    badge: 'converter',
+    notes: 'IP-адреса C2-серверов Cobalt Strike (агрегат Critical Path Security; в репо также OTX, Binary Defense и собственные данные CPS). Формат Zeek intel (TSV, Intel::ADDR) конвертируется в IP-правила чанками по 500.',
+    notesEn: 'Cobalt Strike C2 server IPs (aggregated by Critical Path Security; the repo also includes OTX, Binary Defense and CPS own data). Zeek intel format (TSV, Intel::ADDR) converted into IP rules in chunks of 500.',
+    extraJson: JSON.stringify({ sidStart: 1101200, msgPrefix: 'CPS-COBALTSTRIKE C2 IP' }),
+  },
+  {
+    name: 'Tor Exit Nodes (CriticalPathSecurity, Zeek intel)',
+    category: 'zeek-intel',
+    kind: 'url',
+    url: 'https://raw.githubusercontent.com/CriticalPathSecurity/Zeek-Intelligence-Feeds/master/tor-exit.intel',
+    enabled: false,
+    priority: 117,
+    badge: 'converter',
+    notes: 'Выходные узлы Tor (Zeek intel, обновляется CPS). Не малварь: срабатывания означают анонимизацию трафика — включайте, если политика запрещает Tor (иначе ложно-положительные на легитимные сервисы). Конвертируется в IP-правила.',
+    notesEn: 'Tor exit nodes (Zeek intel, updated by CPS). Not malware: hits mean traffic anonymization — enable if your policy forbids Tor (otherwise false positives on legitimate services). Converted into IP rules.',
+    extraJson: JSON.stringify({ sidStart: 1101300, msgPrefix: 'CPS-TOR-EXIT exit node IP' }),
+  },
+  {
+    name: 'MISP Suricata Export (events/nids/suricata/download)',
+    category: 'ruleset',
+    kind: 'url',
+    url: 'https://misp.example.local/events/nids/suricata/download',
+    authType: 'misp',
+    enabled: false,
+    priority: 130,
+    badge: 'new',
+    notes: 'Интеграция с платформой threat intelligence MISP. Замените misp.example.local на адрес вашего MISP. Готовые Suricata-правила по всем опубликованным событиям; для одного события добавьте его ID в конец URL (.../download/<ID>). Ключ: «Настройки → MISP API Key» (REST-ключ пользователя MISP, заголовок Authorization).',
+    notesEn: 'Integration with the MISP threat intelligence platform. Replace misp.example.local with your MISP address. Ready-made Suricata rules for all published events; for a single event append its ID to the URL (.../download/<ID>). Key: "Settings → MISP API Key" (the MISP user REST key, Authorization header).',
+  },
+  {
+    name: 'MISP Attributes (restSearch JSON → конвертер)',
+    category: 'misp',
+    kind: 'url',
+    url: 'https://misp.example.local/attributes/restSearch.json?returnFormat=json&limit=20000&published=1&enforceWarninglist=1',
+    authType: 'misp',
+    enabled: false,
+    priority: 131,
+    badge: 'converter',
+    notes: 'Конвертер атрибутов MISP (REST /attributes/restSearch.json): ip-dst/ip-src → IP-правила (чанками), domain/hostname → DNS-правила, url/uri → HTTP-правила. Хэши и не-сетевые типы пропускаются. GET-фильтры в URL можно править (type=, tag=, category=, published=, enforceWarninglist=). Ключ: «Настройки → MISP API Key».',
+    notesEn: 'MISP attribute converter (REST /attributes/restSearch.json): ip-dst/ip-src → IP rules (chunked), domain/hostname → DNS rules, url/uri → HTTP rules. Hashes and non-network types are skipped. GET filters in the URL are editable (type=, tag=, category=, published=, enforceWarninglist=). Key: "Settings → MISP API Key".',
+    extraJson: JSON.stringify({ sidStart: 1101400, msgPrefix: 'MISP' }),
+  },
+
   // ── Локальные архивы (предзагруженные с Яндекс.Диска / snort.org) ──────────
   {
     name: '[локальный архив] snortrules-snapshot-3200.tar.gz',
@@ -462,6 +550,7 @@ export const SEED_SOURCES: SeedSource[] = [
 export const DEFAULT_SETTINGS: Record<string, string> = {
   oinkcode: process.env.OINKCODE || '',
   abusechAuthKey: process.env.ABUSECH_AUTH_KEY || '', // Auth-Key abuse.ch (ThreatFox/URLhaus, сегмент пути выгрузки)
+  mispAuthKey: process.env.MISP_AUTH_KEY || '', // ключ REST API MISP (заголовок Authorization)
   dedupSidStrategy: 'highest-rev', // highest-rev | source-priority | renumber-private
   dedupContent: 'true',
   dropIncompatible: 'true',

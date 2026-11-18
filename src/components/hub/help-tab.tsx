@@ -60,8 +60,8 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**NDR Rules Hub** — вспомогательный сервис для системы **Clear NDR** (Stamus Networks): он автоматизирует полный цикл работы с наборами правил Snort/Suricata, которые питают сетевое обнаружение.',
       ],
       items: [
-        'собрать в одном месте проверенные источники правил — в каталоге уже 36 преднастроенных наборов, от официальных правил Talos до открытых фидов, плюс свои источники по URL/архиву/локальному файлу;',
-        'загружать их по расписанию с учётом лимитов и авторизации (oinkcode, abuse.ch Auth-Key, basic), с кэшем и зеркалами на случай сбоя основного URL;',
+        'собрать в одном месте проверенные источники правил — в каталоге уже 44 преднастроенных набора, от официальных правил Talos до открытых фидов и Zeek intel/MISP-интеграций, плюс свои источники по URL/архиву/локальному файлу;',
+        'загружать их по расписанию с учётом лимитов и авторизации (oinkcode, abuse.ch Auth-Key, ключ MISP, basic), с кэшем и зеркалами на случай сбоя основного URL;',
         'устранять дубликаты и конфликты SID, из-за которых импорт в Clear NDR отказывает;',
         'конвертировать списки индикаторов (IP/домены/URL) в правила Suricata и фильтровать несовместимые с Suricata конструкции;',
         'управлять итоговым набором через категории (classtype) и отдельные правила — выключатель SID переживает обновление источников;',
@@ -78,7 +78,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       steps: [
         {
           title: '1. Источники',
-          text: 'Каталог источников (вкладка «Источники», 36 преднастроенных): официальные наборы snort.org (registered по oinkcode, community), ET Open, PT Open Ruleset и PT Attack Detection, Quadrant, OISF Traffic ID, фиды abuse.ch, наборы из индекса EveBox Rules (PAW Patrules, The Hunters Ledger, AntiPhishing и др.), конвертеры списков IP/доменов и локальные архивы. У каждого источника — тип авторизации (oinkcode / auth-key / basic / без авторизации), приоритет, флаг включения и свои источники пользователей (Enterprise). Удалённые источники попадают в корзину: правила сохраняются, источник можно восстановить.',
+          text: 'Каталог источников (вкладка «Источники», 44 преднастроенных): официальные наборы snort.org (registered по oinkcode, community), ET Open и ET Pro (платный, по %%OINKCODE%%), PT Open Ruleset и PT Attack Detection, Quadrant, OISF Traffic ID, фиды abuse.ch, Zeek intel-фиды CriticalPathSecurity (Cobalt Strike, Tor), интеграция с MISP (готовый экспорт событий и конвертер атрибутов restSearch), наборы из индекса EveBox Rules (PAW Patrules, The Hunters Ledger, AntiPhishing и др.), конвертеры списков IP/доменов и локальные архивы. У каждого источника — тип авторизации (oinkcode / auth-key / MISP / basic / без авторизации), приоритет, флаг включения и свои источники пользователей (Enterprise). Удалённые источники попадают в корзину: правила сохраняются, источник можно восстановить.',
         },
         {
           title: '2. Загрузка',
@@ -248,6 +248,9 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'зеркала (`extra.mirrorUrls`) — при сетевой ошибке или не-200 ответе основного URL по очереди пробуются зеркала; в зеркала тоже подставляется авторизация (`%%AUTHKEY%%`);',
         'свой User-Agent (`userAgent` в extra) — некоторые серверы (например, ptrules.com) блокируют не-браузерный UA;',
         'фиды abuse.ch (ThreatFox, URLhaus) требуют бесплатный Auth-Key: auth.abuse.ch → Create Key → вставить в «Настройках»; без ключа сервер отвечает HTTP 401/410;',
+        'ET Pro — платный набор: URL содержит плейсхолдер `%%OINKCODE%%`, в который подставляется oinkcode из «Настроек»; включайте только с действующей лицензией ET Pro;',
+        'Zeek intel-фиды (.intel, TSV с Intel::ADDR/DOMAIN/URL) и атрибуты MISP JSON конвертируются в правила автоматически: IP — чанками по 500, домены — DNS-правила, URL — HTTP-правила;',
+        'интеграция с MISP: источники «MISP Suricata Export» и «MISP Attributes» — замените misp.example.local на адрес вашего MISP и задайте ключ в «Настройках → MISP API Key» (заголовок Authorization, нужна привилегия perm_auth);',
         'локальные архивы (data/archives) — запасной путь при недоступности snort.org.',
       ],
     },
@@ -352,8 +355,8 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**NDR Rules Hub** is a companion service for the **Clear NDR** system (Stamus Networks): it automates the full cycle of working with Snort/Suricata rulesets that feed network detection.',
       ],
       items: [
-        'bring proven rule sources together in one place — the catalog already ships 36 preconfigured sets, from official Talos rules to open feeds, plus your own sources by URL/archive/local file;',
-        'download them on a schedule, respecting rate limits and authentication (oinkcode, abuse.ch Auth-Key, basic), with caching and mirrors as a fallback for the primary URL;',
+        'bring proven rule sources together in one place — the catalog already ships 44 preconfigured sets, from official Talos rules to open feeds and Zeek intel/MISP integrations, plus your own sources by URL/archive/local file;',
+        'download them on a schedule, respecting rate limits and authentication (oinkcode, abuse.ch Auth-Key, MISP key, basic), with caching and mirrors as a fallback for the primary URL;',
         'eliminate duplicates and SID conflicts that make Clear NDR imports fail;',
         'convert indicator lists (IP/domains/URLs) into Suricata rules and filter Suricata-incompatible constructs;',
         'manage the final ruleset through categories (classtype) and individual rules — a per-SID toggle survives source refreshes;',
@@ -370,7 +373,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       steps: [
         {
           title: '1. Sources',
-          text: 'Source catalog (the “Sources” tab, 36 preconfigured): official snort.org rulesets (registered via oinkcode, community), ET Open, PT Open Ruleset and PT Attack Detection, Quadrant, OISF Traffic ID, abuse.ch feeds, sets from the EveBox Rules index (PAW Patrules, The Hunters Ledger, AntiPhishing and more), IP/domain list converters and local archives. Each source has an auth type (oinkcode / auth-key / basic / none), a priority, an enable flag and per-user sources (Enterprise). Deleted sources go to the trash bin: rules are kept and the source can be restored.',
+          text: 'Source catalog (the “Sources” tab, 44 preconfigured): official snort.org rulesets (registered via oinkcode, community), ET Open and ET Pro (paid, via %%OINKCODE%%), PT Open Ruleset and PT Attack Detection, Quadrant, OISF Traffic ID, abuse.ch feeds, CriticalPathSecurity Zeek intel feeds (Cobalt Strike, Tor), MISP integration (ready-made event export and restSearch attribute converter), sets from the EveBox Rules index (PAW Patrules, The Hunters Ledger, AntiPhishing and more), IP/domain list converters and local archives. Each source has an auth type (oinkcode / auth-key / MISP / basic / none), a priority, an enable flag and per-user sources (Enterprise). Deleted sources go to the trash bin: rules are kept and the source can be restored.',
         },
         {
           title: '2. Fetching',
@@ -537,6 +540,9 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'mirrors (`extra.mirrorUrls`) — on a network error or non-200 response of the primary URL the mirrors are tried one by one; authorization (`%%AUTHKEY%%`) is substituted in mirrors as well;',
         'a custom User-Agent (`userAgent` in extra) — some servers (e.g. ptrules.com) block non-browser user agents;',
         'abuse.ch feeds (ThreatFox, URLhaus) require a free Auth-Key: auth.abuse.ch → Create Key → paste it in “Settings”; without the key the server answers HTTP 401/410;',
+        'ET Pro is a paid ruleset: the URL contains the `%%OINKCODE%%` placeholder substituted with the oinkcode from “Settings”; enable it only with an active ET Pro license;',
+        'Zeek intel feeds (.intel, TSV with Intel::ADDR/DOMAIN/URL) and MISP JSON attributes are converted into rules automatically: IPs — in chunks of 500, domains — DNS rules, URLs — HTTP rules;',
+        'MISP integration: the “MISP Suricata Export” and “MISP Attributes” sources — replace misp.example.local with your MISP address and set the key in “Settings → MISP API Key” (Authorization header, the perm_auth privilege is required);',
         'local archives (data/archives) are the fallback path when snort.org is unreachable.',
       ],
     },
