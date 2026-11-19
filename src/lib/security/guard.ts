@@ -73,6 +73,7 @@ export const SECRET_SETTING_KEYS = [
   'etProOinkcode', // oinkcode ET Pro (Proofpoint) — отдельно от снортовского
   'abusechAuthKey',
   'mispAuthKey', // ключ REST API MISP
+  'openNrdLicense', // код лицензии Open NRD (Stamus Networks)
   'clearndrExportToken',
   'tgBotToken', // токен Telegram-бота
   'gotifyToken', // app-токен Gotify

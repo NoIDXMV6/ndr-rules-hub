@@ -58,6 +58,9 @@ export interface ServeAuth {
   ip?: string
   /** Пользователь открытой сессии веб-интерфейса — доступ без токена */
   sessionUserId?: string
+  /** Рабочее пространство отдачи: cuid пользователя — его ПЕРСОНАЛЬНАЯ сборка
+   *  (нет своей — фолбэк на системную с пометкой в аудите); null — системная */
+  workspaceUserId?: string | null
 }
 
 type Access = { ok: boolean; reason?: string; blocked?: boolean; tokenRow?: { id: string; userId: string } }
@@ -119,9 +122,21 @@ export async function serveBuild(opts: ServeAuth & { archive?: boolean } = {}): 
     }
   }
 
-  const build = await db.build.findFirst({ orderBy: { createdAt: 'desc' } })
+  // Персональное рабочее пространство: у токена/сессии пользователя своя сборка.
+  // Нет персональной — фолбэк на системную (после обновления хаба PULL не
+  // ломается до первой персональной сборки; факт фолбэка виден в аудите).
+  const ws = opts.workspaceUserId ?? null
+  let build = await db.build.findFirst({ where: { userId: ws }, orderBy: { createdAt: 'desc' } })
+  let servedFrom = ws ? 'personal' : 'system'
+  if (ws && !build) {
+    build = await db.build.findFirst({ where: { userId: null }, orderBy: { createdAt: 'desc' } })
+    servedFrom = 'system-fallback'
+  }
   if (!build) {
     return { status: 404, contentType: TEXT, body: 'NDR Rules Hub: нет сборок — сначала выполните сборку (вкладка «Сборка»).' }
+  }
+  if (servedFrom === 'system-fallback') {
+    void audit('download', { userId: opts.workspaceUserId ?? access.tokenRow?.userId, ip: opts.ip, detail: 'персональная сборка ещё не выполнялась — отдан системный набор' })
   }
 
   const stat = async (bytes: number) => {

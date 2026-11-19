@@ -7,13 +7,14 @@ export interface SeedSource {
   category: 'ruleset' | 'ip-list' | 'domain-list' | 'url-list' | 'zeek-intel' | 'misp'
   kind: 'url' | 'tarball' | 'local'
   url?: string
-  authType?: 'none' | 'oinkcode' | 'authkey' | 'basic' | 'misp'
+  authType?: 'none' | 'oinkcode' | 'authkey' | 'basic' | 'misp' | 'opennrd'
   extraJson?: string
   enabled?: boolean
   priority?: number
-  badge?: 'recommended' | 'duplicate' | 'legacy' | 'paid' | 'converter' | 'new' | 'unavailable'
+  badge?: 'recommended' | 'duplicate' | 'legacy' | 'paid' | 'converter' | 'traffic' | 'hunting' | 'unavailable'
   notes?: string
   notesEn?: string // примечание на английском (для EN-интерфейса)
+  adminOnly?: boolean // источник только для администратора (ET Pro, MISP): секреты уровня системы
 }
 
 export const LOCAL_ARCHIVES_DIR = process.env.RULES_LOCAL_ARCHIVES_DIR || 'data/archives'
@@ -113,9 +114,9 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://ptrules.com/files/ptopen.rules.tar.gz',
     enabled: true,
     priority: 31,
-    badge: 'new',
-    notes: 'Новый источник: свежие открытые правила Positive Technologies (обновления продолжаются, ~430+ правил: attacks/malware/info/windows/tools). Сервер блокирует не-браузерный User-Agent — в extra задан userAgent, при ручном добавлении скопируйте его. Найдено через индекс EveBox Rules.',
-    notesEn: 'New source: fresh open Positive Technologies rules (still updated, ~430+ rules: attacks/malware/info/windows/tools). The server blocks non-browser User-Agents — a userAgent is preset in extra; copy it when adding manually. Found via the EveBox Rules index.',
+    badge: 'recommended',
+    notes: 'Свежие открытые правила Positive Technologies (обновления продолжаются, ~430+ правил: attacks/malware/info/windows/tools). Сервер блокирует не-браузерный User-Agent — в extra задан userAgent, при ручном добавлении скопируйте его. Найдено через индекс EveBox Rules.',
+    notesEn: 'Fresh open Positive Technologies rules (still updated, ~430+ rules: attacks/malware/info/windows/tools). The server blocks non-browser User-Agents — a userAgent is preset in extra; copy it when adding manually. Found via the EveBox Rules index.',
     extraJson: JSON.stringify({ subPath: 'rules', userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36' }),
   },
   {
@@ -125,9 +126,9 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://raw.githubusercontent.com/quadrantsec/suricata-rules/main/quadrant-suricata.rules',
     enabled: true,
     priority: 35,
-    badge: 'new',
-    notes: 'Новый источник: открытый набор Quadrant Information Security (~2 000 правил, много прикладных детектов SCADA/ICS).',
-    notesEn: 'New source: open ruleset by Quadrant Information Security (~2,000 rules, many applied SCADA/ICS detections).',
+    badge: 'recommended',
+    notes: 'Открытый набор Quadrant Information Security (~2 000 правил, много прикладных детектов SCADA/ICS).',
+    notesEn: 'Open ruleset by Quadrant Information Security (~2,000 rules, many applied SCADA/ICS detections).',
   },
   {
     name: 'Suricata Traffic ID Ruleset (OISF)',
@@ -136,9 +137,9 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://raw.githubusercontent.com/OISF/suricata-trafficid/master/rules/traffic-id.rules',
     enabled: true,
     priority: 50,
-    badge: 'new',
-    notes: 'Новый источник: официальные правила идентификации приложений/сервисов от OISF. Классифицирует трафик (не алерты об атаках).',
-    notesEn: 'New source: official application/service identification rules from OISF. Classifies traffic (not attack alerts).',
+    badge: 'traffic',
+    notes: 'Официальные правила идентификации приложений/сервисов от OISF. Классифицирует трафик (НЕ алерты об атаках) — полезно для разметки, не для обнаружения угроз.',
+    notesEn: 'Official application/service identification rules from OISF. Classifies traffic (NOT attack alerts) — useful for labeling, not threat detection.',
   },
 
   // ── Свежие CVE (daffainfo/suricata-rules, на базе nuclei-templates) ──────
@@ -149,9 +150,9 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://raw.githubusercontent.com/daffainfo/suricata-rules/main/http/cves/2026/CVE-2026.rules',
     enabled: true,
     priority: 70,
-    badge: 'new',
-    notes: 'Новый источник: свежие CVE-правила по nuclei-шаблонам ProjectDiscovery (46 правил 2026 г., SID 22026xxx — конфликтов нет). Репозиторий обновляется; годы 2000–2024 доступны по аналогичному URL .../cves/<год>/CVE-<год>.rules. Лицензия Apache-2.0.',
-    notesEn: 'New source: fresh CVE rules from ProjectDiscovery nuclei templates (46 rules for 2026, SID 22026xxx — no conflicts). The repository is updated regularly; years 2000–2024 are available via a similar URL .../cves/<year>/CVE-<year>.rules. Apache-2.0 license.',
+    badge: 'recommended',
+    notes: 'Свежие CVE-правила по nuclei-шаблонам ProjectDiscovery (46 правил 2026 г., SID 22026xxx — конфликтов нет). Репозиторий обновляется; годы 2000–2024 доступны по аналогичному URL .../cves/<год>/CVE-<год>.rules. Лицензия Apache-2.0.',
+    notesEn: 'Fresh CVE rules from ProjectDiscovery nuclei templates (46 rules for 2026, SID 22026xxx — no conflicts). The repository is updated regularly; years 2000–2024 are available via a similar URL .../cves/<year>/CVE-<year>.rules. Apache-2.0 license.',
   },
   {
     name: 'Daffainfo CVE Rules (2025)',
@@ -160,9 +161,9 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://raw.githubusercontent.com/daffainfo/suricata-rules/main/http/cves/2025/CVE-2025.rules',
     enabled: true,
     priority: 71,
-    badge: 'new',
-    notes: 'Новый источник: CVE-правила за 2025 год (47 правил, SID 22025xxx) из того же репозитория. Дополняет ET/Snort по свежим web-уязвимостям.',
-    notesEn: 'New source: CVE rules for 2025 (47 rules, SID 22025xxx) from the same repository. Complements ET/Snort on recent web vulnerabilities.',
+    badge: 'recommended',
+    notes: 'CVE-правила за 2025 год (47 правил, SID 22025xxx) из того же репозитория. Дополняет ET/Snort по свежим web-уязвимостям.',
+    notesEn: 'CVE rules for 2025 (47 rules, SID 22025xxx) from the same repository. Complements ET/Snort on recent web vulnerabilities.',
   },
   {
     name: 'Stamus Threat Hunting Rules',
@@ -230,7 +231,7 @@ export const SEED_SOURCES: SeedSource[] = [
     authType: 'authkey',
     enabled: false,
     priority: 66,
-    badge: 'new',
+    badge: 'recommended',
     notes: 'Suricata-правила по URL распространения малвари из URLhaus (срабатывание на точный URL в HTTP-запросе). Требует тот же бесплатный Auth-Key abuse.ch, что и ThreatFox (настройки → abuse.ch Auth-Key).',
     notesEn: 'Suricata rules for malware distribution URLs from URLhaus (trigger on the exact URL in an HTTP request). Requires the same free abuse.ch Auth-Key as ThreatFox (Settings → abuse.ch Auth-Key).',
   },
@@ -268,7 +269,7 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://raw.githubusercontent.com/julioliraup/Antiphishing/refs/heads/main/antiphishing.tar.gz',
     enabled: false,
     priority: 120,
-    badge: 'new',
+    badge: 'recommended',
     notes: 'Готовые Suricata-правила по фишинговым URL/доменам (Phishstats, Openphish), обновление ежечасно, ~39 000 правил — заметная нагрузка на движок, включайте осознанно. GPL-3.0. Найдено через индекс EveBox Rules.',
     notesEn: 'Ready-made Suricata rules for phishing URLs/domains (Phishstats, Openphish), updated hourly, ~39,000 rules — a noticeable load on the engine, enable deliberately. GPL-3.0. Found via the EveBox Rules index.',
   },
@@ -280,7 +281,7 @@ export const SEED_SOURCES: SeedSource[] = [
     extraJson: JSON.stringify({ mirrorUrls: ['https://rules.pawpatrules.fr/suricata/paw-patrules.tar.gz'] }),
     enabled: false,
     priority: 121,
-    badge: 'new',
+    badge: 'recommended',
     notes: 'Французский набор IDPS/NSM (~21 300 правил в 89 файлах: подозрительные потоки, угрозы, IOC групп, боковое движение, shadow IT), обновляется часто. CC-BY-SA-4.0. Найдено через индекс EveBox Rules. Основной URL — архив официального GitHub-репозитория (woundride/pawpatrules); официальный сервер rules.pawpatrules.fr периодически не отвечает — подключён зеркалом (автоматический фолбэк при недоступности основного URL).',
     notesEn: 'French IDPS/NSM set (~21,300 rules in 89 files: suspicious flows, threats, group IOCs, lateral movement, shadow IT), updated frequently. CC-BY-SA-4.0. Found via the EveBox Rules index. The primary URL is an archive of the official GitHub repository (woundride/pawpatrules); the official server rules.pawpatrules.fr is intermittently unresponsive — connected as a mirror (automatic fallback when the primary URL is down).',
   },
@@ -291,7 +292,7 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://the-hunters-ledger.com/feeds/suricata/hunters-ledger.rules',
     enabled: true,
     priority: 72,
-    badge: 'new',
+    badge: 'hunting',
     notes: 'Детекти из оригинальных расследований, размечены по MITRE ATT&CK (~135 правил). Лицензия CC BY-NC — для коммерческого использования нужно согласование. Найдено через индекс EveBox Rules.',
     notesEn: 'Detections from original investigations, tagged with MITRE ATT&CK (~135 rules). CC BY-NC license — commercial use requires approval. Found via the EveBox Rules index.',
   },
@@ -302,7 +303,7 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://github.com/AssoEchap/stalkerware-indicators/raw/refs/heads/master/generated/suricata.rules',
     enabled: true,
     priority: 73,
-    badge: 'new',
+    badge: 'recommended',
     notes: 'IOC сталкерских/шпионских приложений Android/iOS (~1 000 правил) от ассоциации Echap. Найдено через индекс EveBox Rules.',
     notesEn: 'IOCs of Android/iOS stalkerware/spyware apps (~1,000 rules) by the Echap association. Found via the EveBox Rules index.',
   },
@@ -313,7 +314,7 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://github.com/travisbgreen/hunting-rules/raw/master/hunting.rules.tar.gz',
     enabled: true,
     priority: 74,
-    badge: 'new',
+    badge: 'hunting',
     notes: 'Эвристический набор правил для threat hunting (~290 правил, упор на аномалии и нововведения движка; производительность не гарантирована). GPLv3. Найдено через индекс EveBox Rules.',
     notesEn: 'Heuristic ruleset for threat hunting (~290 rules, focused on anomalies and engine novelties; performance not guaranteed). GPLv3. Found via the EveBox Rules index.',
   },
@@ -324,7 +325,7 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://raw.githubusercontent.com/aleksibovellan/opnsense-suricata-nmaps/main/local.rules',
     enabled: true,
     priority: 75,
-    badge: 'new',
+    badge: 'recommended',
     notes: 'Детект Nmap-сканов по TCP-окнам/флагам/таймингам (10 правил). MIT. Найдено через индекс EveBox Rules.',
     notesEn: 'Nmap scan detection by TCP windows/flags/timings (10 rules). MIT. Found via the EveBox Rules index.',
   },
@@ -335,7 +336,7 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://dbl.ipfire.org/lists/suricata.tar.gz',
     enabled: true,
     priority: 76,
-    badge: 'new',
+    badge: 'recommended',
     notes: 'Доменный блэклист IPFire DBL (malware/phishing/unwanted) в виде готовых Suricata-правил (~60 правил; полный список доменов можно конвертировать отдельно). CC-BY-SA-4.0. Найдено через индекс EveBox Rules.',
     notesEn: 'IPFire DBL domain blacklist (malware/phishing/unwanted) as ready-made Suricata rules (~60 rules; the full domain list can be converted separately). CC-BY-SA-4.0. Found via the EveBox Rules index.',
   },
@@ -346,9 +347,22 @@ export const SEED_SOURCES: SeedSource[] = [
     url: 'https://security.etnetera.cz/feeds/etn_aggressive.rules',
     enabled: true,
     priority: 77,
-    badge: 'new',
+    badge: 'recommended',
     notes: 'Готовые правила по агрессивным IP (сканеры/брутфорс, чешский CSIRT Etnetera, ~60 правил). MIT. Найдено через индекс EveBox Rules.',
     notesEn: 'Ready-made rules for aggressive IPs (scanners/bruteforce, by the Czech CSIRT Etnetera, ~60 rules). MIT. Found via the EveBox Rules index.',
+  },
+
+  {
+    name: 'Stamus Open NRD (новые домены, 30 дней)',
+    category: 'domain-list',
+    kind: 'tarball',
+    url: 'https://ti.stamus-networks.io/%%OPENNRD%%/sti-domains-nrd-30.tar.gz',
+    authType: 'opennrd',
+    enabled: false,
+    priority: 90,
+    badge: 'recommended',
+    notes: 'Open NRD от Stamus Networks — все домены, зарегистрированные за последние 30 дней (обновляется ежедневно, архив со списком доменов; конвертируется в DNS-правила). Код лицензии — БЕСПЛАТНО на год (продление бесплатно): заполните форму stamus-networks.com/stamus-labs/subscribe-to-threat-intel-feed, код придёт письмом; введите его в «Настройки → Токены источников → Open NRD (Stamus Networks)» — он подставляется в URL вместо %%OPENNRD%%. Смежные фиды (entropy/phishing, 14/30 дней) добавляются источниками с тем же кодом: sti-domains-entropy-30.tar.gz, sti-domains-phishing-30.tar.gz и т. д.',
+    notesEn: 'Open NRD by Stamus Networks — all domains registered in the last 30 days (updated daily, archive with a domain list; converted into DNS rules). The license code is FREE for a year (free renewal): fill the form at stamus-networks.com/stamus-labs/subscribe-to-threat-intel-feed, the code arrives by email; enter it in "Settings → Source tokens → Open NRD (Stamus Networks)" — it is substituted into the URL for %%OPENNRD%%. Related feeds (entropy/phishing, 14/30 days) can be added as sources with the same code: sti-domains-entropy-30.tar.gz, sti-domains-phishing-30.tar.gz, etc.',
   },
 
   // ── Конвертеры: списки индикаторов → правила Suricata ──────────────────────
@@ -436,7 +450,8 @@ export const SEED_SOURCES: SeedSource[] = [
     enabled: false,
     priority: 25,
     badge: 'paid',
-    notes: 'Платный набор ET Pro (~40 000 правил, обновляется ежедневно: продвинутая малварь, C2, web-атаки; поверх ET Open). ВАЖНО: у ET Pro СВОЙ oinkcode, он НЕ совпадает с кодом snort.org — выдается Proofpoint после покупки подписки (etadmin.proofpoint.com/etpro, формат $oinkcode/suricata-<версия>/etpro.rules.tar.gz). Код подставляется вместо %%OINKCODE%%: укажите его в «Настройки» → «Oinkcode ET Pro» (или в extra источника {"oinkcode":"…"}). Снортовский код к этому источнику не применяется. Без действующего кода сервер вернёт ошибку.',
+    adminOnly: true,
+    notes: 'Платный набор ET Pro (~40 000 правил, обновляется ежедневно: продвинутая малварь, C2, web-атаки; поверх ET Open). ВАЖНО: у ET Pro СВОЙ oinkcode, он НЕ совпадает с кодом snort.org — выдается Proofpoint после покупки подписки (etadmin.proofpoint.com/etpro, формат $oinkcode/suricata-<версия>/etpro.rules.tar.gz). Код подставляется вместо %%OINKCODE%%: укажите его в «Настройки» → «Oinkcode ET Pro» (или в extra источника {"oinkcode":"…"}). Снортовский код к этому источнику не применяется. Без действующего кода сервер вернёт ошибку. Источник только для администратора: пользователи видят его в своих пространствах только если администратор опубликовал его копию.',
     notesEn: 'Paid ET Pro ruleset (~40,000 rules, updated daily: advanced malware, C2, web attacks; a superset of ET Open). IMPORTANT: ET Pro has its OWN oinkcode, it is NOT the snort.org code — issued by Proofpoint after purchasing the subscription (etadmin.proofpoint.com/etpro, $oinkcode/suricata-<version>/etpro.rules.tar.gz format). The code is substituted for %%OINKCODE%%: set it in “Settings” → “ET Pro Oinkcode” (or in the source extra {"oinkcode":"…"}). The snort.org code is NOT applied to this source. Without a valid code the server returns an error.',
   },
   {
@@ -471,8 +486,8 @@ export const SEED_SOURCES: SeedSource[] = [
     authType: 'misp',
     enabled: false,
     priority: 130,
-    badge: 'new',
-    notes: 'Интеграция с платформой threat intelligence MISP. Замените misp.example.local на адрес вашего MISP. Готовые Suricata-правила по всем опубликованным событиям; для одного события добавьте его ID в конец URL (.../download/<ID>). Ключ: «Настройки → MISP API Key» (REST-ключ пользователя MISP, заголовок Authorization).',
+    adminOnly: true,
+    notes: 'Интеграция с платформой threat intelligence MISP. Замените misp.example.local на адрес вашего MISP. Готовые Suricata-правила по всем опубликованным событиям; для одного события добавьте его ID в конец URL (.../download/<ID>). Ключ: «Настройки → MISP API Key» (REST-ключ пользователя MISP, заголовок Authorization). Источник только для администратора: ключ MISP — секрет уровня системы.',
     notesEn: 'Integration with the MISP threat intelligence platform. Replace misp.example.local with your MISP address. Ready-made Suricata rules for all published events; for a single event append its ID to the URL (.../download/<ID>). Key: "Settings → MISP API Key" (the MISP user REST key, Authorization header).',
   },
   {
@@ -483,8 +498,9 @@ export const SEED_SOURCES: SeedSource[] = [
     authType: 'misp',
     enabled: false,
     priority: 131,
+    adminOnly: true,
     badge: 'converter',
-    notes: 'Конвертер атрибутов MISP (REST /attributes/restSearch.json): ip-dst/ip-src → IP-правила (чанками), domain/hostname → DNS-правила, url/uri → HTTP-правила. Хэши и не-сетевые типы пропускаются. GET-фильтры в URL можно править (type=, tag=, category=, published=, enforceWarninglist=). Ключ: «Настройки → MISP API Key».',
+    notes: 'Конвертер атрибутов MISP (REST /attributes/restSearch.json): ip-dst/ip-src → IP-правила (чанками), domain/hostname → DNS-правила, url/uri → HTTP-правила. Хэши и не-сетевые типы пропускаются. GET-фильтры в URL можно править (type=, tag=, category=, published=, enforceWarninglist=). Ключ: «Настройки → MISP API Key». Источник только для администратора.',
     notesEn: 'MISP attribute converter (REST /attributes/restSearch.json): ip-dst/ip-src → IP rules (chunked), domain/hostname → DNS rules, url/uri → HTTP rules. Hashes and non-network types are skipped. GET filters in the URL are editable (type=, tag=, category=, published=, enforceWarninglist=). Key: "Settings → MISP API Key".',
     extraJson: JSON.stringify({ sidStart: 1101400, msgPrefix: 'MISP' }),
   },
@@ -554,6 +570,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   etProOinkcode: process.env.ETPRO_OINKCODE || '',
   abusechAuthKey: process.env.ABUSECH_AUTH_KEY || '', // Auth-Key abuse.ch (ThreatFox/URLhaus, сегмент пути выгрузки)
   mispAuthKey: process.env.MISP_AUTH_KEY || '', // ключ REST API MISP (заголовок Authorization)
+  openNrdLicense: process.env.OPENNRD_LICENSE || '', // код лицензии Open NRD (Stamus Networks) — сегмент пути ti.stamus-networks.io/<КОД>/…
   dedupSidStrategy: 'highest-rev', // highest-rev | source-priority | renumber-private
   dedupContent: 'true',
   dropIncompatible: 'true',

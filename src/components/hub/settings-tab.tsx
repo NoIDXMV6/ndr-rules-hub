@@ -131,6 +131,25 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
               <p className="text-xs text-muted-foreground mt-1">{t.settings.mispTabHint}</p>
             </div>
           </div>
+
+          {/* Open NRD (Stamus Networks): код лицензии — сегмент пути фида */}
+          <div className="space-y-3 rounded-lg border border-border p-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t.settings.openNrdTitle}</p>
+              <p className="text-xs text-muted-foreground">{t.settings.openNrdDesc}</p>
+            </div>
+            <div className="max-w-xl">
+              <Label className="text-foreground">{t.settings.openNrdKey}</Label>
+              <Input
+                type="password"
+                value={s.openNrdLicense ?? ''}
+                onChange={(e) => set('openNrdLicense', e.target.value.trim())}
+                className="bg-card border-input font-mono"
+                placeholder={t.settings.openNrdPlaceholder}
+              />
+              <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">{t.settings.openNrdHelp}</p>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

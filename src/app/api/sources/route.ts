@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ensureSeed } from '@/lib/engine/service'
+import { isSourceVisible, effectiveEnabled } from '@/lib/engine/workspace'
 import { apiError } from '@/lib/api-error'
 import { guard } from '@/lib/security/guard'
 
@@ -11,11 +12,24 @@ export async function GET(req: NextRequest) {
   if (g instanceof NextResponse) return g
   try {
     await ensureSeed()
-    // источник виден всем авторизованным (общий конвейер сборки),
-    // но управлять можно только своими (ownerId) или общими операционно;
-    // стабильный порядок по времени добавления — положение в списке не зависит
-    // от enabled (вкл/выкл не перемещает источник)
-    const sources = await db.source.findMany({ orderBy: [{ createdAt: 'asc' }] })
+    // Рабочее пространство (v1.27.0): администратор видит всё (его состояние —
+    // Source.enabled), пользователь — видимые ему источники: системные (кроме
+    // adminOnly: ET Pro/MISP — секреты уровня системы), свои, опубликованные
+    // другими; состояние пользователя — SourceState (без строки — Source.enabled).
+    // Стабильный порядок по времени добавления.
+    const role = g.role === 'admin' ? 'admin' : 'user'
+    const uid = g.user?.id ?? null
+    const all = await db.source.findMany({ orderBy: [{ createdAt: 'asc' }] })
+    const states = role === 'user' && uid
+      ? await db.sourceState.findMany({ where: { userId: uid } })
+      : []
+    const stMap = new Map(states.map((st) => [st.sourceId, st]))
+    const sources = all
+      .filter((s) => isSourceVisible(s, role, uid))
+      .map((s) => ({
+        ...s,
+        enabled: role === 'admin' ? s.enabled : effectiveEnabled(s, stMap.get(s.id)),
+      }))
     return NextResponse.json({ sources })
   } catch (e) {
     return apiError(e)
@@ -39,6 +53,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Для сетевого источника нужен URL' }, { status: 400 })
   }
   try {
+    // adminOnly — признак каталога: задаётся только администратором
     const src = await db.source.create({
       data: {
         name: String(body.name),
@@ -50,9 +65,14 @@ export async function POST(req: NextRequest) {
         enabled: body.enabled ?? false,
         priority: Number(body.priority ?? 100),
         badge: body.badge ?? null,
+        badgeLabel: body.badgeLabel ?? null,
+        badgeColor: body.badgeColor ?? null,
         notes: body.notes ?? null,
         notesEn: body.notesEn ?? null,
         builtin: false,
+        // видимость своего источника: private (по умолчанию) | published (опубликован для других)
+        visibility: body.visibility === 'published' ? 'published' : 'private',
+        adminOnly: g.role === 'admin' ? !!body.adminOnly : false,
         // Enterprise: источник принадлежит создавшему пользователю («свои источники»)
         ownerId: g.user?.id ?? null,
       },

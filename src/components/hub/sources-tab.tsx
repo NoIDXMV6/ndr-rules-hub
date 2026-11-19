@@ -29,8 +29,43 @@ const BADGE_CLASSES: Record<BadgeKey, string> = {
   legacy: 'border-zinc-300 text-muted-foreground',
   paid: 'border-violet-400 text-violet-700',
   converter: 'border-sky-400 text-sky-700',
-  new: 'border-lime-400 text-lime-700',
+  traffic: 'border-cyan-400 text-cyan-700',
+  hunting: 'border-fuchsia-400 text-fuchsia-700',
   unavailable: 'border-red-300 text-red-600',
+}
+
+/** Палитра выбора цвета бейджа (имя → классы); + произвольный hex через инлайн-стиль */
+const BADGE_PALETTE: Array<{ value: string; cls: string; sw: string }> = [
+  { value: 'emerald', cls: 'border-emerald-500 text-emerald-700', sw: 'bg-emerald-500' },
+  { value: 'amber', cls: 'border-amber-500 text-amber-700', sw: 'bg-amber-500' },
+  { value: 'violet', cls: 'border-violet-400 text-violet-700', sw: 'bg-violet-400' },
+  { value: 'sky', cls: 'border-sky-400 text-sky-700', sw: 'bg-sky-400' },
+  { value: 'cyan', cls: 'border-cyan-400 text-cyan-700', sw: 'bg-cyan-400' },
+  { value: 'fuchsia', cls: 'border-fuchsia-400 text-fuchsia-700', sw: 'bg-fuchsia-400' },
+  { value: 'lime', cls: 'border-lime-400 text-lime-700', sw: 'bg-lime-400' },
+  { value: 'rose', cls: 'border-rose-400 text-rose-700', sw: 'bg-rose-400' },
+  { value: 'red', cls: 'border-red-300 text-red-600', sw: 'bg-red-300' },
+  { value: 'zinc', cls: 'border-zinc-300 text-muted-foreground', sw: 'bg-zinc-300' },
+]
+
+function paletteClass(color: string | null | undefined): string | null {
+  if (!color) return null
+  return BADGE_PALETTE.find((p) => p.value === color)?.cls ?? null
+}
+
+/** Бейдж источника: своё название/цвет (badgeLabel/badgeColor) перекрывают
+ *  словарные значения по ключу badge. Без ключа, но с названием — нейтральный бейдж. */
+function SourceBadge({ badge, label, color }: { badge: string | null; label?: string | null; color?: string | null }) {
+  const { t } = useI18n()
+  if (!badge && !label) return null
+  const key = (badge && badge in BADGE_CLASSES ? badge : null) as BadgeKey | null
+  const text = label || (key ? t.sources.badges[key] : badge || '')
+  const pcls = paletteClass(color)
+  if (color && !pcls) {
+    // произвольный hex — инлайн-стиль
+    return <Badge variant="outline" className="shrink-0 border-transparent" style={{ borderColor: color, color }}>{text}</Badge>
+  }
+  return <Badge variant="outline" className={`shrink-0 ${pcls ?? (key ? BADGE_CLASSES[key] : 'border-input text-muted-foreground')}`}>{text}</Badge>
 }
 
 export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard | null; onChange: () => void; role?: 'admin' | 'user' | 'anon'; selfId?: string }) {
@@ -244,7 +279,6 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
                   </TableRow>
                 )}
                 {sources.map((s) => {
-                  const badgeKey = (s.badge && s.badge in BADGE_CLASSES ? s.badge : null) as BadgeKey | null
                   const note = pickLocalizedNote(s.notes, s.notesEn, lang)
                   return (
                     <TableRow key={s.id} className="border-border/60">
@@ -254,7 +288,9 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
                       <TableCell className="max-w-md">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-medium text-foreground">{s.name}</span>
-                          {badgeKey && <Badge variant="outline" className={BADGE_CLASSES[badgeKey]}>{t.sources.badges[badgeKey]}</Badge>}
+                          <SourceBadge badge={s.badge} label={s.badgeLabel} color={s.badgeColor} />
+                          {s.visibility === 'published' && <Badge variant="outline" className="shrink-0 border-emerald-300 text-emerald-700">{t.sources.publishedBadge}</Badge>}
+                          {s.adminOnly && <Badge variant="outline" className="shrink-0 border-input text-muted-foreground">{t.sources.adminOnlyBadge}</Badge>}
                         </div>
                         {note && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{note}</p>}
                         {s.lastError && <p className="text-xs text-red-600 mt-0.5">{t.sources.errPrefix} {s.lastError}</p>}
@@ -470,7 +506,7 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState({
     name: '', category: 'ruleset', kind: 'url', url: '', authType: 'none',
-    priority: '100', notes: '', notesEn: '', extraJson: '',
+    priority: '100', notes: '', notesEn: '', extraJson: '', visibility: 'private',
   })
   const [err, setErr] = useState<string | null>(null)
 
@@ -487,6 +523,7 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
         notes: form.notes || null,
         notesEn: form.notesEn || null,
         extraJson: form.extraJson || null,
+        visibility: form.visibility,
         enabled: false,
       })
       setOpen(false)
@@ -591,6 +628,17 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
             <Input value={form.notesEn} onChange={(e) => setForm({ ...form, notesEn: e.target.value })} className="bg-card border-input" />
             <p className="text-xs text-muted-foreground mt-1">{d.notesHint}</p>
           </div>
+          <div>
+            <Label className="text-foreground">{d.visibility}</Label>
+            <Select value={form.visibility} onValueChange={(v) => setForm({ ...form, visibility: v })}>
+              <SelectTrigger className="bg-card border-input"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                <SelectItem value="private">{d.visibilityPrivate}</SelectItem>
+                <SelectItem value="published">{d.visibilityPublished}</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">{d.visibilityHint}</p>
+          </div>
           {err && <p className="text-sm text-red-600">{err}</p>}
         </div>
         <DialogFooter>
@@ -614,6 +662,9 @@ function EditSourceDialog({ source, onSaved }: { source: SourceItem; onSaved: ()
     notes: source.notes ?? '',
     notesEn: source.notesEn ?? '',
     extraJson: source.extraJson ?? '',
+    badgeLabel: source.badgeLabel ?? '',
+    badgeColor: source.badgeColor ?? 'none',
+    visibility: source.visibility ?? 'private',
   })
   const [err, setErr] = useState<string | null>(null)
 
@@ -628,6 +679,9 @@ function EditSourceDialog({ source, onSaved }: { source: SourceItem; onSaved: ()
         notes: form.notes || null,
         notesEn: form.notesEn || null,
         extraJson: form.extraJson || null,
+        badgeLabel: form.badgeLabel || null,
+        badgeColor: form.badgeColor === 'none' ? null : (form.badgeColor || null),
+        visibility: form.visibility,
       })
       setOpen(false)
       onSaved()
@@ -689,6 +743,56 @@ function EditSourceDialog({ source, onSaved }: { source: SourceItem; onSaved: ()
             <Label className="text-foreground">{d.notesEn}</Label>
             <Input value={form.notesEn} onChange={(e) => setForm({ ...form, notesEn: e.target.value })} className="bg-card border-input" />
             <p className="text-xs text-muted-foreground mt-1">{d.notesHint}</p>
+          </div>
+          {/* ── Бейдж: название и цвет (перекрывают словарные значения по ключу badge) ── */}
+          <div className="rounded-lg border border-border p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-foreground">{d.badgeTitle}</Label>
+              {/* предпросмотр: как бейдж будет выглядеть в списке */}
+              <SourceBadge badge={source.badge} label={form.badgeLabel || null} color={form.badgeColor === 'none' ? null : form.badgeColor} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">{d.badgeName}</Label>
+                <Input value={form.badgeLabel} onChange={(e) => setForm({ ...form, badgeLabel: e.target.value })} className="bg-card border-input" placeholder={d.badgeNamePlaceholder} />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">{d.badgeColorLabel}</Label>
+                <Select value={form.badgeColor} onValueChange={(v) => setForm({ ...form, badgeColor: v })}>
+                  <SelectTrigger className="bg-card border-input"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-card border-border">
+                    <SelectItem value="none">{d.badgeColorAuto}</SelectItem>
+                    {BADGE_PALETTE.map((p) => (
+                      <SelectItem key={p.value} value={p.value}>
+                        <span className="inline-flex items-center gap-2">
+                          <span className={`inline-block h-3 w-3 rounded-full ${p.sw}`} /> {p.value}
+                        </span>
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="custom">{d.badgeColorHex}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {form.badgeColor === 'custom' && (
+              <div>
+                <Label className="text-xs text-muted-foreground">{d.badgeColorHex}</Label>
+                <Input value={form.badgeColor.startsWith('#') ? form.badgeColor : ''} onChange={(e) => setForm({ ...form, badgeColor: e.target.value })} className="bg-card border-input font-mono text-xs" placeholder="#8b5cf6" />
+                <p className="text-xs text-muted-foreground mt-1">{d.badgeColorHexHint}</p>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">{d.badgeHint}</p>
+          </div>
+          <div>
+            <Label className="text-foreground">{d.visibility}</Label>
+            <Select value={form.visibility} onValueChange={(v) => setForm({ ...form, visibility: v })}>
+              <SelectTrigger className="bg-card border-input"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                <SelectItem value="private">{d.visibilityPrivate}</SelectItem>
+                <SelectItem value="published">{d.visibilityPublished}</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">{d.visibilityHint}</p>
           </div>
           {err && <p className="text-sm text-red-600">{err}</p>}
         </div>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { fetchSourceById, log, getSetting, setSetting } from '@/lib/engine/service'
+import { isSourceVisible } from '@/lib/engine/workspace'
 import { apiError } from '@/lib/api-error'
 import { guard } from '@/lib/security/guard'
 
@@ -8,34 +9,62 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 /**
- * PATCH /api/sources/:id — правка источника.
- * Права: администратор — любой; пользователь — полный доступ к СВОИМ
- * (ownerId = user.id), у общих (ownerId = null, каталог) — только включение/
- * выключение (операция нужна для общего конвейера сборки).
+ * PATCH /api/sources/:id — правка источника / включение-выключение в рабочем пространстве.
+ * Права (v1.27.0):
+ *  • включение/выключение: администратор — Source.enabled (системное состояние);
+ *    пользователь — SourceState СВОЕГО пространства (системные и опубликованные —
+ *    только вкл/выкл у себя, как разрешено);
+ *  • правка полей: администратор — любой источник (в т.ч. бейджи adminOnly);
+ *    пользователь — только СВОИ (ownerId), включая бейджи и видимость
+ *    (private/published — публикация своего источника).
  */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const g = await guard(req, { rate: { key: 'sources', rule: { limit: 120, windowMs: 60_000 } } })
   if (g instanceof NextResponse) return g
   const { id } = await params
-  const body = await req.json().catch(() => ({}))
+  const body = await req.json().catch(() => ({})) as Record<string, unknown>
 
   const src = await db.source.findUnique({ where: { id } })
   if (!src) return NextResponse.json({ error: 'источник не найден' }, { status: 404 })
 
-  const own = !g.user || src.ownerId === g.user.id // admin (user=null) или владелец
-  if (!own && 'enabled' in body) {
-    // у общих источников пользователь может только включить/выключить
-    const onlyEnabled = Object.keys(body).every((k) => k === 'enabled')
-    if (!onlyEnabled) {
-      return NextResponse.json({ error: 'Общий источник: доступно только включение/выключение' }, { status: 403 })
+  const isAdmin = g.role === 'admin' || !g.user // Community — полные права
+  const uid = g.user?.id ?? null
+  const own = isAdmin || (uid !== null && src.ownerId === uid)
+
+  // включение/выключение — в рабочее пространство вызывающего
+  if ('enabled' in body) {
+    if (!isAdmin && !own && !isSourceVisible(src, 'user', uid)) {
+      return NextResponse.json({ error: 'Источник недоступен в вашем рабочем пространстве' }, { status: 403 })
+    }
+    const enabled = !!body.enabled
+    if (isAdmin) {
+      await db.source.update({ where: { id }, data: { enabled } })
+    } else {
+      await db.sourceState.upsert({
+        where: { userId_sourceId: { userId: uid!, sourceId: id } },
+        create: { userId: uid!, sourceId: id, enabled },
+        update: { enabled },
+      })
+    }
+    delete body.enabled
+    if (Object.keys(body).length === 0) {
+      const updated = await db.source.findUnique({ where: { id } })
+      return NextResponse.json({ source: updated ? { ...updated, enabled } : { id, enabled } })
     }
   }
 
+  // правка полей — только свои (у админа — любые)
+  if (!own) {
+    return NextResponse.json({ error: 'Общий источник: доступно только включение/выключение в вашем рабочем пространстве' }, { status: 403 })
+  }
+
   const data: Record<string, unknown> = {}
-  for (const k of ['name', 'category', 'kind', 'url', 'authType', 'extraJson', 'priority', 'badge', 'notes', 'notesEn']) {
+  for (const k of ['name', 'category', 'kind', 'url', 'authType', 'extraJson', 'priority', 'badge', 'badgeLabel', 'badgeColor', 'notes', 'notesEn']) {
     if (k in body) data[k] = body[k]
   }
-  if ('enabled' in body) data.enabled = !!body.enabled
+  if ('visibility' in body) data.visibility = body.visibility === 'published' ? 'published' : 'private'
+  // adminOnly — признак каталога: меняет только администратор
+  if ('adminOnly' in body && isAdmin) data.adminOnly = !!body.adminOnly
   if ('priority' in body) data.priority = Number(body.priority)
   try {
     const updated = await db.source.update({ where: { id }, data })
@@ -58,7 +87,8 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     const purge = req.nextUrl.searchParams.get('purge') === '1' || req.nextUrl.searchParams.get('purge') === 'true'
     const src = await db.source.findUnique({ where: { id } })
     if (!src) return NextResponse.json({ error: 'не найден' }, { status: 404 })
-    if (g.user && src.ownerId !== g.user.id) {
+    // удалять можно только свои (администратор — любой, включая системные)
+    if (g.user && g.user.role !== 'admin' && src.ownerId !== g.user.id) {
       return NextResponse.json({ error: 'Удалять можно только свои источники' }, { status: 403 })
     }
 
@@ -89,12 +119,21 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  // POST /api/sources/:id — синоним fetch для удобства
+  // POST /api/sources/:id — синоним fetch для удобства.
+  // Рабочие пространства: обновлять источник может администратор — любой,
+  // пользователь — ТОЛЬКО свой (системные обновляются системой/по расписанию,
+  // чужие опубликованные — их владельцем)
   const g = await guard(req, { rate: { key: 'fetch', rule: { limit: 30, windowMs: 60_000, blockMs: 60_000 } } })
   if (g instanceof NextResponse) return g
   try {
     const { id } = await params
-    const res = await fetchSourceById(id)
+    const src = await db.source.findUnique({ where: { id }, select: { id: true, ownerId: true } })
+    if (!src) return NextResponse.json({ error: 'источник не найден' }, { status: 404 })
+    const isAdmin = g.role === 'admin' || !g.user
+    if (!isAdmin && src.ownerId !== g.user!.id) {
+      return NextResponse.json({ error: 'Обновление доступно только владельцу источника — системные и опубликованные источники обновляются системой или владельцем' }, { status: 403 })
+    }
+    const res = await fetchSourceById(id, g.user?.id ?? null)
     // 429 — гейт частоты snort.org (15 минут): браузер/скрипты видят Retry-After
     const status = res.ok ? 200 : res.rateLimited ? 429 : 400
     return NextResponse.json(res, { status, headers: res.retryAfterSec ? { 'Retry-After': String(res.retryAfterSec) } : undefined })

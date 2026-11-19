@@ -24,17 +24,21 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, jobId: cur.jobId, alreadyRunning: true, origin: cur.origin })
     }
     const job = startBuildProgress('manual')
-    // запуск в фоне: ответ уходит сразу, статус — через GET /api/build/progress
+    // запуск в фоне: ответ уходит сразу, статус — через GET /api/build/progress.
+    // Рабочее пространство: обычный пользователь собирает СВОЙ персональный
+    // набор (Build.userId), администратор/Community — системный (userId = null);
+    // экспорт в Clear NDR — только для системной сборки
+    const wsUserId = g.role === 'user' && g.user ? g.user.id : null
     void withQueue('build', async () => {
       try {
-        const build = await buildFinal('manual')
+        const build = await buildFinal('manual', wsUserId)
         if (!build.ok) {
           // failBuildProgress уже вызван в buildFinal на гейтах — на всякий случай дубль
           failBuildProgress(build.error ?? 'ошибка сборки')
           return
         }
         let exportRes: { ok: boolean; error?: string; detail?: string; pushedTo?: string } | null = null
-        if (body?.export) {
+        if (body?.export && !wsUserId) {
           setBuildStage('export', 97)
           const s = await getSettings()
           if (s.clearndrExportMode !== 'file' && s.clearndrExportMode !== 'disabled') {
@@ -44,6 +48,8 @@ export async function POST(req: Request) {
           } else {
             exportRes = { ok: true, detail: 'файл готов к скачиванию/импорту' }
           }
+        } else if (body?.export && wsUserId) {
+          exportRes = { ok: true, detail: 'файл готов к скачиванию/импорту (персональная сборка)' }
         }
         finishBuildProgress({
           ok: true,

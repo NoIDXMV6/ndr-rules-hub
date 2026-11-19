@@ -35,11 +35,20 @@ model Source {
   diffAdded  Int      @default(0)
   diffChanged Int     @default(0)
   diffRemoved Int     @default(0)
-  badge      String?  // recommended | duplicate | legacy | paid | converter
+  badge      String?  // recommended | duplicate | legacy | paid | converter | unavailable
+  badgeLabel String?  // своё название бейджа (перекрывает словарный перевод по badge)
+  badgeColor String?  // свой цвет бейджа (hex или имя Tailwind-палитры)
   notes      String?  // анализ источника (русский)
   notesEn    String?  // анализ источника (английский) — показывается в EN-интерфейсе
   builtin    Boolean  @default(false)
-  ownerId    String?  // Enterprise: пользователь-владелец («свои источники»); null — общий/каталог
+  ownerId    String?  // Enterprise: пользователь-владелец («свои источники»); null — системный каталог
+  // видимость источника владельца: private — только своё рабочее пространство,
+  // published — опубликован: доступен другим пользователям (вкл/выкл у себя)
+  visibility String   @default("private") // private | published
+  // источник только для администратора (ET Pro, MISP — нужны секреты уровня
+  // системы: oinkcode Proofpoint, ключ REST API): в пользовательских рабочих
+  // пространствах не показывается и в их персональные сборки не попадает
+  adminOnly  Boolean  @default(false)
   deletedAt  DateTime? // не null — источник в корзине (не участвует в загрузке/сборке)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -69,6 +78,21 @@ model Rule {
   @@index([sourceId])
 }
 
+// Состояние источника в рабочем пространстве пользователя (Enterprise):
+// включён/выключен ИМЕННО У ЭТОГО пользователя. Состояние админа/системного
+// набора хранится в Source.enabled, состояние каждого пользователя — здесь.
+// Отсутствие строки = состояние по умолчанию, наследуется от Source.enabled
+// (новый пользователь видит те же включённые системные источники, что и админ).
+model SourceState {
+  id        String   @id @default(cuid())
+  userId    String
+  sourceId  String
+  enabled   Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+  @@unique([userId, sourceId])
+  @@index([userId])
+}
+
 // Результат сборки итогового набора
 model Build {
   id         String   @id @default(cuid())
@@ -81,6 +105,10 @@ model Build {
   sha256     String
   sizeBytes  Int
   source     String   @default("manual") // manual | cron
+  // null — системная сборка (рабочее пространство администратора, PULL-набор
+  // Clear NDR по serveToken); cuid пользователя — его ПЕРСОНАЛЬНАЯ сборка
+  userId     String?
+  @@index([userId])
 }
 
 // Настройки (k-v)
@@ -119,8 +147,15 @@ model LogEntry {
   level     String   // info | warn | error | success
   scope     String   // fetch | build | export | vpn | scheduler | system
   message   String
+  // английский текст события (i18n событий): интерфейс показывает message
+  // или messageEn по языку; null — перевода нет (показывается message)
+  messageEn String?
+  // null — системное событие (видит только администратор); иначе — событие
+  // рабочего пространства пользователя: пользователь видит ТОЛЬКО свои события
+  userId    String?
   detailJson String?
   @@index([ts])
+  @@index([userId])
 }
 
 // WireGuard профиль

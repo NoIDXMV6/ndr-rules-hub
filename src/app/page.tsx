@@ -84,11 +84,16 @@ export default function Home() {
 
   // Смена пользователя/роли (вход, выход, верификация) может закрыть часть вкладок —
   // если активная вкладка стала недоступной, возвращаемся к «Обзору».
+  // Рабочие пространства (v1.27.0): пользователю недоступны «Интеграции» целиком
+  // (обновление Clear NDR, OSD-дашборды, MISP, VPN, уведомления) — это операции
+  // уровня системы.
   useEffect(() => {
     const admin = !me?.multiUser || me.user?.role === 'admin'
-    const allowed = new Set(['overview', 'sources', 'categories', 'rules', 'build', 'update', 'osd', 'help', 'about'])
+    const allowed = new Set(['overview', 'sources', 'categories', 'rules', 'build', 'help', 'about'])
     if (me?.multiUser) allowed.add('account') // кабинет доступен всем вошедшим
     if (admin) {
+      allowed.add('update') // «Обновление Clear NDR» (меню «Интеграции»)
+      allowed.add('osd') // «Дашборды OpenSearch» (меню «Интеграции»)
       allowed.add('vpn')
       allowed.add('integrations') // «Уведомления и сервисы» в меню «Интеграции»
       allowed.add('misp') // платформа threat intelligence + коннекторы
@@ -238,12 +243,16 @@ export default function Home() {
               <VpnTab data={data} onChange={refresh} />
             </TabsContent>
           )}
-          <TabsContent value="update" className="mt-4">
-            <UpdateTab data={data} onChange={refresh} />
-          </TabsContent>
-          <TabsContent value="osd" className="mt-4">
-            <OsdTab data={data} onChange={refresh} />
-          </TabsContent>
+          {isAdmin && (
+            <TabsContent value="update" className="mt-4">
+              <UpdateTab data={data} onChange={refresh} />
+            </TabsContent>
+          )}
+          {isAdmin && (
+            <TabsContent value="osd" className="mt-4">
+              <OsdTab data={data} onChange={refresh} />
+            </TabsContent>
+          )}
           {isAdmin && (
             <>
               <TabsContent value="integrations" className="mt-4">
@@ -315,15 +324,6 @@ type MenuGroupDef =
 function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAccount: boolean): MenuGroupDef[] {
   const ico = (Icon: React.ComponentType<{ className?: string }>) => <Icon className="h-4 w-4 shrink-0 opacity-80" />
 
-  const integrations: MenuItemDef[] = [
-    { value: 'update', label: t.tabs.update, icon: ico(Download) },
-    { value: 'osd', label: t.tabs.osd, icon: ico(ChartColumn) },
-  ]
-  if (isAdmin) {
-    integrations.push({ value: 'misp', label: t.tabs.misp, icon: ico(Share2) })
-    integrations.push({ value: 'vpn', label: t.tabs.vpn, icon: ico(Network) })
-  }
-
   const groups: MenuGroupDef[] = [
     { kind: 'direct', key: 'overview', item: { value: 'overview', label: t.tabs.overview, icon: ico(LayoutDashboard) } },
     {
@@ -339,14 +339,22 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAcco
       ],
     },
     { kind: 'direct', key: 'build', grow: 1.25, item: { value: 'build', label: t.tabs.build, icon: ico(Package) } },
-    {
+  ]
+
+  // «Интеграции» — только администратор (v1.27.0): у пользователя нет доступа
+  // к обновлению Clear NDR, OSD-дашбордам, MISP, VPN и уведомлениям
+  if (isAdmin) {
+    groups.push({
       kind: 'dropdown', key: 'integrations', label: t.menu.integrations, icon: ico(Blocks), items: [
         // настройки уведомлений и сервисов уведомлений (Telegram/Gotify) — перенесены из «Настроек»
-        ...(isAdmin ? [{ value: 'integrations', label: t.tabs.notificationsServices, icon: ico(Bell) }] : []),
-        ...integrations,
+        { value: 'integrations', label: t.tabs.notificationsServices, icon: ico(Bell) },
+        { value: 'update', label: t.tabs.update, icon: ico(Download) },
+        { value: 'osd', label: t.tabs.osd, icon: ico(ChartColumn) },
+        { value: 'misp', label: t.tabs.misp, icon: ico(Share2) },
+        { value: 'vpn', label: t.tabs.vpn, icon: ico(Network) },
       ],
-    },
-  ]
+    })
+  }
 
   if (isAdmin) {
     const adminItems: MenuItemDef[] = [
@@ -613,7 +621,7 @@ function Overview({ data, onRefresh, role, onSettings }: { data: Dashboard | nul
                   {l.scope}
                 </Badge>
                 <span className="text-muted-foreground shrink-0 tabular-nums text-xs mt-0.5">{fmtTime(l.ts, lang)}</span>
-                <span className="text-foreground">{l.message}</span>
+                <span className="text-foreground">{lang === 'en' && l.messageEn ? l.messageEn : l.message}</span>
               </div>
             ))}
           </div>

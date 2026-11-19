@@ -53,6 +53,10 @@ export async function GET(req: NextRequest) {
 
   // сессия веб-интерфейса (если есть) — скачивание из кабинета без ключа
   const session = await getSession(req).catch(() => null)
+  // рабочее пространство отдачи: обычный пользователь получает СВОЮ персональную
+  // сборку (нет своей — фолбэк на системную), администратор/Community — системную;
+  // персональный токен скачивания привязан к владельцу — та же логика в serveBuild
+  const wsUserId = session?.user && session.user.role === 'user' ? session.user.id : null
 
   try {
     const sp = req.nextUrl.searchParams
@@ -63,6 +67,7 @@ export async function GET(req: NextRequest) {
         authHeader: req.headers.get('authorization'),
         ip,
         sessionUserId: session?.user.id,
+        workspaceUserId: wsUserId,
       }),
     )
     return await toResponse(res, ip)

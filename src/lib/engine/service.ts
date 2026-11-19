@@ -2,7 +2,9 @@
 // Сервисный слой: сид каталога, загрузка источников, сборка, экспорт, cron
 // ─────────────────────────────────────────────────────────────────────────────
 import { db } from '@/lib/db'
+import { multiUserEnabled } from '@/lib/edition'
 import { SEED_SOURCES, DEFAULT_SETTINGS } from './seed'
+import { isSourceVisible, effectiveEnabled, personalFileName, workspaceSignature } from './workspace'
 import { fetchSource, FetchSourceCfg, CACHE_DIR, EXPORTS_DIR, DATA_DIR, isEtProUrl, isSnortOrgUrl, snortRateGate } from './fetcher'
 import {
   mergeSources, renderFinalFile, hashRule, conflictKey, findConflictingDuplicates, dedupeConflicting,
@@ -22,13 +24,19 @@ import cron from 'node-cron'
 
 const execFileP = promisify(execFile)
 
-export async function log(level: string, scope: string, message: string, detail?: unknown) {
+/** Запись в журнал событий. en — английский текст (i18n событий: интерфейс
+ *  показывает message или messageEn по языку); userId — рабочее пространство:
+ *  null/undefined — системное событие (видит только админ), иначе — событие
+ *  пользователя (он видит только свои). */
+export async function log(level: string, scope: string, message: string, detail?: unknown, en?: string, userId?: string | null) {
   try {
     await db.logEntry.create({
       data: {
         level,
         scope,
         message: message.slice(0, 2000),
+        messageEn: en ? en.slice(0, 2000) : null,
+        userId: userId ?? null,
         detailJson: detail ? JSON.stringify(detail).slice(0, 4000) : null,
       },
     })
@@ -107,13 +115,14 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
           notes: s.notes ?? null,
           notesEn: s.notesEn ?? null,
           builtin: true,
+          adminOnly: s.adminOnly ?? false,
         },
       })
     }
-    await log('info', 'system', `Каталог инициализирован: ${SEED_SOURCES.length} источников`)
+    await log('info', 'system', `Каталог инициализирован: ${SEED_SOURCES.length} источников`, undefined, `Catalog initialized: ${SEED_SOURCES.length} sources`)
   } else {
     const rows = await db.source.findMany({
-      select: { id: true, name: true, builtin: true, deletedAt: true, category: true, kind: true, url: true, badge: true, notes: true, notesEn: true, status: true, authType: true, extraJson: true },
+      select: { id: true, name: true, builtin: true, deletedAt: true, category: true, kind: true, url: true, badge: true, notes: true, notesEn: true, status: true, authType: true, extraJson: true, adminOnly: true },
     })
     const byName = new Map(rows.map((r) => [r.name, r]))
     for (const s of SEED_SOURCES) {
@@ -134,6 +143,7 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
             notes: s.notes ?? null,
             notesEn: s.notesEn ?? null,
             builtin: true,
+            adminOnly: s.adminOnly ?? false,
           },
         })
         added.push(s.name)
@@ -142,7 +152,13 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
       if (cur.builtin && !cur.deletedAt) {
         // источник в корзине не синхронизируем — восстановит пользователь
         if (cur.status === 'ok') {
-          const fix: { badge?: string | null; notes?: string; notesEn?: string } = {}
+          const fix: { badge?: string | null; notes?: string; notesEn?: string; adminOnly?: boolean } = {}
+          if ((cur.badge as string | null) === 'new') {
+            // миграция бейджа «новый» (v1.27.0): не отражает суть источника и
+            // устаревает («сегодня новый, а завтра не новый») — заменяем на
+            // суть из каталога (recommended/traffic/hunting/… или снять)
+            fix.badge = s.badge ?? null
+          }
           if (cur.badge === 'unavailable') {
             // Источник работает — каталог не должен «оживлять» устаревшие пометки:
             // снимаем бейдж «недоступен» (после удачной загрузки он лжёт) и,
@@ -156,17 +172,20 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
           // Английское примечание — новое поле каталога: докатываем в ПУСТОЕ
           // (непустое пользовательское не трогаем), рабочие источники не ломаем.
           if (s.notesEn && !cur.notesEn) fix.notesEn = s.notesEn
+          if ((s.adminOnly ?? false) !== cur.adminOnly) fix.adminOnly = s.adminOnly ?? false
           if (Object.keys(fix).length) {
             await db.source.update({ where: { id: cur.id }, data: fix })
             updated.push(s.name)
           }
           continue
         }
-        const patch: { category?: string; kind?: string; url?: string; badge?: string | null; notes?: string; notesEn?: string; authType?: string; extraJson?: string } = {}
+        const patch: { category?: string; kind?: string; url?: string; badge?: string | null; notes?: string; notesEn?: string; authType?: string; extraJson?: string; adminOnly?: boolean } = {}
         if (cur.category !== s.category) patch.category = s.category
         if (cur.kind !== s.kind) patch.kind = s.kind
         if (s.url && cur.url !== s.url) patch.url = s.url
-        if ((s.badge ?? null) !== cur.badge) patch.badge = s.badge ?? null
+        // миграция «новый» → суть из каталога; дальше обычная синхронизация бейджа
+        if ((cur.badge as string | null) === 'new' && ((s.badge as string | null) ?? null) !== 'new') patch.badge = s.badge ?? null
+        else if ((s.badge ?? null) !== cur.badge) patch.badge = s.badge ?? null
         if (s.notes && cur.notes !== s.notes) patch.notes = s.notes
         // английское примечание синхронизируем как текст каталога: в пустое
         // докатываем всегда, отличающееся пользовательское не затираем
@@ -176,14 +195,15 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
         // пользовательские настройки конвертеров/авторизации не перезаписываются
         const curExtra = (cur.extraJson ?? '').trim()
         if (s.extraJson && (curExtra === '' || curExtra === '{}')) patch.extraJson = s.extraJson
+        if ((s.adminOnly ?? false) !== cur.adminOnly) patch.adminOnly = s.adminOnly ?? false
         if (Object.keys(patch).length) {
           await db.source.update({ where: { id: cur.id }, data: patch })
           updated.push(s.name)
         }
       }
     }
-    if (added.length) await log('info', 'system', `Каталог дополнен новыми источниками (${added.length}): ${added.join(', ')}`)
-    if (updated.length) await log('info', 'system', `Синхронизированы описания builtin-источников (${updated.length}): ${updated.join(', ')}`)
+    if (added.length) await log('info', 'system', `Каталог дополнен новыми источниками (${added.length}): ${added.join(', ')}`, undefined, `Catalog updated with new sources (${added.length}): ${added.join(', ')}`)
+    if (updated.length) await log('info', 'system', `Синхронизированы описания builtin-источников (${updated.length}): ${updated.join(', ')}`, undefined, `Built-in source descriptions synchronized (${updated.length}): ${updated.join(', ')}`)
   }
   const sc = await db.setting.count()
   if (sc === 0) {
@@ -194,10 +214,12 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
 }
 
 /** Загрузка одного источника и сохранение правил в БД.
+ *  userId — рабочее пространство, запустившее загрузку (события журнала
+ *  атрибуцируются ему); null/undefined — системное обновление.
  *  rateLimited/retryAfterSec — срабатывал гейт частоты snort.org (15 минут между
  *  загрузками): API отвечает 429 с заголовком Retry-After. */
 export interface SourceFetchDiff { added: number; changed: number; removed: number; unchanged: boolean }
-export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; error?: string; count: number; note?: string; diff?: SourceFetchDiff; rateLimited?: boolean; retryAfterSec?: number }> {
+export async function fetchSourceById(sourceId: string, userId?: string | null): Promise<{ ok: boolean; error?: string; count: number; note?: string; diff?: SourceFetchDiff; rateLimited?: boolean; retryAfterSec?: number }> {
   const src = await db.source.findUnique({ where: { id: sourceId } })
   if (!src) return { ok: false, error: 'источник не найден', count: 0 }
   if (src.deletedAt) return { ok: false, error: 'источник в корзине — сначала восстановите его', count: 0 }
@@ -212,7 +234,7 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     const gate = snortRateGate(src.lastFetchAt)
     if (gate.blocked) {
       const msg = `snort.org: между загрузками должно пройти 15 минут (последняя попытка ${gate.elapsedMin} мин назад). Повторите через ~${Math.max(1, Math.ceil(gate.retryAfterSec / 60))} мин — лимит защищает ваш oinkcode от блокировки на стороне snort.org.`
-      await log('warn', 'fetch', `«${src.name}»: обновление отложено — ${msg}`)
+      await log('warn', 'fetch', `«${src.name}»: обновление отложено — ${msg}`, undefined, `"${src.name}": update postponed — snort.org: 15 minutes must pass between downloads (last attempt ${gate.elapsedMin} min ago). Retry in ~${Math.max(1, Math.ceil(gate.retryAfterSec / 60))} min.`, userId)
       return { ok: false, error: msg, count: 0, rateLimited: true, retryAfterSec: gate.retryAfterSec }
     }
   }
@@ -270,6 +292,23 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     if (!extra.mispAuthKey && settings.mispAuthKey) extra.mispAuthKey = settings.mispAuthKey
     cfg.extraJson = JSON.stringify(extra)
   }
+  // подстановка кода лицензии Open NRD (Stamus Networks) — сегмент пути:
+  //   https://ti.stamus-networks.io/%%OPENNRD%%/sti-domains-nrd-30.tar.gz
+  if (src.authType === 'opennrd') {
+    let extra: Record<string, unknown> = {}
+    try {
+      extra = src.extraJson ? JSON.parse(src.extraJson) : {}
+    } catch { /* ignore */ }
+    if (!extra.openNrdCode && settings.openNrdLicense) extra.openNrdCode = settings.openNrdLicense
+    cfg.extraJson = JSON.stringify(extra)
+    if (!(extra.openNrdCode ?? '').toString().trim() && (src.url ?? '').includes('%%OPENNRD%%')) {
+      return {
+        ok: false,
+        error: 'У источника Open NRD не задан код лицензии — получите бесплатный код (форма stamus-networks.com/stamus-labs/subscribe-to-threat-intel-feed, приходит письмом) и введите его в «Настройки → Токены источников → Open NRD», либо в extra источника {"openNrdCode":"…"}',
+        count: 0,
+      }
+    }
+  }
 
   const t0 = Date.now()
   const res = await fetchSource(cfg)
@@ -280,12 +319,12 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
       where: { id: src.id },
       data: { status: 'error', lastError: res.error ?? 'ошибка', lastFetchAt: new Date() },
     })
-    await log('error', 'fetch', `Ошибка загрузки «${src.name}»: ${res.error}`)
+    await log('error', 'fetch', `Ошибка загрузки «${src.name}»: ${res.error}`, undefined, `Failed to fetch "${src.name}": ${res.error}`, userId)
     return { ok: false, error: res.error, count: 0 }
   }
   // загрузка не удалась, но отработали от кэша — это предупреждение, а не успех молча
   if (res.cacheNote) {
-    await log('warn', 'fetch', `«${src.name}»: ${res.cacheNote}`)
+    await log('warn', 'fetch', `«${src.name}»: ${res.cacheNote}`, undefined, `"${src.name}": ${res.cacheNote}`, userId)
   }
 
   // дедуп внутри источника по sid (оставляем максимальный rev)
@@ -375,7 +414,12 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
     : hasDiff
       ? `; изменения: +${diffAdded} добавлено, ~${diffChanged} изменено, −${diffRemoved} удалено`
       : ' — изменений нет (обновлять правила в Suricata не требуется)'
-  await log('success', 'fetch', `Загружено «${src.name}»: ${rows.length} правил (${dt} с)${diffNote}${res.cacheNote ? ' — ВНИМАНИЕ: работали от кэша' : ''}`)
+  const enDiffNote = firstFetch
+    ? ' — first download (nothing to compare with)'
+    : hasDiff
+      ? `; changes: +${diffAdded} added, ~${diffChanged} changed, −${diffRemoved} removed`
+      : ' — no changes (no need to update Suricata rules)'
+  await log('success', 'fetch', `Загружено «${src.name}»: ${rows.length} правил (${dt} с)${diffNote}${res.cacheNote ? ' — ВНИМАНИЕ: работали от кэша' : ''}`, undefined, `Fetched "${src.name}": ${rows.length} rules (${dt} s)${enDiffNote}${res.cacheNote ? ' — WARNING: served from cache' : ''}`, userId)
   return {
     ok: true,
     count: rows.length,
@@ -385,10 +429,13 @@ export async function fetchSourceById(sourceId: string): Promise<{ ok: boolean; 
 }
 
 /** Загрузить все включённые источники (источники в корзине не участвуют).
+ *  Рабочие пространства (v1.27.0): без userId — СИСТЕМНОЕ обновление: только
+ *  источники каталога (ownerId = null) — пользовательские обновляют их владельцы;
+ *  с userId — пользователь обновляет только СВОИ включённые источники.
  *  Возвращает агрегированный диф: сколько правил добавлено/изменено/удалено
  *  суммарно по всем источникам и сколько источников без изменений —
  *  по этому вердикту видно, нужно ли пересобрать/переимпортировать правила. */
-export async function fetchAllSources(origin = 'manual'): Promise<{
+export async function fetchAllSources(origin = 'manual', userId?: string | null): Promise<{
   ok: number
   failed: number
   errors: string[]
@@ -399,7 +446,18 @@ export async function fetchAllSources(origin = 'manual'): Promise<{
    *  не ошибка: Talos обновляет наборы раз в сутки, повторная загрузка чуть позже */
   skippedSnortLimit: number
 }> {
-  const sources = await db.source.findMany({ where: { enabled: true, deletedAt: null }, orderBy: { priority: 'asc' } })
+  // выбор источников рабочего пространства (см. комментарий выше)
+  let sources: Array<{ id: string; name: string; priority: number }>
+  if (userId) {
+    const [own, states] = await Promise.all([
+      db.source.findMany({ where: { ownerId: userId, deletedAt: null }, orderBy: { priority: 'asc' } }),
+      db.sourceState.findMany({ where: { userId } }),
+    ])
+    const stMap = new Map(states.map((st) => [st.sourceId, st]))
+    sources = own.filter((s) => effectiveEnabled(s, stMap.get(s.id)))
+  } else {
+    sources = await db.source.findMany({ where: { ownerId: null, enabled: true, deletedAt: null }, orderBy: { priority: 'asc' } })
+  }
   let ok = 0
   let failed = 0
   let skippedSnortLimit = 0
@@ -407,7 +465,7 @@ export async function fetchAllSources(origin = 'manual'): Promise<{
   const diff = { added: 0, changed: 0, removed: 0 }
   let unchangedSources = 0
   for (const s of sources) {
-    const r = await fetchSourceById(s.id)
+    const r = await fetchSourceById(s.id, userId ?? null)
     if (r.rateLimited) {
       // гейт snort.org (15 мин) — ожидаемый пропуск, а не сбой загрузки
       skippedSnortLimit++
@@ -434,12 +492,35 @@ export async function fetchAllSources(origin = 'manual'): Promise<{
     : changesTotal === 0 && skippedSnortLimit === 0
       ? '; изменений нет — обновление правил в Suricata не требуется'
       : `; изменения: +${diff.added} добавлено, ~${diff.changed} изменено, −${diff.removed} удалено (без изменений: ${unchangedSources})`
-  await log(ok && !failed ? (changesTotal === 0 && skippedSnortLimit === 0 ? 'info' : 'success') : failed ? 'error' : 'warn', 'fetch', `Обновление завершено (${origin}): успешно ${ok}, с ошибками ${failed}${skippedNote}${verdict}`)
+  const enVerdict = failed > 0
+    ? ''
+    : changesTotal === 0 && skippedSnortLimit === 0
+      ? '; no changes — no need to update Suricata rules'
+      : `; changes: +${diff.added} added, ~${diff.changed} changed, −${diff.removed} removed (unchanged: ${unchangedSources})`
+  const enSkipped = skippedSnortLimit > 0 ? `, skipped by snort.org rate limit: ${skippedSnortLimit}` : ''
+  await log(ok && !failed ? (changesTotal === 0 && skippedSnortLimit === 0 ? 'info' : 'success') : failed ? 'error' : 'warn', 'fetch', `Обновление завершено (${origin}): успешно ${ok}, с ошибками ${failed}${skippedNote}${verdict}`, undefined, `Update finished (${origin}): ok ${ok}, failed ${failed}${enSkipped}${enVerdict}`, userId ?? null)
   return { ok, failed, errors, diff, unchangedSources, changesTotal, skippedSnortLimit }
 }
 
-/** Сборка итогового файла правил */
-export async function buildFinal(origin = 'manual'): Promise<{
+/** Источники персонального рабочего пространства: видимые пользователю
+ *  (системные кроме adminOnly, свои, опубликованные другими) и эффективно
+ *  включённые (SourceState, без строки — наследуется Source.enabled).
+ *  Возвращает ПОЛНЫЕ строки Source (с правилами) для сборки. */
+async function userWorkspaceSources(userId: string) {
+  const [sources, states] = await Promise.all([
+    db.source.findMany({ where: { deletedAt: null }, orderBy: { priority: 'asc' }, include: { rules: true } }),
+    db.sourceState.findMany({ where: { userId } }),
+  ])
+  const stMap = new Map(states.map((st) => [st.sourceId, st]))
+  return sources
+    .filter((s) => isSourceVisible(s, 'user', userId) && effectiveEnabled(s, stMap.get(s.id)))
+    .map((s) => ({ ...s, effectiveEnabled: true }))
+}
+
+/** Сборка итогового файла правил. userId = null — системная сборка (админ,
+ *  PULL-набор Clear NDR); cuid пользователя — его ПЕРСОНАЛЬНАЯ сборка:
+ *  только его источники, файл personal-<…>.rules, строка Build с userId. */
+export async function buildFinal(origin = 'manual', userId: string | null = null): Promise<{
   ok: boolean
   error?: string
   buildId?: string
@@ -455,14 +536,20 @@ export async function buildFinal(origin = 'manual'): Promise<{
   // (состояние в памяти процесса, UI опрашивает GET /api/build/progress)
   if (!isBuildActive()) startBuildProgress(origin)
   const settings = await getSettings()
-  const sources = await db.source.findMany({
-    where: { enabled: true, deletedAt: null },
-    orderBy: { priority: 'asc' },
-    include: { rules: true },
-  })
+  const user = userId ? await db.user.findUnique({ where: { id: userId }, select: { id: true, email: true } }) : null
+  const sources = userId
+    ? await userWorkspaceSources(userId)
+    : await db.source.findMany({
+        where: { enabled: true, deletedAt: null },
+        orderBy: { priority: 'asc' },
+        include: { rules: true },
+      })
   if (sources.length === 0) {
-    failBuildProgress('Нет включённых источников — сначала загрузите правила')
-    return { ok: false, error: 'Нет включённых источников — сначала загрузите правила' }
+    const emptyMsg = userId
+      ? 'В вашем рабочем пространстве нет включённых источников — включите системные или добавьте свои на вкладке «Источники»'
+      : 'Нет включённых источников — сначала загрузите правила'
+    failBuildProgress(emptyMsg)
+    return { ok: false, error: emptyMsg }
   }
   setBuildStage('db-read', 5)
   addBuildLog(`Чтение источников из базы: ${sources.length} шт., правил на входе ${sources.reduce((n, s) => n + s.rules.length, 0).toLocaleString('ru-RU')}`)
@@ -524,6 +611,12 @@ export async function buildFinal(origin = 'manual'): Promise<{
   const { rules: merged, stats } = mergeSources(srcRules, policy)
   stats.excludedByCategory = excludedByCategory
   stats.excludedByRule = excludedByRule
+  // подпись рабочего пространства (персональные сборки): cron сравнивает её
+  // с прошлой персональной сборкой и пропускает пересборку без изменений
+  if (userId) {
+    stats.workspaceSignature = workspaceSignature(sources.map((s) => ({ id: s.id, enabled: s.enabled, eff: true, priority: s.priority, ruleCount: s.rules.length, updatedAt: s.updatedAt })))
+    stats.workspace = { userId, sources: sources.length }
+  }
   setBuildStage('conflict-dedup', 45)
   addBuildLog(`Слияние завершено: дубликатов по SID ${stats.duplicateBySid}, по содержимому ${stats.duplicateByContent}, несовместимых ${stats.incompatibleDropped}`)
 
@@ -586,14 +679,16 @@ export async function buildFinal(origin = 'manual'): Promise<{
     sources: sources.map((s) => s.name),
     stats,
   })
-  const fileName = settings.buildFileName || 'clearndr-import.rules'
+  const fileName = userId
+    ? personalFileName(userId, user?.email)
+    : (settings.buildFileName || 'clearndr-import.rules')
 
   // Диф набора vs предыдущей сборки: читаем ПРЕДЫДУЩИЙ файл экспорта (ДО перезаписи
   // новым файлом — путь тот же) и сравниваем по sid + строке правила: что добавилось,
   // изменилось, удалилось в итоговом наборе. Если состав не изменился — переимпортировать
   // файл в Clear NDR/Suricata не требуется (заголовок «Сгенерировано» не в счёт).
   setBuildStage('diff', 82)
-  const prevBuild = await db.build.findFirst({ orderBy: { createdAt: 'desc' } })
+  const prevBuild = await db.build.findFirst({ where: { userId: userId ?? null }, orderBy: { createdAt: 'desc' } })
   let prevMap: Map<number, string> | null = null
   if (prevBuild) {
     try {
@@ -655,6 +750,7 @@ export async function buildFinal(origin = 'manual'): Promise<{
       sha256,
       sizeBytes,
       source: origin,
+      userId: userId ?? null,
     },
   })
   const archiveNote = stats.archive ? `; архив по источникам: ${stats.archive.fileName} (${stats.archive.files.length} файл(ов), ${(stats.archive.sizeBytes / 1e6).toFixed(1)} МБ)` : ''
@@ -664,7 +760,7 @@ export async function buildFinal(origin = 'manual'): Promise<{
     : unchanged
       ? '; состав правил не изменился — переимпортировать в Clear NDR/Suricata не требуется'
       : `; изменения набора vs предыдущей сборки: +${changes.added} добавлено, ~${changes.changed} изменено, −${changes.removed} удалено`
-  await log(unchanged ? 'info' : 'success', 'build', `Собран итоговый набор: ${sanitized.rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}; адаптировано под парсер Clear NDR: ${sanitized.rewritten}${catNote}${archiveNote}${changeNote}`)
+  await log(unchanged ? 'info' : 'success', 'build', `Собран итоговый набор${userId ? ` (рабочее пространство ${user?.email ?? userId})` : ''}: ${sanitized.rules.length} правил → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} МБ); SID перенесены в clearndr-блок 1e9+ (remap: ${remap.renumbered}, диапазон ${remap.minSid}..${remap.maxSid}); конфликтных близнецов удалено: ${dedup.removed}; адаптировано под парсер Clear NDR: ${sanitized.rewritten}${catNote}${archiveNote}${changeNote}`, undefined, `Final ruleset built${userId ? ` (workspace ${user?.email ?? userId})` : ''}: ${sanitized.rules.length} rules → ${fileName} (${(sizeBytes / 1e6).toFixed(1)} MB); SID remapped to clearndr block 1e9+ (remap: ${remap.renumbered}, range ${remap.minSid}..${remap.maxSid}); conflicting twins removed: ${dedup.removed}; adapted for Clear NDR parser: ${sanitized.rewritten}${changeNote}`, userId ?? null)
   finishBuildProgress({ ok: true, total: sanitized.rules.length, fileName, changes, unchanged })
   return { ok: true, buildId: build.id, total: sanitized.rules.length, fileName, changes, unchanged }
 }
@@ -719,9 +815,11 @@ async function buildPerSourceArchive(
   }
 }
 
-/** Экспорт последней сборки в Clear NDR */
+/** Экспорт последней СИСТЕМНОЙ сборки в Clear NDR (персональные сборки
+ *  пользователей экспортируются их владельцами как файл/PULL, а не пушем в
+ *  Clear NDR администратора) */
 export async function exportLatestBuild(): Promise<{ ok: boolean; error?: string; detail?: string }> {
-  const build = await db.build.findFirst({ orderBy: { createdAt: 'desc' } })
+  const build = await db.build.findFirst({ where: { userId: null }, orderBy: { createdAt: 'desc' } })
   if (!build) return { ok: false, error: 'нет сборок — сначала выполните сборку' }
   const settings = await getSettings()
   const cfg: ClearndrExportCfg = {
@@ -737,6 +835,48 @@ export async function exportLatestBuild(): Promise<{ ok: boolean; error?: string
   if (res.ok) await log('success', 'export', `Экспорт в Clear NDR выполнен: ${res.pushedTo ?? res.detail ?? 'ok'}`)
   else await log('error', 'export', `Ошибка экспорта: ${res.error}`)
   return res
+}
+
+/** Подпись рабочего пространства пользователя: состав/состояния/данные источников.
+ *  Меняется при переключении источников, их загрузке и правках. */
+export async function computeWorkspaceSignature(userId: string): Promise<string> {
+  const [sources, states] = await Promise.all([
+    db.source.findMany({ where: { deletedAt: null } }),
+    db.sourceState.findMany({ where: { userId } }),
+  ])
+  const stMap = new Map(states.map((st) => [st.sourceId, st]))
+  return workspaceSignature(sources
+    .filter((s) => isSourceVisible(s, 'user', userId))
+    .map((s) => ({
+      id: s.id, enabled: s.enabled, eff: effectiveEnabled(s, stMap.get(s.id)), priority: s.priority, ruleCount: s.ruleCount, updatedAt: s.updatedAt,
+    })))
+}
+
+/** Персональные сборки всех активных пользователей: пересобираем только те
+ *  рабочие пространства, чья подпись изменилась с прошлой персональной сборки. */
+async function buildPersonalWorkspaces(origin: string): Promise<{ built: number; skipped: number; failed: number }> {
+  let built = 0
+  let skipped = 0
+  let failed = 0
+  const users = await db.user.findMany({ where: { status: 'active', role: 'user' }, select: { id: true, email: true } })
+  for (const u of users) {
+    try {
+      const sig = await computeWorkspaceSignature(u.id)
+      const last = await db.build.findFirst({ where: { userId: u.id }, orderBy: { createdAt: 'desc' } })
+      const lastSig = last ? (JSON.parse(last.statsJson || '{}') as { workspaceSignature?: string }).workspaceSignature : undefined
+      if (last && lastSig === sig) {
+        skipped++
+        continue
+      }
+      const r = await buildFinal(origin, u.id)
+      if (r.ok) built++
+      else failed++
+    } catch (e) {
+      failed++
+      await log('warn', 'build', `Персональная сборка ${u.email}: ${(e as Error).message}`, undefined, `Personal build for ${u.email}: ${(e as Error).message}`)
+    }
+  }
+  return { built, skipped, failed }
 }
 
 /** Полный цикл по расписанию */
@@ -767,9 +907,20 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
     if (fetchRes.errors.length) parts.push(`ошибки загрузки: ${fetchRes.errors.slice(0, 5).join('; ')}`)
     await notifyEvent('pipeline', buildRes.ok && fetchRes.failed === 0 ? 'success' : fetchRes.failed || !buildRes.ok ? 'error' : 'warn', title, parts.join('\n'))
   } catch { /* уведомления не роняют цикл */ }
+  // персональные рабочие пространства (Enterprise): сборка наборов пользователей —
+  // только те, чьё состояние изменилось (по подписи рабочего пространства)
+  let personal: { built: number; skipped: number; failed: number } | null = null
+  if (multiUserEnabled() && buildRes.ok) {
+    try {
+      personal = await buildPersonalWorkspaces(origin)
+      if (personal.built || personal.failed) await log('info', 'build', `Персональные сборки (${origin}): собрано ${personal.built}, пропущено без изменений ${personal.skipped}, с ошибками ${personal.failed}`, undefined, `Personal builds (${origin}): built ${personal.built}, skipped unchanged ${personal.skipped}, failed ${personal.failed}`)
+    } catch (e) {
+      await log('warn', 'build', `Персональные сборки не выполнены: ${(e as Error).message}`)
+    }
+  }
   return {
     ok: buildRes.ok && fetchRes.failed === 0,
-    detail: { fetch: fetchRes, build: buildRes, export: exportRes },
+    detail: { fetch: fetchRes, build: buildRes, export: exportRes, personal },
   }
 }
 

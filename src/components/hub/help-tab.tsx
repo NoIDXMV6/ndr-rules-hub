@@ -60,7 +60,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**NDR Rules Hub** — вспомогательный сервис для системы **Clear NDR** (Stamus Networks): он автоматизирует полный цикл работы с наборами правил Snort/Suricata, которые питают сетевое обнаружение.',
       ],
       items: [
-        'собрать в одном месте проверенные источники правил — в каталоге уже 44 преднастроенных набора, от официальных правил Talos до открытых фидов и Zeek intel/MISP-интеграций, плюс свои источники по URL/архиву/локальному файлу;',
+        'собрать в одном месте проверенные источники правил — в каталоге уже 45 преднастроенных наборов, от официальных правил Talos до открытых фидов и Zeek intel/MISP-интеграций (включая Open NRD от Stamus Networks), плюс свои источники по URL/архиву/локальному файлу;',
         'загружать их по расписанию с учётом лимитов и авторизации (oinkcode, abuse.ch Auth-Key, ключ MISP, basic), с кэшем и зеркалами на случай сбоя основного URL;',
         'устранять дубликаты и конфликты SID, из-за которых импорт в Clear NDR отказывает;',
         'конвертировать списки индикаторов (IP/домены/URL) в правила Suricata и фильтровать несовместимые с Suricata конструкции;',
@@ -70,7 +70,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'обновлять сам Clear NDR до новой версии одним запуском — с бэкапами и автооткатом;',
         'при необходимости загружать правила через WireGuard VPN, не теряя доступ к самому сервису;',
         'следить за сервером и местом на диске: дашборды на «Обзоре» (CPU, память, диски, контейнеры, скорость интерфейсов и туннеля) и автоочистка при нехватке места — старые индексы OpenSearch, логи, кэш — с уведомлениями в Telegram (с поддержкой прокси) и Gotify;',
-        'в редакции Enterprise — работать нескольким пользователям с регистрацией, верификацией и персональными токенами скачивания.',
+        'в редакции Enterprise — работать нескольким пользователям с регистрацией, верификацией, рабочими пространствами и персональными токенами скачивания.',
       ],
     },
     {
@@ -289,8 +289,10 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       ],
       items: [
         '**Регистрация и верификация** — пользователь регистрируется на экране входа; аккаунт активирует администратор (без верификации кабинет недоступен); первый зарегистрированный становится администратором; регистрацию можно закрыть в разделе «Пользователи»;',
-        '**Кабинет пользователя** — урезанный набор вкладок: Обзор, Источники, Категории, Правила, Сборка и экспорт, Обновление Clear NDR, Дашборды OpenSearch, Помощь, О системе; VPN, Настройки, Журнал и Пользователи — только у администратора; свои источники (ownerId) видны владельцу и админу;',
-        '**Токены скачивания** — персональные токены `ndrt_…` для PULL-схемы: добавить к URL (`?token=…`) или в поле authkey источника Clear NDR (scirius передаст его в заголовке Authorization); в БД только SHA-256 — полный токен виден один раз; есть срок действия, отзыв и статистика скачиваний (вкладка «Сборка и экспорт» → «Токены скачивания правил»);',
+        '**Рабочее пространство** — у каждого пользователя СВОЙ набор источников и персональная сборка правил: системные источники (каталог) предоставляются всем — их можно только включать/выключать у себя (обновляет система), свои источники можно сделать приватными или опубликовать для коллег (управляет владелец); переключения одного пользователя не затрагивают других, личная сборка скачивается по токену/ссылке «Сборка и экспорт» (файл personal-<…>.rules);',
+        '**Меню пользователя** — без «Интеграций» (Обновление Clear NDR, дашборды OpenSearch, MISP, VPN, уведомления — операции уровня системы, только администратор) и без источников, требующих секреты уровня системы (ET Pro, MISP Suricata Export, MISP Attributes);',
+        '**События** — пользователь видит ТОЛЬКО события своего рабочего пространства (на двух языках интерфейса), администратор — все события системы;',
+        '**Токены скачивания** — персональные токены `ndrt_…` для PULL-схемы: добавить к URL (`?token=…`) или в поле authkey источника Clear NDR (scirius передаст его в заголовке Authorization); в БД только SHA-256 — полный токен виден один раз; есть срок действия, отзыв и статистика скачиваний (вкладка «Сборка и экспорт» → «Токены скачивания правил»); токен пользователя отдаёт ЕГО персональную сборку (если она ещё не собрана — системный набор, до первой персональной сборки PULL не ломается);',
         '**Защита** — rate limit по IP на всех эндпоинтах (429 + Retry-After); анти-брутфорс: вход (по IP, email и блок учётной записи) и ключи/токены отдачи (10 неудач за 5 мин → блок 15 мин); очередь тяжёлых операций (сборка/загрузка/отдача — 429 при переполнении); троттлинг канала отдачи (`downloadBandwidthKbps`); CSRF-проверки (Sec-Fetch-Site/Origin); пароли scrypt, SHA-256 токенов, security-заголовки;',
         '**Журнал событий безопасности** — раздел «Пользователи» показывает последние 100 событий: входы, блокировки, верификации.',
       ],
@@ -300,6 +302,20 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         after: '',
         href: REPO + '/blob/main/docs/developer.md',
       },
+    },
+    {
+      trigger: 'Рабочие пространства: персональные наборы, публикация и бейджи',
+      paragraphs: [
+        'С v1.27.0 каждый пользователь работает в СВОЁМ рабочем пространстве: то, что делает один, никак не влияет на других.',
+      ],
+      items: [
+        '**Системные источники** — общий каталог (владелец — система): обновляются по расписанию/администратором; пользователю доступно только включение/выключение в своём пространстве (переключатель на «Источниках»); у нового пользователя состояние наследуется от системного набора;',
+        '**Свои источники** — пользователь добавляет их сам (URL/архив/локальный файл) и управляет ими: загрузка, правка, удаление; **видимость** — «Приватный» (только у владельца) или «Опубликовать для других» (коллеги видят источник и могут включить его у себя, управляет им владелец); переключается в редактировании источника;',
+        '**Персональная сборка** — кнопка «Собрать» собирает набор ИЗ ИСТОЧНИКОВ ВКЛЮЧЕННЫХ ИМЕННО У ВАС (системные + свои + опубликованные); файл называется personal-<…>.rules, скачивается по /api/export — по токену или ссылке из кабинета;',
+        '**События** — журнал на «Обзоре» показывает только события вашего пространства (на языке интерфейса); события системы и других пользователей не видны — их видит администратор;',
+        '**Бейджи источников** — отражают суть: «рекомендуется», «конвертер», «threat hunting», «классификация трафика», «платный» и др. (бейдж «новый» удалён — он не отражал суть); владелец/администратор может задать своё НАЗВАНИЕ и ЦВЕТ бейджа (редактирование источника → «Бейдж источника»: палитра или свой hex, предпросмотр справа);',
+        '**Источники ET Pro и MISP** — скрыты у пользователей: они требуют секреты уровня системы (oinkcode Proofpoint, ключ REST API MISP); доступны только администратору.',
+      ],
     },
     {
       trigger: 'Диагностика типовых проблем',
@@ -355,7 +371,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**NDR Rules Hub** is a companion service for the **Clear NDR** system (Stamus Networks): it automates the full cycle of working with Snort/Suricata rulesets that feed network detection.',
       ],
       items: [
-        'bring proven rule sources together in one place — the catalog already ships 44 preconfigured sets, from official Talos rules to open feeds and Zeek intel/MISP integrations, plus your own sources by URL/archive/local file;',
+        'bring proven rule sources together in one place — the catalog already ships 45 preconfigured sets, from official Talos rules to open feeds and Zeek intel/MISP integrations (including Open NRD by Stamus Networks), plus your own sources by URL/archive/local file;',
         'download them on a schedule, respecting rate limits and authentication (oinkcode, abuse.ch Auth-Key, MISP key, basic), with caching and mirrors as a fallback for the primary URL;',
         'eliminate duplicates and SID conflicts that make Clear NDR imports fail;',
         'convert indicator lists (IP/domains/URLs) into Suricata rules and filter Suricata-incompatible constructs;',
@@ -365,7 +381,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         'update Clear NDR itself to a new version in one run — with backups and automatic rollback;',
         'when needed, download rules through a WireGuard VPN without losing access to the service itself;',
         'watch the server and disk space: dashboards on Overview (CPU, memory, disks, containers, interface and tunnel speed) plus automatic cleanup when space runs low — old OpenSearch indices, logs, cache — with notifications via Telegram (proxy support) and Gotify;',
-        'in the Enterprise edition — work with multiple users, registration, verification and personal download tokens.',
+        'in the Enterprise edition — work with multiple users, registration, verification, personal workspaces and personal download tokens.',
       ],
     },
     {
@@ -596,8 +612,10 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       ],
       items: [
         '**Registration and verification** — a user registers on the sign-in screen; an administrator activates the account (without verification the cabinet is unavailable); the first registered account becomes the administrator; registration can be closed in the “Users” section;',
-        '**User cabinet** — a reduced set of tabs: Overview, Sources, Categories, Rules, Build & Export, Clear NDR Update, OpenSearch Dashboards, Help, About; VPN, Settings, Logs and Users are administrator-only; own sources (ownerId) are visible to the owner and admins;',
-        '**Download tokens** — personal `ndrt_…` tokens for the PULL scheme: append to the URL (`?token=…`) or put into the authkey field of a Clear NDR source (scirius sends it as the Authorization header); only the SHA-256 is stored — the full token is shown once; expiry, revocation and download statistics are available (“Build & Export” tab → “Rule download tokens”);',
+        '**Workspace** — every user has their OWN set of sources and a personal ruleset build: system sources (the catalog) are provided to everyone — they can only be enabled/disabled per workspace (the system updates them); own sources can stay private or be published for colleagues (the owner manages them); one user’s changes never affect others, the personal build is downloaded via a token/link on “Build & Export” (the personal-<…>.rules file);',
+        '**User menu** — no “Integrations” (Clear NDR update, OpenSearch dashboards, MISP, VPN, notifications are system-level operations, administrator-only) and no sources that require system-level secrets (ET Pro, MISP Suricata Export, MISP Attributes);',
+        '**Events** — a user sees ONLY their own workspace events (in the interface language), an administrator sees all system events;',
+        '**Download tokens** — personal `ndrt_…` tokens for the PULL scheme: append to the URL (`?token=…`) or put into the authkey field of a Clear NDR source (scirius sends it as the Authorization header); only the SHA-256 is stored — the full token is shown once; expiry, revocation and download statistics are available (“Build & Export” tab → “Rule download tokens”); a user’s token serves THEIR personal build (if none exists yet — the system set, so PULL does not break until the first personal build);',
         '**Protection** — per-IP rate limit on every endpoint (429 + Retry-After); brute-force protection: sign-in (by IP, email and account lock) and serving keys/tokens (10 failures per 5 min → 15 min block); a queue for heavy operations (build/fetch/serving — 429 when saturated); serving bandwidth throttling (`downloadBandwidthKbps`); CSRF checks (Sec-Fetch-Site/Origin); scrypt passwords, SHA-256 token hashing, security headers;',
         '**Security event log** — the “Users” section shows the last 100 events: sign-ins, lockouts, verifications.',
       ],
@@ -607,6 +625,20 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         after: '',
         href: REPO + '/blob/main/docs/developer.md',
       },
+    },
+    {
+      trigger: 'Workspaces: personal sets, publishing and badges',
+      paragraphs: [
+        'Since v1.27.0 every user works in their OWN workspace: what one user does never affects the others.',
+      ],
+      items: [
+        '**System sources** — the shared catalog (owner: the system): updated on schedule/by the administrator; users can only enable/disable them in their workspace (the switch on “Sources”); a new user inherits the system state;',
+        '**Own sources** — added by the user (URL/archive/local file) and managed by them: fetch, edit, delete; **visibility** — “Private” (owner only) or “Publish for others” (colleagues see the source and can enable it in their workspace, the owner manages it); toggled in the source edit dialog;',
+        '**Personal build** — “Build” assembles the set from the sources enabled exactly for YOU (system + own + published); the file is named personal-<…>.rules, downloaded via /api/export — by token or the cabinet link;',
+        '**Events** — the journal on “Overview” shows only your workspace events (in the interface language); system and other users’ events are not visible — those are for the administrator;',
+        '**Source badges** — reflect the source purpose: “recommended”, “converter”, “threat hunting”, “traffic classification”, “paid”, etc. (the “new” badge was removed — it did not reflect the purpose); the owner/administrator can set a custom LABEL and COLOR (edit source → “Source badge”: palette or custom hex, with a live preview);',
+        '**ET Pro and MISP sources** — hidden from users: they require system-level secrets (the Proofpoint oinkcode, the MISP REST API key); administrator-only.',
+      ],
     },
     {
       trigger: 'Troubleshooting common problems',

@@ -29,6 +29,14 @@ export interface SourceItem {
   diffChanged: number
   diffRemoved: number
   badge: string | null
+  /** своё название бейджа (перекрывает словарный перевод по badge) */
+  badgeLabel?: string | null
+  /** свой цвет бейджа (имя палитры или hex) */
+  badgeColor?: string | null
+  /** видимость источника владельца: private | published (опубликован другим пользователям) */
+  visibility?: string
+  /** источник только для администратора (ET Pro, MISP) — в пользовательских пространствах скрыт */
+  adminOnly?: boolean
   notes: string | null
   notesEn: string | null
   builtin: boolean
@@ -142,11 +150,13 @@ export interface Dashboard {
     sha256: string
     sizeBytes: number
     source: string
+    /** true — персональная сборка рабочего пространства пользователя */
+    personal?: boolean
     stats: BuildStats
   }
   settings: Record<string, string>
   vpn: VpnState
-  logs: Array<{ id: number; ts: string; level: string; scope: string; message: string }>
+  logs: Array<{ id: number; ts: string; level: string; scope: string; message: string; messageEn?: string | null }>
 }
 
 // ── Системный мониторинг («Обзор») ───────────────────────────────────────────

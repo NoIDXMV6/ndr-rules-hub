@@ -60,6 +60,10 @@ export interface ExtraCfg {
   // MISP: ключ REST API (заголовок Authorization). Подставляется из настройки
   // «MISP API Key» для источников с авторизацией «misp»
   mispAuthKey?: string
+  // Open NRD (Stamus Networks): код лицензии — сегмент пути URL (%%OPENNRD%%).
+  // Подставляется из настройки «Open NRD» («Токены источников») для источников
+  // с авторизацией «opennrd»
+  openNrdCode?: string
   // резервные URL (зеркала): если основной URL недоступен (сетевая ошибка,
   // HTTP != 200, не-архив), пробуются зеркала по очереди — например, архив
   // GitHub-репозитория, когда официальный сайт источника лежит (PAW Patrules)
@@ -90,6 +94,18 @@ export function isSnortOrgUrl(url?: string | null): boolean {
   try {
     const h = new URL(url).hostname.toLowerCase().replace(/^www\./, '')
     return h === 'snort.org' || h.endsWith('.snort.org')
+  } catch {
+    return false
+  }
+}
+
+/** Open NRD (Stamus Networks, ti.stamus-networks.io): фиды новых доменов
+ *  (newly registered domains) — код лицензии в сегменте пути. */
+export function isStamusOpenNrdUrl(url?: string | null): boolean {
+  if (!url) return false
+  try {
+    const h = new URL(url).hostname.toLowerCase().replace(/^www\./, '')
+    return h === 'ti.stamus-networks.io' || h.endsWith('.stamus-networks.io')
   } catch {
     return false
   }
@@ -143,6 +159,12 @@ export function applyAuth(url: string, cfg: FetchSourceCfg, extra: ExtraCfg): st
       const sep = url.includes('?') ? '&' : '?'
       return `${url}${sep}auth-key=${key}`
     }
+  }
+  // Open NRD (Stamus Networks): код лицензии — сегмент пути, в seed-URL он
+  // помечен плейсхолдером %%OPENNRD%% (код выдаётся бесплатно по форме на сайте)
+  if (cfg.authType === 'opennrd' && extra.openNrdCode) {
+    const code = extra.openNrdCode.trim()
+    if (code && url.includes('%%OPENNRD%%')) return url.replaceAll('%%OPENNRD%%', encodeURIComponent(code))
   }
   return url
 }
@@ -277,13 +299,13 @@ function tarErrDetail(e: unknown): string {
   return (err.message ?? '').replace(/^Command failed:\s*/i, '').split('\n')[0].slice(0, 200)
 }
 
-async function extractTarball(tarPath: string, destDir: string, subPath?: string): Promise<string[]> {
+async function extractTarball(tarPath: string, destDir: string, subPath?: string, exts: string[] = ['.rules']): Promise<string[]> {
   // чистим прошлую распаковку: при смене архива (обновление/зеркало с другой
-  // структурой) старые .rules не должны смешиваться с новыми
+  // структурой) старые файлы не должны смешиваться с новыми
   await fs.rm(destDir, { recursive: true, force: true })
   await fs.mkdir(destDir, { recursive: true })
   await execFileP('tar', ['-xzf', tarPath, '-C', destDir], { timeout: 180_000 })
-  // ищем .rules файлы (опционально только в указанном подкаталоге архива)
+  // ищем файлы нужных расширений (опционально только в указанном подкаталоге архива)
   const found: string[] = []
   async function walk(dir: string) {
     const entries = await fs.readdir(dir, { withFileTypes: true })
@@ -291,7 +313,7 @@ async function extractTarball(tarPath: string, destDir: string, subPath?: string
       const p = path.join(dir, e.name)
       if (e.isDirectory()) {
         await walk(p)
-      } else if (e.name.endsWith('.rules')) {
+      } else if (exts.some((ext) => e.name.toLowerCase().endsWith(ext))) {
         if (subPath) {
           const rel = path.relative(destDir, p).split(path.sep)
           if (!rel.includes(subPath)) continue
@@ -305,22 +327,35 @@ async function extractTarball(tarPath: string, destDir: string, subPath?: string
 }
 
 /** Разобрать ранее скачанный архив (кэш): null — архива нет или он не читается */
-async function extractCached(tarPath: string, destDir: string, subPath?: string): Promise<{ rules: ParsedRule[]; sizeBytes: number } | null> {
+async function extractCached(tarPath: string, destDir: string, subPath?: string, exts: string[] = ['.rules']): Promise<{ rules: ParsedRule[]; sizeBytes: number } | null> {
   const st = await fs.stat(tarPath).catch(() => null)
   if (!st) return null
   try {
-    const found = await extractTarball(tarPath, destDir, subPath)
+    const found = await extractTarball(tarPath, destDir, subPath, exts)
     let rules: ParsedRule[] = []
     let size = 0
     for (const f of found) {
       const t = await fs.readFile(f, 'utf8')
       size += t.length
-      rules.push(...parseRuleText(t))
+      rules.push(...parseArchiveText(t, f))
     }
     return { rules, sizeBytes: size }
   } catch {
     return null
   }
+}
+
+/** Разбор файла из архива — экспортирован для тестов:
+ *  .rules — правила; текстовые списки (.txt/.list/.dat/.csv) — конвертация
+ *  в правила по содержимому (Open NRD: список новых доменов → DNS-правила) */
+export function parseArchiveText(text: string, fileName: string): ParsedRule[] {
+  if (fileName.toLowerCase().endsWith('.rules')) return parseRuleText(text)
+  // список индикаторов (по умолчанию домены; ip-листы тоже распознаются):
+  // строки-домены/IP/URL без синтаксиса правил
+  if (/^\s*alert\s+\w+\s/m.test(text)) return parseRuleText(text)
+  const looksLikeIp = /^[\s]*\d{1,3}(?:\.\d{1,3}){3}[\s/$]/m.test(text)
+  const conv = looksLikeIp ? convertIpList(text, { sidStart: 1100000 }) : convertDomainList(text, { sidStart: 1100000 })
+  return conv.map((r) => toParsed(r))
 }
 
 /** Загрузить и разобрать один источник */
@@ -383,13 +418,17 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
     if (cfg.kind === 'tarball') {
       const tarPath = path.join(CACHE_DIR, `src-${cfg.id}.tar.gz`)
       const destDir = path.join(CACHE_DIR, `src-${cfg.id}`)
+      // расширения файлов внутри архива: .rules для наборов правил; для списков
+      // (Open NRD и др.) — текстовые файлы со списками доменов/IP
+      const listExts = ['.txt', '.list', '.dat', '.csv']
+      const exts = cfg.category === 'ruleset' ? ['.rules'] : ['.rules', ...listExts]
 
       // свежий кэш (extra.cacheTtlMinutes, по умолчанию 0 = выкл): не дёргаем
       // источник чаще лимита (у snort.org registered — раз в 15 минут)
       const ttl = Number(extra.cacheTtlMinutes ?? 0)
       const st = await fs.stat(tarPath).catch(() => null)
       if (ttl > 0 && st && Date.now() - st.mtimeMs < ttl * 60_000) {
-        const cached = await extractCached(tarPath, destDir, extra.subPath)
+        const cached = await extractCached(tarPath, destDir, extra.subPath, exts)
         if (cached) {
           return {
             ok: true, rules: cached.rules, sizeBytes: cached.sizeBytes, usedCache: true,
@@ -422,7 +461,7 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
         await fs.writeFile(tarPath, res.body)
         let found: string[]
         try {
-          found = await extractTarball(tarPath, destDir, extra.subPath)
+          found = await extractTarball(tarPath, destDir, extra.subPath, exts)
         } catch (te) {
           return { ok: false, error: `архив скачан (${res.body.length} байт), но tar не смог его распаковать: ${tarErrDetail(te)}`, rules: [], sizeBytes: res.body.length }
         }
@@ -431,14 +470,14 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
         for (const f of found) {
           const t = await fs.readFile(f, 'utf8')
           size += t.length
-          rules.push(...parseRuleText(t))
+          rules.push(...parseArchiveText(t, f))
         }
         return { ok: true, rules, sizeBytes: size }
       }
 
       // все URL недоступны: запасной путь — ранее скачанный архив,
       // работаем от него, источник помечаем предупреждением
-      const cached = await extractCached(tarPath, destDir, extra.subPath)
+      const cached = await extractCached(tarPath, destDir, extra.subPath, exts)
       if (cached) {
         return {
           ok: true, rules: cached.rules, sizeBytes: cached.sizeBytes, usedCache: true,

@@ -46,6 +46,11 @@ export interface BuildStats {
   archive?: ArchiveInfo
   /** диф итогового набора vs предыдущей сборки: добавлено/изменено/удалено (null/нет — не с чем сравнивать) */
   changes?: { added: number; changed: number; removed: number }
+  /** персональная сборка: подпись рабочего пространства — cron сравнивает с прошлой
+   *  персональной сборкой и пропускает пересборку без изменений */
+  workspaceSignature?: string
+  /** персональная сборка: рабочее пространство (userId) и число источников */
+  workspace?: { userId: string; sources: number }
   perSource: Record<string, { total: number; kept: number; droppedSid: number; droppedContent: number; droppedCompat: number }>
   sidsReplaced: Array<{ sid: number; newSid: number; source: string; keptRev: number; droppedRev: number; keptSource: string }>
 }
