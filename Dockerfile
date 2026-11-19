@@ -4,11 +4,39 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Этап 1: зависимости ───────────────────────────────────────────────────────
+# Защита от «молчаливого» зависания bun install (инцидент v1.27.0: 23196 с на
+# этом шаге, сборка прервана пользователем). Причины зависания — сеть хоста
+# сборки до registry.npmjs.org (DNS/IPv6/MTU/троттлинг) — у bun install нет
+# своего таймаута, при сбое сети он висит часами без вывода. Уровни защиты:
+#   1) BUN_INSTALL_TIMEOUT — предохранитель: сборка падает с внятной
+#      диагностикой вместо многочасового молчания (секунды, дефолт 2700 = 45 мин);
+#   2) NPM_REGISTRY — зеркало реестра:
+#        docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com .
+#      bun.lock НЕ содержит URL реестра (только integrity-хэши), поэтому
+#      --frozen-lockfile с зеркалом работает, целостность пакетов проверяется;
+#   3) cache-mount кэша bun: bump версии в package.json инвалидирует слой COPY
+#      даже при неизменном bun.lock (v1.26.1→v1.27.0 менялась ТОЛЬКО версия!)
+#      и раньше вынуждал полный ре-скач всех пакетов — теперь переустановка
+#      берётся из локального кэша за секунды;
+#   4) --network-concurrency 16 (дефолт 48) — меньше параллельных запросов,
+#      устойчивее на слабых сетях.
+# Быстрые проверки при зависании сборки на этом шаге (на хосте сборки):
+#   curl -o /dev/null -sS -w 'total %{time_total}s\n' https://registry.npmjs.org/next
+#   docker build --network=host .   # на хосте быстро, в сборке висит → DNS/MTU bridge
 FROM oven/bun:1.2 AS deps
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG BUN_INSTALL_TIMEOUT=2700
 WORKDIR /app
 
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    timeout --kill-after=30 "${BUN_INSTALL_TIMEOUT}s" \
+      bun install --frozen-lockfile --registry "$NPM_REGISTRY" --network-concurrency 16 \
+    || { echo "FAIL: bun install не завершился за ${BUN_INSTALL_TIMEOUT}с — сеть хоста до $NPM_REGISTRY проблемна."; \
+        echo "  Проверить хост:  curl -o /dev/null -sS -w 'total %{time_total}s\n' https://registry.npmjs.org/next"; \
+        echo "  Host-сеть:       docker build --network=host ."; \
+        echo "  Зеркало npm:     docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com ."; \
+        exit 1; }
 
 # ── Этап 2: сборка приложения + шаблон БД ────────────────────────────────────
 # Сборка идёт под Node.js, а НЕ под Bun. Причина: undici 8 (зависимость

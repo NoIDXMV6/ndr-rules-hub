@@ -82,6 +82,7 @@ server.log
 !/scripts/test-osd-probe-smoke.sh
 !/scripts/test-osd-stale-run.ts
 !/scripts/gh_release_backfill.sh
+!/scripts/gh_release_create.sh
 !/scripts/gotify-deploy.sh
 /mini-services
 dev.log
