@@ -117,13 +117,16 @@ docker compose up -d --build
 пере-скачивает пакеты), параллелизм сети снижен до 16.
 
 ```bash
-# 1) скорость до реестра с хоста сборки:
-curl -o /dev/null -sS -w 'total %{time_total}s\n' https://registry.npmjs.org/next
-# 2) на хосте быстро, а в сборке висит → DNS/MTU bridge-сети:
+# 1) скорость до реестра с хоста сборки (реестр отдаёт ~31 МБ метаданных next,
+#    поэтому смотрите именно total на фоне size):
+curl -o /dev/null -sS -w 'total %{time_total}s  size %{size_download}B\n' https://registry.npmjs.org/next
+# 2) сравните зеркало — выберите тот, что быстрее с вашего хоста:
+curl -o /dev/null -sS -w 'total %{time_total}s  size %{size_download}B\n' https://registry.npmmirror.com/next
+# 3) на хосте быстро, а в сборке висит → DNS/MTU bridge-сети:
 docker build --network=host -t ndr-rules-hub:local .
-# 3) медленно даже на хосте → зеркало npm (bun.lock не содержит URL реестра,
-#    --frozen-lockfile с зеркалом совместим, целостность проверяется по хэшам lockfile):
-docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+# 4) зеркало npm можно закрепить в .env — все последующие сборки подхватят его автоматически:
+#    NPM_REGISTRY=https://registry.npmmirror.com
+docker compose up -d --build
 ```
 
 ## Диагностика (если UI показывает ошибку API)
