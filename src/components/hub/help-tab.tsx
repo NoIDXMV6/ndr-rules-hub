@@ -342,7 +342,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       items: [
         '**highest-rev** — при конфликте SID остаётся правило с максимальным rev (по умолчанию);',
         '**source-priority** — выигрывает источник с меньшим числом приоритета;',
-        '**renumber-private** — конфликтующие SID переводятся в приватный диапазон (privateSidStart);',
+        '**проигравший при конфликте SID** — по умолчанию вторая копия (если у неё другой детект) отбрасывается; в режиме «оставлять и назначить новый SID» оба правила попадают в сборку, второй выдаётся детерминированный SID из блока 2 000 000 000+ перед remap;',
         '**dedupContent** — удаляет правила с одинаковым содержимым, но разными SID;',
         '**dropIncompatible** — не включает в сборку конструкции, несовместимые с Suricata (replace, rawbytes и др.); несовместимое правило помечается флагом совместимости и в итоговый набор не попадает;',
         'офлайн-пакет dist/ дополнительно проходит цикл валидации движком `suricata -T` до нуля ошибок — невалидированный набор не публикуется.',
@@ -665,7 +665,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       items: [
         '**highest-rev** — on an SID conflict the rule with the highest rev is kept (default);',
         '**source-priority** — the source with the lower priority number wins;',
-        '**renumber-private** — conflicting SIDs are moved into the private range (privateSidStart);',
+        '**SID conflict loser** — by default the second copy (if its detection differs) is dropped; in "keep and assign a new SID" mode both rules enter the build, the loser gets a deterministic SID from the 2,000,000,000+ block before the remap;',
         '**dedupContent** — removes rules with identical content but different SIDs;',
         '**dropIncompatible** — excludes Suricata-incompatible constructs from the build (replace, rawbytes, etc.); a rule with an incompatible construct is flagged and does not reach the final set;',
         'the offline dist/ package additionally passes a validation loop with the `suricata -T` engine until zero errors — an unvalidated set is never published.',

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergeSources, hashRule, renderFinalFile, replaceSid, SourceRules } from '@/lib/engine/build'
+import { mergeSources, hashRule, renderFinalFile, replaceSid, SourceRules, DedupPolicy } from '@/lib/engine/build'
 
 function mkRule(sid: number, rev: number, content: string) {
   return `alert tcp any any -> any any (msg:"${content}"; content:"${content}"; sid:${sid}; rev:${rev};)`
@@ -94,16 +94,19 @@ describe('build: политики совместимости и заглушек
   })
 })
 
-describe('build: renumber-private', () => {
-  it('перенумеровывает SID вне приватного диапазона', () => {
+describe('build: выведенная стратегия renumber-private', () => {
+  it('легаси-значение не перенумеровывает набор (ведёт себя как highest-rev)', () => {
+    // v1.28.1: стратегия renumber-private выведена — её роль выполняет
+    // sidConflict='reassign'. Старое значение в БД деградирует в highest-rev,
+    // проход перенумерации удалён — SID набора не трогаются.
+    const legacy = { sidStrategy: 'renumber-private' } as unknown as Partial<DedupPolicy>
     const { rules, stats } = mergeSources(
       [src('s', 10, [[493, 11, 'public sid'], [560, 9, 'public sid 2']])],
-      { sidStrategy: 'renumber-private', privateSidStart: 1000000 }
+      legacy
     )
-    expect(stats.renumbered).toBe(2)
-    expect(rules[0].sid).toBe(1000000)
-    expect(rules[1].sid).toBe(1000001)
-    expect(rules[0].raw).toContain('sid:1000000;')
+    expect(stats.renumbered).toBe(0)
+    expect(rules.map((r) => r.sid)).toEqual([493, 560])
+    expect(rules[0].raw).toContain('sid:493;')
   })
 })
 

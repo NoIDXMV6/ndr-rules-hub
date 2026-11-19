@@ -598,15 +598,25 @@ export async function buildFinal(origin = 'manual', userId: string | null = null
     addBuildLog(`Фильтр категорий/правил: исключено ${excludedByCategory + excludedByRule}, осталось ${total.toLocaleString('ru-RU')} правил`)
   }
 
+  // Стратегия выбирает ТОЛЬКО победителя (чья копия сохранит исходный SID);
+  // судьба проигравшего — dedupSidConflict. Легаси-значение 'renumber-private'
+  // выведено в v1.28.1 (проход перенумерации всего набора всё равно затирался
+  // безусловным remap в clearndr-блок; его роль выполняет sidConflict='reassign').
+  const legacyRenumber = settings.dedupSidStrategy === 'renumber-private'
   const policy: Partial<DedupPolicy> = {
-    sidStrategy: settings.dedupSidStrategy as DedupPolicy['sidStrategy'],
+    sidStrategy: settings.dedupSidStrategy === 'source-priority' ? 'source-priority' : 'highest-rev',
     // проигравший при конфликте SID с другим детектом: 'reassign' — оставить
     // оба правила, проигравшему временный SID (финальный remap даст свой слот)
     sidConflict: settings.dedupSidConflict === 'reassign' ? 'reassign' : 'drop',
     contentDedup: settings.dedupContent === 'true',
     dropIncompatible: settings.dropIncompatible === 'true',
     dropDisabledMsg: settings.dropDisabledMsg === 'true',
-    privateSidStart: parseInt(settings.privateSidStart || '1000000000', 10),
+  }
+  if (legacyRenumber) {
+    const note =
+      'Стратегия «перенумерация в приватный диапазон» выведена: её роль выполняет «Проигравший при конфликте SID → оставлять и назначить новый SID»; применяется highest-rev.'
+    await log('info', 'build', note)
+    addBuildLog(note)
   }
 
   setBuildStage('merge', 15)

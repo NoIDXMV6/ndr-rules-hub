@@ -24,10 +24,10 @@ automatic downloads, Snort 2/3 → Suricata conversion, deduplication, SID confl
 |---|---|
 | **Sources** | Catalog of 36 preconfigured sources (13 original from Clear NDR + 23 new). Add your own by URL/archive/local file. Types: ruleset, tar.gz archive, IP/domain/URL lists (converters). **Trash bin**: delete with rules kept, restore, permanent delete (names of purged built-ins are not re-created by catalog seeding) |
 | **Fetching** | HTTP(S) with **oinkcode** support (snort.org, no login/password), auth-key, Basic. snort.org rate-limit handling (403 → a clear message). Local archives and directories |
-| **Converters** | IP/CIDR lists → rules (chunks of N addresses per SID), domains → DNS rules, URLs → HTTP rules. SIDs from the private 1,000,000+ range |
+| **Converters** | IP/CIDR lists → rules (chunks of N addresses per SID), domains → DNS rules, URLs → HTTP rules. SIDs from the 1,100,000+ block |
 | **Snort→Suricata converter** | `scripts/s2x_convert.py`: Snort 3 sticky buffers (http_uri…) → dot forms (http.uri…), inline content modifiers → separate keywords, bufferlen → bsize, soid/service removal, variable mapping, file→tcp, ssl→tls. Empirically calibrated on Suricata 7.0.10 |
 | **Validator** | Every final ruleset is run through **real Suricata** (`suricata -T`); the “validate → parse log → fix/exclude → repeat” loop continues until 0 errors. **An unvalidated ruleset cannot reach Clear NDR** — export is blocked |
-| **Deduplication** | By SID (strategies: highest rev / source priority / renumber into the private range) and by content (canonical SHA-1 without sid/rev/msg/metadata). SID conflict with **different** detections: the losing rule can be kept with a new deterministic SID (2,000,000,000+ block → remap into the clearndr block; "SID conflict loser" setting) |
+| **Deduplication** | By SID (the strategy picks the winner: highest rev / source priority) and by content (canonical SHA-1 without sid/rev/msg/metadata). SID conflict with **different** detections: the loser's fate is a separate "SID conflict loser" setting — it can be kept under a new deterministic SID (2,000,000,000+ block → remap into the clearndr block) |
 | **Compatibility** | Automatic detection of Snort 2 (preproc, react, rawbytes…) and Snort 3 (keystore, pkt_trace…) keywords missing in Suricata, filtered out at build time |
 | **Categories** | A section grouping rules of enabled sources by `classtype`; manage categories (on/off in build, rename, hide) and **individual rules** (SID switch survives source re-fetching). Final ruleset = enabled sources ∩ category/rule filter |
 | **Build** | A final `suricata.rules` file with a header, per-source statistics and SHA-256. Output option: **tgz archive with one file per source** (import into Clear NDR as a datatype `sigs` source — each file becomes a category) |
@@ -469,7 +469,7 @@ src/lib/engine/
   parser.ts                 # Snort2/Snort3/Suricata rule parser (+multiline)
   convert.ts                # IP/domain/URL → rule converters
   fetcher.ts                # fetching (url/tarball/local, oinkcode/auth-key/basic)
-  build.ts                  # mergeSources: SID/content dedup, renumbering
+  build.ts                  # mergeSources: SID/content dedup, conflict winner/loser policies
   exporter.ts               # file · Clear NDR REST (upload → apply) · HTTP POST · directory
   vpn.ts                    # wg-quick: config, up/down, status, environment check
   service.ts                # orchestration: fetch → build → export, cron, catalog seed
@@ -534,7 +534,7 @@ bunx vitest run
 ```
 
 84 tests (9 files): parsing real Snort 3 rules (multiline, pcre with braces), converters
-(IP chunks, domains, URLs, maxRules guards), SID deduplication strategies, renumbering,
+(IP chunks, domains, URLs, maxRules guards), SID dedup policies (winner and loser),
 DELETED stubs, content hash, wg-quick configs (valid/broken), local directory and tar.gz
 fetching, an online list-converter integration test (Spamhaus DROP), plus the i18n suite:
 browser-string language detection, template interpolation, full ru/en key parity, `{n}`

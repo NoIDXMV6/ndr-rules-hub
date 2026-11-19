@@ -21,14 +21,17 @@ export interface SourceRules {
 }
 
 export interface DedupPolicy {
-  sidStrategy: 'highest-rev' | 'source-priority' | 'renumber-private'
+  /** Стратегия определяет ТОЛЬКО, чья копия сохранит исходный SID при конфликте:
+   *  'highest-rev' — максимальный rev (при равенстве — более приоритетный источник),
+   *  'source-priority' — более приоритетный источник (при равенстве — максимальный rev).
+   *  Судьба второй копии (проигравшего) — отдельная политика sidConflict. */
+  sidStrategy: 'highest-rev' | 'source-priority'
   /** проигравший при конфликте SID, если детекты РАЗНЫЕ: 'drop' — отбросить
    *  (историческое поведение), 'reassign' — оставить и назначить новый SID */
   sidConflict: 'drop' | 'reassign'
   dropIncompatible: boolean
   dropDisabledMsg: boolean      // удалять правила с msg "DELETED"/"DISABLED"
   contentDedup: boolean         // удалять правила с одинаковым содержимым (hash), оставляя первое
-  privateSidStart: number       // для стратегии renumber-private (стандарт: 1000000..1999999)
 }
 
 export interface BuildStats {
@@ -83,8 +86,6 @@ const DEFAULTS: DedupPolicy = {
   dropIncompatible: false,
   dropDisabledMsg: true,
   contentDedup: true,
-  // свободный clearndr-блок (Snort резервирует <1M, ET — 1..2.2M, Suricata — 2.2..2.3M)
-  privateSidStart: 1_000_000_000,
 }
 
 export function hashRule(raw: string): string {
@@ -428,27 +429,6 @@ export function mergeSources(
     emitEntry(sid, entry)
   }
   for (const e of reassignEntries) emitEntry(e.sid, e)
-
-  // перенумерация приватных SID при стратегии renumber-private
-  let nextPrivate = p.privateSidStart
-  const usedPrivate = new Set<number>()
-  if (p.sidStrategy === 'renumber-private') {
-    for (const r of result) {
-      if (r.sid >= p.privateSidStart && r.sid < p.privateSidStart + 1000000) usedPrivate.add(r.sid)
-    }
-  }
-  if (p.sidStrategy === 'renumber-private') {
-    for (const r of result) {
-      if (r.sid < p.privateSidStart || r.sid >= p.privateSidStart + 1000000) {
-        while (usedPrivate.has(nextPrivate)) nextPrivate++
-        usedPrivate.add(nextPrivate)
-        r.raw = replaceSid(r.raw, nextPrivate)
-        r.sid = nextPrivate
-        stats.renumbered++
-        nextPrivate++
-      }
-    }
-  }
 
   result.sort((a, b) => a.sid - b.sid)
   stats.uniqueSids = result.length

@@ -571,12 +571,11 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   abusechAuthKey: process.env.ABUSECH_AUTH_KEY || '', // Auth-Key abuse.ch (ThreatFox/URLhaus, сегмент пути выгрузки)
   mispAuthKey: process.env.MISP_AUTH_KEY || '', // ключ REST API MISP (заголовок Authorization)
   openNrdLicense: process.env.OPENNRD_LICENSE || '', // код лицензии Open NRD (Stamus Networks) — сегмент пути ti.stamus-networks.io/<КОД>/…
-  dedupSidStrategy: 'highest-rev', // highest-rev | source-priority | renumber-private
-  dedupSidConflict: 'drop', // drop | reassign — проигравший при конфликте SID с другим детектом
+  dedupSidStrategy: 'highest-rev', // highest-rev | source-priority — только выбор победителя конфликта SID
+  dedupSidConflict: 'drop', // drop | reassign — судьба проигравшего при конфликте SID с другим детектом
   dedupContent: 'true',
   dropIncompatible: 'true',
   dropDisabledMsg: 'true',
-  privateSidStart: '1000000',
   buildFileName: 'clearndr-import.rules',
   buildFormat: 'file', // file | file+tgz (файл + архив с правилами по источникам)
   serveToken: '', // ключ отдачи итогового набора по URL (PULL-схема): ?token= / authkey источника Clear NDR; пусто = без защиты

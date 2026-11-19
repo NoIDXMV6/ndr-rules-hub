@@ -53,7 +53,7 @@ flowchart TB
                 direction LR
                 FETCHER["fetcher.ts<br/>source fetching<br/>http · tarball · local"]
                 PARSER["parser.ts<br/>rule parsing<br/>Snort 2/3 · Suricata"]
-                CONVERT["convert.ts · sidmap.ts<br/>lists → rules,<br/>private SID ranges"]
+                CONVERT["convert.ts · sidmap.ts<br/>lists → rules,<br/>SID block 1,100,000+"]
                 BUILDER["build.ts<br/>merge · dedup · SID remap"]
                 EXPORTER["exporter.ts<br/>file · Clear NDR REST ·<br/>HTTP POST · directory"]
                 VPN["vpn.ts<br/>wg-quick up/down/status"]
@@ -110,7 +110,7 @@ Schema — `prisma/schema.prisma`. The client is generated with `binaryTargets =
 | `Source` | rule source | `category` (ruleset / ip-list / domain-list / url-list), `kind` (url / tarball / local), `authType` (none / oinkcode / authkey / basic), `extraJson` (converter/auth parameters), `priority` (lower = more important), `status`, `badge`, `builtin` |
 | `Rule` | a rule of a specific source | `sid`, `rev`, `action`, `proto`, `msg`, `raw`, `contentHash` (canonical SHA-1 without sid/rev/msg/metadata), `suricataOk`, `compatNotes`; unique `[sourceId, sid]` |
 | `Build` | build result | `statsJson` (per-source/duplicate statistics), `policyJson` (applied policies), `fileName`, `sha256`, `sizeBytes`, `source` (manual / cron) |
-| `Setting` | settings (k-v) | oinkcode, dedup strategies, privateSidStart, cron, export parameters |
+| `Setting` | settings (k-v) | oinkcode, dedup policies (winner/loser), cron, export parameters |
 | `LogEntry` | event log | `level` (ok/warn/error/success), `scope`, `message` |
 | `VpnProfile` | stored wg-quick config | `name`, `config`, `active`, `lastStatusJson` |
 
@@ -139,13 +139,13 @@ flowchart LR
     end
 
     PARSE["Parsing — parser.ts<br/>header + options, multiline,<br/>pcre with braces"]
-    CONV["Conversion — convert.ts · sidmap.ts<br/>IP chunks · domains · URLs,<br/>private SID range, guards"]
+    CONV["Conversion — convert.ts · sidmap.ts<br/>IP chunks · domains · URLs,<br/>SID block 1,100,000+, guards"]
 
     RULES[("Prisma · Rule — per source<br/>sid · rev · raw · contentHash<br/>suricataOk · compatNotes")]
 
     subgraph BUILD["Build — build.ts · service.ts"]
         direction TB
-        MERGE["mergeSources(): SID conflict →<br/>highest-rev / source-priority /<br/>renumber-private · dropIncompatible"]
+        MERGE["mergeSources(): SID conflict →<br/>highest-rev / source-priority ·<br/>loser: drop/reassign · dropIncompatible"]
         CONTENT["content dedup: SHA-1<br/>without sid/rev/msg/metadata/reference"]
         REMAP["remapToClearndrBlock():<br/>SID → free block 1e9+,<br/>shared sidmap.json map"]
         GATE{"Clear NDR gate:<br/>conflicting twins?"}
@@ -186,10 +186,9 @@ Steps:
 2. **Parsing (`parser.ts`)** — rule header and options parsed into a structure (SID, rev, msg,
    classtype, proto, direction), multiline rules and pcre with braces supported.
 3. **List conversion (`convert.ts`, `sidmap.ts`)** — IP/CIDR in chunks of N addresses per SID,
-   domains → DNS rules, URLs → HTTP rules; SIDs from the private range (`privateSidStart`,
-   standard 1,000,000–1,999,999); `perRule`/`maxRules` guards.
+   domains → DNS rules, URLs → HTTP rules; SIDs from the 1,100,000+ block; `perRule`/`maxRules` guards.
 4. **Deduplication and build (`build.ts`)** — removal of duplicates by SID and content, SID
-   conflict resolution, optional renumbering; compatibility filter.
+   conflict handling (winner picked by the strategy, loser by the drop/reassign policy); compatibility filter.
 5. **Validation** — the `scripts/s2x_convert.py` converter + the `suricata -T` loop (for the
    offline `dist/` package; the online build applies the static compatibility filter).
 6. **Export (`exporter.ts`)** — five modes: file for manual import; **Clear NDR REST** — native
@@ -233,7 +232,7 @@ flowchart TD
     subgraph G4["Gate 4 — Build · build.ts"]
         direction TB
         D1["policies: dropDisabledMsg ·<br/>dropIncompatible · content dedup"]
-        D2["SID conflict → strategy:<br/>highest-rev / source-priority /<br/>renumber-private"]
+        D2["SID conflict → winner:<br/>highest-rev / source-priority ·<br/>loser: drop/reassign"]
         D3["remap to the free clearndr block<br/>1,000,000,000+ — sidmap.json map,<br/>md5 formula shared with the python pipeline"]
         D4{"conflicting twins — rules matching<br/>after removing sid and reference:*?"}
         D1 --> D2
@@ -299,7 +298,7 @@ snort.org behavior verified in practice:
 |---|---|
 | `dedupSidStrategy = highest-rev` | on an SID conflict the rule with the highest `rev` is kept (default) |
 | `dedupSidStrategy = source-priority` | the source with the lower `priority` number wins |
-| `dedupSidStrategy = renumber-private` | conflicting SIDs are moved into the private range |
+| `dedupSidConflict = reassign` | the loser of an SID conflict with a different detection stays in the build under a new deterministic SID (2e9 block → remap into the clearndr block) |
 | `dedupContent = true` | removes rules with the same `contentHash` (canonical SHA-1 without sid/rev/msg/metadata) but different SIDs |
 | `dropIncompatible = true` | excludes Suricata-incompatible constructs from the build (preproc, keystore, replace, rawbytes…) |
 | `dropDisabledMsg = true` | removes DELETED/DISABLED stubs |

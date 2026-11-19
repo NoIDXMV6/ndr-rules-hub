@@ -109,7 +109,7 @@ flowchart TB
 | `Source` | источник правил | `category` (ruleset / ip-list / domain-list / url-list), `kind` (url / tarball / local), `authType` (none / oinkcode / authkey / basic), `extraJson` (параметры конвертера и авторизации), `priority` (меньше = главнее), `status`, `badge`, `builtin` |
 | `Rule` | правило конкретного источника | `sid`, `rev`, `action`, `proto`, `msg`, `raw`, `contentHash` (канонический SHA-1 без sid/rev/msg/metadata), `suricataOk`, `compatNotes`; уникальность `[sourceId, sid]` |
 | `Build` | результат сборки | `statsJson` (статистика по источникам/дубликатам), `policyJson` (применённые политики), `fileName`, `sha256`, `sizeBytes`, `source` (manual / cron) |
-| `Setting` | настройки (k-v) | oinkcode, стратегии дедупликации, privateSidStart, cron, параметры экспорта |
+| `Setting` | настройки (k-v) | oinkcode, стратегии дедупликации (победитель/проигравший), cron, параметры экспорта |
 | `LogEntry` | журнал событий | `level` (ok/warn/error/success), `scope`, `message` |
 | `VpnProfile` | сохранённый wg-quick конфиг | `name`, `config`, `active`, `lastStatusJson` |
 
@@ -137,13 +137,13 @@ flowchart LR
     end
 
     PARSE["Парсинг — parser.ts<br/>заголовок + опции, многострочные,<br/>pcre со скобками"]
-    CONV["Конвертация — convert.ts · sidmap.ts<br/>IP-чанки · домены · URL,<br/>приватный диапазон SID, предохранители"]
+    CONV["Конвертация — convert.ts · sidmap.ts<br/>IP-чанки · домены · URL,<br/>SID-блок 1 100 000+, предохранители"]
 
     RULES[("Prisma · Rule — по источнику<br/>sid · rev · raw · contentHash<br/>suricataOk · compatNotes")]
 
     subgraph BUILD["Сборка — build.ts · service.ts"]
         direction TB
-        MERGE["mergeSources(): конфликт SID →<br/>highest-rev / source-priority /<br/>renumber-private · dropIncompatible"]
+        MERGE["mergeSources(): конфликт SID →<br/>highest-rev / source-priority ·<br/>проигравший: drop/reassign · dropIncompatible"]
         CONTENT["content-дедуп: SHA-1<br/>без sid/rev/msg/metadata/reference"]
         REMAP["remapToClearndrBlock():<br/>SID → свободный блок 1e9+,<br/>общая карта sidmap.json"]
         GATE{"гейт Clear NDR:<br/>конфликтные близнецы?"}
@@ -184,10 +184,11 @@ flowchart LR
 2. **Парсинг (`parser.ts`)** — разбор заголовка и опций правила в структуру (SID, rev, msg,
    classtype, proto, направление), поддержка многострочных правил и pcre со скобками.
 3. **Конвертация списков (`convert.ts`, `sidmap.ts`)** — IP/CIDR чанками по N адресов на SID,
-   домены → DNS-правила, URL → HTTP-правила; SID из приватного диапазона (`privateSidStart`,
-   стандарт 1 000 000–1 999 999); предохранители `perRule`/`maxRules`.
+   домены → DNS-правила, URL → HTTP-правила; SID из блока 1 100 000+; предохранители
+   `perRule`/`maxRules`.
 4. **Дедупликация и сборка (`build.ts`)** — устранение дубликатов по SID и по содержимому,
-   разрешение конфликтов SID, опциональная перенумерация; фильтр совместимости.
+   разрешение конфликтов SID (победитель — стратегией, проигравший — политикой
+   drop/reassign); фильтр совместимости.
 5. **Валидация** — конвертер `scripts/s2x_convert.py` + цикл `suricata -T` (для офлайн-пакета
    `dist/`; онлайн-сборка применяет статический фильтр совместимости).
 6. **Экспорт (`exporter.ts`)** — пять режимов: файл для ручного импорта; **Clear NDR REST** —
@@ -231,7 +232,7 @@ flowchart TD
     subgraph G4["Гейт 4 — Сборка · build.ts"]
         direction TB
         D1["политики: dropDisabledMsg ·<br/>dropIncompatible · content-дедуп"]
-        D2["конфликт SID → стратегия:<br/>highest-rev / source-priority /<br/>renumber-private"]
+        D2["конфликт SID → победитель:<br/>highest-rev / source-priority ·<br/>проигравший: drop/reassign"]
         D3["remap в свободный clearndr-блок<br/>1 000 000 000+ — карта sidmap.json,<br/>формула md5 общая с python-конвейером"]
         D4{"конфликтные близнецы —<br/>совпадают после снятия<br/>sid и reference:*?"}
         D1 --> D2
@@ -297,7 +298,7 @@ flowchart TD
 |---|---|
 | `dedupSidStrategy = highest-rev` | при конфликте SID остаётся правило с максимальным `rev` (по умолчанию) |
 | `dedupSidStrategy = source-priority` | выигрывает источник с меньшим числом `priority` |
-| `dedupSidStrategy = renumber-private` | конфликтующие SID переводятся в приватный диапазон |
+| `dedupSidConflict = reassign` | проигравший при конфликте SID с другим детектом остаётся в сборке с новым детерминированным SID (блок 2e9 → remap в clearndr-блок) |
 | `dedupContent = true` | удаляет правила с одинаковым `contentHash` (канонический SHA-1 без sid/rev/msg/metadata), но разными SID |
 | `dropIncompatible = true` | не включает в сборку конструкции, несовместимые с Suricata (preproc, keystore, replace, rawbytes…) |
 | `dropDisabledMsg = true` | удаляет заглушки DELETED/DISABLED |
