@@ -10,14 +10,14 @@ services:
       dockerfile: Dockerfile
       # Реестр npm для этапа deps сборки. По умолчанию — официальный
       # registry.npmjs.org; при медленной/троттлируемой сети хоста задайте
-      # зеркало в .env — NPM_REGISTRY=https://registry.npmmirror.com — и
+      # зеркало в .env (RU: npm-mirror.gitverse.ru, CN: registry.npmmirror.com) — и
       # пересоберите (docker compose up -d --build). bun.lock не содержит URL
       # реестра, --frozen-lockfile с зеркалом совместим (целостность пакетов
       # проверяется по integrity-хэшам из lockfile). Вторая ручка —
       # BUN_INSTALL_TIMEOUT (секунды, по умолчанию 2700): предохранитель
       # bun install от «молчаливого» зависания на проблемной сети.
       args:
-        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}  # зеркало: https://npm-mirror.gitverse.ru (RU) или https://registry.npmmirror.com
         BUN_INSTALL_TIMEOUT: ${BUN_INSTALL_TIMEOUT:-2700}
     image: ndr-rules-hub:latest
     container_name: ndr-rules-hub

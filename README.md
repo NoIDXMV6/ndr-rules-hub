@@ -120,14 +120,22 @@ docker compose up -d --build
 # 1) скорость до реестра с хоста сборки (реестр отдаёт ~31 МБ метаданных next,
 #    поэтому смотрите именно total на фоне size):
 curl -o /dev/null -sS -w 'total %{time_total}s  size %{size_download}B\n' https://registry.npmjs.org/next
-# 2) сравните зеркало — выберите тот, что быстрее с вашего хоста:
-curl -o /dev/null -sS -w 'total %{time_total}s  size %{size_download}B\n' https://registry.npmmirror.com/next
+# 2) сравните зеркала — выберите тот, что быстрее с вашего хоста:
+#    российское (Gitverse) и китайское (Alibaba):
+curl -o /dev/null -sS -w 'gitverse: total %{time_total}s  size %{size_download}B\n' https://npm-mirror.gitverse.ru/next
+curl -o /dev/null -sS -w 'npmmirror: total %{time_total}s  size %{size_download}B\n' https://registry.npmmirror.com/next
 # 3) на хосте быстро, а в сборке висит → DNS/MTU bridge-сети:
 docker build --network=host -t ndr-rules-hub:local .
 # 4) зеркало npm можно закрепить в .env — все последующие сборки подхватят его автоматически:
-#    NPM_REGISTRY=https://registry.npmmirror.com
+#    NPM_REGISTRY=https://npm-mirror.gitverse.ru    (российское, Gitverse)
+#    NPM_REGISTRY=https://registry.npmmirror.com    (Китай, Alibaba)
 docker compose up -d --build
 ```
+
+> Оба зеркала проверены холодным `bun install --frozen-lockfile` (893 пакета,
+> integrity-проверка по хэшам lockfile пройдена). У зеркала Gitverse медленная
+> отдача метаданных пакета (`/next`, ~31 МБ), но bun при `--frozen-lockfile`
+> метаданные не запрашивает — качает только tarballs, они отдаются быстро.
 
 ## Диагностика (если UI показывает ошибку API)
 
