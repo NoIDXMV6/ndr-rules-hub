@@ -83,6 +83,8 @@ server.log
 !/scripts/test-osd-stale-run.ts
 !/scripts/gh_release_backfill.sh
 !/scripts/gh_release_create.sh
+# заметки релизов (тела GitHub Releases) — тоже версионировать
+!/scripts/release-notes
 !/scripts/gotify-deploy.sh
 /mini-services
 dev.log

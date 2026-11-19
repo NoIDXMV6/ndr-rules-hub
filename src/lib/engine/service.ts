@@ -600,6 +600,9 @@ export async function buildFinal(origin = 'manual', userId: string | null = null
 
   const policy: Partial<DedupPolicy> = {
     sidStrategy: settings.dedupSidStrategy as DedupPolicy['sidStrategy'],
+    // проигравший при конфликте SID с другим детектом: 'reassign' — оставить
+    // оба правила, проигравшему временный SID (финальный remap даст свой слот)
+    sidConflict: settings.dedupSidConflict === 'reassign' ? 'reassign' : 'drop',
     contentDedup: settings.dedupContent === 'true',
     dropIncompatible: settings.dropIncompatible === 'true',
     dropDisabledMsg: settings.dropDisabledMsg === 'true',
@@ -618,7 +621,7 @@ export async function buildFinal(origin = 'manual', userId: string | null = null
     stats.workspace = { userId, sources: sources.length }
   }
   setBuildStage('conflict-dedup', 45)
-  addBuildLog(`Слияние завершено: дубликатов по SID ${stats.duplicateBySid}, по содержимому ${stats.duplicateByContent}, несовместимых ${stats.incompatibleDropped}`)
+  addBuildLog(`Слияние завершено: дубликатов по SID ${stats.duplicateBySid}, по содержимому ${stats.duplicateByContent}, несовместимых ${stats.incompatibleDropped}, переназначено SID ${stats.reassigned ?? 0}`)
 
   // Гейт Clear NDR: правила-близнецы (совпадают после снятия sid/reference:*)
   // роняют импорт с «conflicting SID in same source». Убираем их ВСЕГДА,

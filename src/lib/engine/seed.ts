@@ -572,6 +572,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   mispAuthKey: process.env.MISP_AUTH_KEY || '', // ключ REST API MISP (заголовок Authorization)
   openNrdLicense: process.env.OPENNRD_LICENSE || '', // код лицензии Open NRD (Stamus Networks) — сегмент пути ti.stamus-networks.io/<КОД>/…
   dedupSidStrategy: 'highest-rev', // highest-rev | source-priority | renumber-private
+  dedupSidConflict: 'drop', // drop | reassign — проигравший при конфликте SID с другим детектом
   dedupContent: 'true',
   dropIncompatible: 'true',
   dropDisabledMsg: 'true',

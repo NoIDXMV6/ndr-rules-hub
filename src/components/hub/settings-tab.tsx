@@ -184,6 +184,17 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
               <p className="text-xs text-muted-foreground mt-1">{t.settings.privateSidHelp}</p>
             </div>
           </div>
+          <div className="max-w-xl">
+            <Label className="text-foreground">{t.settings.sidConflict}</Label>
+            <Select value={s.dedupSidConflict ?? 'drop'} onValueChange={(v) => set('dedupSidConflict', v)}>
+              <SelectTrigger className="bg-card border-input"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                <SelectItem value="drop">{t.settings.sidConflictDrop}</SelectItem>
+                <SelectItem value="reassign">{t.settings.sidConflictReassign}</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">{t.settings.sidConflictHelp}</p>
+          </div>
           <div className="space-y-3">
             <SwitchRow label={t.settings.switchDedupContent} checked={(s.dedupContent ?? 'true') === 'true'} onChange={(v) => set('dedupContent', String(v))} />
             <SwitchRow label={t.settings.switchDropIncompatible} checked={(s.dropIncompatible ?? 'true') === 'true'} onChange={(v) => set('dropIncompatible', String(v))} />

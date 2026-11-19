@@ -739,6 +739,11 @@ PersistentKeepalive = 25
     strategyRenumber: 'renumber into the private range',
     sidStrategyHelp:
       'SID conflicts between sources are resolved by the selected strategy; when revs are equal, the higher-priority source wins.',
+    sidConflict: 'SID conflict loser (rules differ)',
+    sidConflictDrop: 'drop (default)',
+    sidConflictReassign: 'keep and assign a new SID',
+    sidConflictHelp:
+      'When two rules share a SID but their content differs: "drop" keeps only the strategy winner above; "keep and assign a new SID" puts both rules into the build — the loser gets a deterministic SID from the 2,000,000,000+ block (before the final remap into the clearndr block). Exact copies (identical detection) are dropped either way.',
     privateSidStart: 'Private SID range start',
     privateSidHelp: 'For converter rules and renumbering (standard: 1,000,000–1,999,999).',
     switchDedupContent: 'Remove content duplicates (identical rules with different SIDs)',

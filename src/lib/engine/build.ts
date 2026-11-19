@@ -22,6 +22,9 @@ export interface SourceRules {
 
 export interface DedupPolicy {
   sidStrategy: 'highest-rev' | 'source-priority' | 'renumber-private'
+  /** проигравший при конфликте SID, если детекты РАЗНЫЕ: 'drop' — отбросить
+   *  (историческое поведение), 'reassign' — оставить и назначить новый SID */
+  sidConflict: 'drop' | 'reassign'
   dropIncompatible: boolean
   dropDisabledMsg: boolean      // удалять правила с msg "DELETED"/"DISABLED"
   contentDedup: boolean         // удалять правила с одинаковым содержимым (hash), оставляя первое
@@ -53,6 +56,11 @@ export interface BuildStats {
   workspace?: { userId: string; sources: number }
   perSource: Record<string, { total: number; kept: number; droppedSid: number; droppedContent: number; droppedCompat: number }>
   sidsReplaced: Array<{ sid: number; newSid: number; source: string; keptRev: number; droppedRev: number; keptSource: string }>
+  /** проигравшим при конфликте SID (разные детекты) назначен новый SID;
+   *  такие правила УШЛИ В СБОРКУ — они не входят в duplicateBySid */
+  reassigned?: number
+  /** аудит переназначений: исходный sid → временный sid reassign-блока */
+  sidsReassigned?: Array<{ sid: number; newSid: number; source: string; rev: number }>
 }
 
 export interface ArchiveInfo {
@@ -71,6 +79,7 @@ export interface BuiltRule {
 
 const DEFAULTS: DedupPolicy = {
   sidStrategy: 'highest-rev',
+  sidConflict: 'drop',
   dropIncompatible: false,
   dropDisabledMsg: true,
   contentDedup: true,
@@ -286,17 +295,26 @@ export function mergeSources(
     renumbered: 0,
     perSource: {},
     sidsReplaced: [],
+    sidsReassigned: [],
+    reassigned: 0,
   }
 
   // кандидаты по SID
   const bySid = new Map<number, { src: SourceRules; rule: SourceRules['rules'][number]; kept: boolean }>()
   const contentSeen = new Map<string, number>() // hash -> sid первого правила
+  // все SID всех входных правил (включая отброшенные заглушки/несовместимые):
+  // временный SID проигравшего не должен совпасть НИ с одним входным — иначе
+  // remap сведёт его с живым правилом того же источника в один слот
+  const allInputSids = new Set<number>()
+  // проигравшие при конфликте SID с другим детектом (фаза 2 назначит им SID)
+  const reassignQueue: Array<{ src: SourceRules; rule: SourceRules['rules'][number]; keptCounted: boolean }> = []
 
   for (const src of sources) {
     const per = { total: 0, kept: 0, droppedSid: 0, droppedContent: 0, droppedCompat: 0 }
     for (const rule of src.rules) {
       per.total++
       stats.totalInputRules++
+      allInputSids.add(rule.sid)
 
       if (p.dropIncompatible && !rule.suricataOk) {
         per.droppedCompat++
@@ -318,17 +336,32 @@ export function mergeSources(
       }
       // конфликт SID — выбираем победителя
       const winner = pickWinner(existing, { src, rule }, p)
-      stats.duplicateBySid++
-      if (winner !== existing) {
-        existing.kept = false
-        bySid.set(rule.sid, { src, rule, kept: true })
-        per.kept++
-        const loserSrc = stats.perSource[existing.src.sourceName]
-        if (loserSrc) {
-          loserSrc.kept--
-          loserSrc.droppedSid++
+      const loser = winner === existing ? { src, rule } : existing
+      // разные детекты? hashRule снимает msg/rev/metadata — сравниваем именно
+      // детектирующую часть; при совпадении проигравший — функциональная копия
+      // победителя, и терять её безопасно (двойное срабатывание смысла нет)
+      const differentDetection = loser.rule.contentHash !== winner.rule.contentHash
+      if (p.sidConflict === 'reassign' && differentDetection) {
+        if (winner !== existing) {
+          // победитель занимает слот в bySid; вытесненный чемпион уходит в
+          // очередь на новый SID (его kept++ уже посчитан при входе в bySid)
+          bySid.set(rule.sid, { src, rule, kept: true })
+          per.kept++
         }
-        if (winner.rule.sid !== undefined) {
+        // keptCounted: вытесненный чемпион уже учтён kept++; входящий
+        // проигравший ещё не учтён — его посчитает фаза 2
+        reassignQueue.push({ src: loser.src, rule: loser.rule, keptCounted: winner !== existing })
+      } else {
+        stats.duplicateBySid++
+        if (winner !== existing) {
+          existing.kept = false
+          bySid.set(rule.sid, { src, rule, kept: true })
+          per.kept++
+          const loserSrc = stats.perSource[existing.src.sourceName]
+          if (loserSrc) {
+            loserSrc.kept--
+            loserSrc.droppedSid++
+          }
           stats.sidsReplaced.push({
             sid: rule.sid,
             newSid: rule.sid,
@@ -337,18 +370,44 @@ export function mergeSources(
             droppedRev: existing.rule.rev,
             keptSource: src.sourceName,
           })
+        } else {
+          per.droppedSid++
         }
-      } else {
-        per.droppedSid++
       }
     }
     stats.perSource[src.sourceName] = per
   }
 
-  // дедупликация по содержимому
+  // фаза 2: переназначение SID проигравшим при конфликте (sidConflict: 'reassign').
+  // Временный SID из блока 2e9..2.1e9; финальный remap переводит его в
+  // clearndr-блок по карте «источник|временный sid» (см. комментарий к reassignSlot)
+  const reassignEntries: Array<{ sid: number; src: SourceRules; rule: SourceRules['rules'][number] }> = []
+  for (const item of reassignQueue) {
+    let cand = reassignSlot(`${item.src.sourceName}|${item.rule.contentHash}`)
+    while (allInputSids.has(cand)) {
+      cand++
+      if (cand > REASSIGN_BLOCK_END) cand = REASSIGN_BLOCK_START // блок 100M не исчерпывается на реальных наборах
+    }
+    allInputSids.add(cand)
+    const raw = replaceSid(item.rule.raw, cand)
+    if (!raw.includes(`sid:${cand};`)) {
+      // нестандартный raw: опцию sid не удалось заменить — откат к отбрасыванию
+      stats.duplicateBySid++
+      continue
+    }
+    stats.reassigned = (stats.reassigned ?? 0) + 1
+    stats.sidsReassigned!.push({ sid: item.rule.sid, newSid: cand, source: item.src.sourceName, rev: item.rule.rev })
+    reassignEntries.push({ sid: cand, src: item.src, rule: { ...item.rule, raw } })
+    if (!item.keptCounted) {
+      const per = stats.perSource[item.src.sourceName]
+      if (per) per.kept++
+    }
+  }
+
+  // дедупликация по содержимому (порядок: чемпионы по SID в порядке источников,
+  // затем переназначенные — при равном содержимом первое вхождение побеждает)
   const result: BuiltRule[] = []
-  for (const [sid, entry] of bySid) {
-    if (!entry.kept) continue
+  const emitEntry = (sid: number, entry: { src: SourceRules; rule: SourceRules['rules'][number] }) => {
     if (p.contentDedup) {
       const first = contentSeen.get(entry.rule.contentHash)
       if (first !== undefined) {
@@ -358,12 +417,17 @@ export function mergeSources(
           per.kept--
           per.droppedContent++
         }
-        continue
+        return
       }
       contentSeen.set(entry.rule.contentHash, sid)
     }
     result.push({ sid, rev: entry.rule.rev, raw: entry.rule.raw, sourceName: entry.src.sourceName })
   }
+  for (const [sid, entry] of bySid) {
+    if (!entry.kept) continue
+    emitEntry(sid, entry)
+  }
+  for (const e of reassignEntries) emitEntry(e.sid, e)
 
   // перенумерация приватных SID при стратегии renumber-private
   let nextPrivate = p.privateSidStart
@@ -389,6 +453,26 @@ export function mergeSources(
   result.sort((a, b) => a.sid - b.sid)
   stats.uniqueSids = result.length
   return { rules: result, stats }
+}
+
+// ── Переназначение SID проигравшему при конфликте (sidConflict: 'reassign') ──
+// Классический случай: Talos публикует под одним sid ДВА разных детекта
+// (например «MALWARE X (x64)» и «MALWARE X (arm)») — историческая политика
+// «drop» оставляла в сборке только победителя pickWinner, второй детект
+// терялся. При 'reassign' проигравший остаётся: ему выдаётся временный SID
+// из ОТДЕЛЬНОГО блока 2e9..2.1e9 (вне clearndr-блока 1e9..1.1e9), поэтому
+// финальный remap (remapToClearndrBlock) переводит его в clearndr-блок по
+// ключу «источник|временный sid» и фиксирует в data/sidmap.json — слот
+// гарантированно не занят ничем другим и стабилен между сборками.
+// Кандидат детерминирован: md5("источник|contentHash") — hashRule снимает
+// msg/rev/metadata, поэтому новые rev/msg правила НЕ меняют его SID.
+export const REASSIGN_BLOCK_START = 2_000_000_000
+export const REASSIGN_BLOCK_SIZE = 100_000_000
+export const REASSIGN_BLOCK_END = REASSIGN_BLOCK_START + REASSIGN_BLOCK_SIZE - 1
+
+function reassignSlot(key: string): number {
+  const h = createHash('md5').update(`reassign|${key}`, 'utf8').digest('hex')
+  return REASSIGN_BLOCK_START + (parseInt(h.slice(0, 8), 16) % REASSIGN_BLOCK_SIZE)
 }
 
 function pickWinner(
@@ -427,6 +511,7 @@ export function renderFinalFile(
     lines.push(`# Дубликатов по содержимому устранено: ${meta.stats.duplicateByContent}`)
     lines.push(`# Отброшено несовместимых с Suricata: ${meta.stats.incompatibleDropped}`)
     if (meta.stats.conflictingRemoved) lines.push(`# Конфликтных близнецов Clear NDR удалено: ${meta.stats.conflictingRemoved}`)
+    if (meta.stats.reassigned) lines.push(`# Проигравшим при конфликте SID назначен новый SID: ${meta.stats.reassigned}`)
     if (meta.stats.sanitizedForScirius) lines.push(`# Адаптировано под парсер Clear NDR (sid перенесён в начало опций): ${meta.stats.sanitizedForScirius}`)
     if (meta.stats.excludedByCategory) lines.push(`# Исключено выключенными категориями: ${meta.stats.excludedByCategory}`)
     if (meta.stats.excludedByRule) lines.push(`# Исключено вручную отключёнными правилами: ${meta.stats.excludedByRule}`)
