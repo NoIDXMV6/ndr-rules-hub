@@ -18,7 +18,7 @@ Boundary(sec, "src/lib/security") {
   Component(session, "session.ts", "TypeScript", "Сессии: cookie ndrh_sid (HttpOnly, SameSite=Lax, Secure), в БД SHA-256, слайдинг-TTL, проверка статуса пользователя")
   Component(password, "password.ts", "TypeScript", "scrypt N=16384/r=8/p=1, timingSafeEqual; политика пароля (8+, буквы+цифры)")
   Component(ids, "ids.ts", "TypeScript", "randomToken (base64url 32Б), sha256hex, safeEqual (константное сравнение)")
-  Component(dltoken, "download-token.ts", "TypeScript", "Персональные токены ndrt_*: SHA-256 в БД, prefix для UI, отзыв/срок, анти-перебор dlfail:<ip> (10/5мин → блок 15мин), статистика скачиваний")
+  Component(dltoken, "download-token.ts", "TypeScript", "Персональные токены ndrt_*: SHA-256 в БД, prefix для UI, отзыв/срок, scope rules/domains/both (правила и/или список DNS), анти-перебор dlfail:<ip> (10/5мин → блок 15мин), статистика скачиваний")
   Component(audit, "audit.ts", "TypeScript", "Журнал AuthEvent (fire-and-forget): register/login_*/verify/download*/ratelimit; подрезка >20k")
 }
 

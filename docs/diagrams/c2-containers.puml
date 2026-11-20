@@ -1,8 +1,9 @@
 ' ─────────────────────────────────────────────────────────────────────────────
 ' NDR Rules Hub — C4 Containers (уровень C2): контейнеры внутри системы.
 ' Docker-контейнер: Next.js (UI + API), слой безопасности, движок (fetch/build/
-' export/scheduler), SQLite (Prisma, WAL), скрипты обновления Clear NDR/OSD,
-' WireGuard; перед контейнером — Caddy (TLS, X-Forwarded-*).
+' export/scheduler + DNS-модуль доменных списков), SQLite (Prisma, WAL),
+' скрипты обновления Clear NDR/OSD, WireGuard; уведомления Telegram/Gotify;
+' перед контейнером — Caddy (TLS, X-Forwarded-*).
 ' ─────────────────────────────────────────────────────────────────────────────
 @startuml c2-containers
 !include <C4/C4_Container>
@@ -11,21 +12,25 @@ title NDR Rules Hub — C2. Контейнеры (один Docker-образ, р
 Person(admin, "Администратор")
 Person(user, "Пользователь")
 System_Boundary(hubbox, "NDR Rules Hub (docker-контейнер, порт 3000)") {
-  Container(ui, "Web UI", "Next.js / React / shadcn", "Вкладки по роли: админ — все (вкл. «Пользователи»), пользователь — Обзор, Источники, Категории, Правила, Сборка и экспорт, Обновление, OSD, Помощь, О системе")
-  Container(api, "API-роуты Next.js", "Next.js Route Handlers", "/api/export, /api/build, /api/sources, /api/auth/*, /api/tokens/* и др.; guard на каждом: rate limit → CSRF → сессия/роль")
-  Container(seclib, "Слой безопасности", "TypeScript, src/lib/security", "guard, ratelimit (скользящее окно), queue (очередь запросов), throttle (ведёрко канала), session, password (scrypt), download-token, audit (AuthEvent)")
-  ContainerDb(db, "SQLite hub.db", "SQLite + Prisma (WAL, connection_limit=1)", "Source(+ownerId), Rule, Build, Category, RuleOverride, Setting, LogEntry, User, Session, DownloadToken, AuthEvent; том /app/data")
-  Container(engine, "Движок правил", "TypeScript, src/lib/engine", "fetcher (зеркала, auth), parser, конвертеры, build (дедуп/политики SID), exporter (PUSH/PULL), scheduler (node-cron), serve (отдача)")
+  Container(ui, "Web UI", "Next.js / React / shadcn", "Вкладки по роли: админ — все (вкл. «Пользователи», «DNS списки»), пользователь — Обзор, Источники, Категории, Правила, Сборка и экспорт, Обновление, OSD, Помощь, О системе")
+  Container(api, "API-роуты Next.js", "Next.js Route Handlers", "/api/export, /api/build, /api/sources, /api/dns/* (sources/categories/records/build/export), /api/auth/*, /api/tokens/* и др.; guard на каждом: rate limit → CSRF → сессия/роль")
+  Container(seclib, "Слой безопасности", "TypeScript, src/lib/security", "guard, ratelimit (скользящее окно), queue (очередь запросов), throttle (ведёрко канала), session, password (scrypt), download-token (scope rules/domains/both), audit (AuthEvent)")
+  ContainerDb(db, "SQLite hub.db", "SQLite + Prisma (WAL, connection_limit=1)", "Source(+ownerId), Rule, Build, Category, RuleOverride, DomainSource/Record/Category/Override/Build (DNS-модуль), Setting, LogEntry, User, Session, DownloadToken, AuthEvent; том /app/data")
+  Container(engine, "Движок правил", "TypeScript, src/lib/engine", "fetcher (зеркала, auth), parser, конвертеры, build (дедуп/политики SID), exporter (PUSH/PULL), scheduler (node-cron: основной цикл + отдельное расписание DNS-цикла), serve (отдача)")
+  Container(dnsengine, "DNS-модуль", "TypeScript, src/lib/engine (dns*.ts)", "доменные списки: каталог 46 хостлистов + импорт SQL-дампа, слияние по приоритету (белый список, дубликаты, категории, ручные решения), сборка списка заблокированных доменов в 4 форматах, отдача GET /api/dns/export")
+  Container(notify, "Уведомления", "TypeScript, notify.ts", "Telegram (прокси http/socks5, свой Bot API Server) и Gotify; события: полный цикл (со строкой DNS), отдельный DNS-цикл, WireGuard, диск; переключатели notifyOn*")
   Container(scripts, "Скрипты хоста", "bash/python3", "clearndr-update.sh, clearndr-repair-stack.sh, OSD-аналитика (SSH/local)")
-  ContainerDb(files, "Каталоги данных", "/app/data", "exports/ (сборки и tgz), cache/, archives/, wireguard/, clearndr-update/runs")
+  ContainerDb(files, "Каталоги данных", "/app/data", "exports/ (сборки и tgz), exports/domains/ (список заблокированных доменов), domains/ndr/ (правила дампа), cache/, archives/, wireguard/, clearndr-update/runs")
   Container(vpn, "WireGuard", "wireguard-tools", "Туннели для загрузок (админ)")
 }
 
 System_Ext(caddy, "Caddy (reverse proxy)", "TLS, X-Forwarded-For — источник IP для лимитов")
 System_Ext(clearndr, "Clear NDR (Scirius)")
-System_Ext(feeds, "Интернет-источники правил")
+System_Ext(feeds, "Интернет-источники правил", "правила + DNS-хостлисты")
 System_Ext(osd, "OpenSearch")
 System_Ext(dockerhost, "Хост с Clear NDR", "SSH или local docker")
+System_Ext(telegram, "Telegram Bot API", "уведомления + 2FA (по прокси при необходимости)")
+System_Ext(gotify, "Gotify-сервер", "push-уведомления (self-hosted)")
 
 Rel(admin, caddy, "HTTPS")
 Rel(user, caddy, "HTTPS")
@@ -35,9 +40,15 @@ Rel(clearndr, api, "GET /api/export?token=…/Authorization", "PULL")
 Rel(api, seclib, "guard(req) на каждом роуте")
 Rel(seclib, db, "Session / DownloadToken / AuthEvent / User")
 Rel(api, engine, "задачи конвейера")
+Rel(api, dnsengine, "источники/категории/записи/сборка DNS")
 Rel(engine, db, "Source/Rule/Build/Setting/LogEntry")
+Rel(dnsengine, db, "DomainSource/Record/Category/Override/Build")
 Rel(engine, files, "чтение/запись сборок и кэша")
+Rel(dnsengine, files, "список доменов → exports/domains/")
 Rel(engine, feeds, "загрузка правил", "HTTP(S), через VPN при включении")
+Rel(dnsengine, feeds, "загрузка хостлистов", "HTTP(S)")
+Rel(notify, telegram, "sendMessage", "HTTPS")
+Rel(notify, gotify, "POST /message", "HTTPS")
 Rel(api, scripts, "прогоны обновления/OSD (лог в реальном времени)")
 Rel(scripts, dockerhost, "SSH/local")
 Rel(api, osd, "импорт дашбордов")

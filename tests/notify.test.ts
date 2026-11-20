@@ -187,6 +187,28 @@ describe('notify: события', () => {
     const go = reqs.find((r) => r.url.includes('gotify.local/message'))!
     expect(JSON.parse(go.opts.body!).title).toContain('WireGuard VPN')
   })
+})
+
+describe('notify: события DNS-списков', () => {
+  it('notifyOnDns=false — DNS-событие никуда не уходит', async () => {
+    reqs.length = 0
+    await setSetting('notifyOnDns', 'false')
+    const r = await notify.notifyEvent('dns', 'success', 'DNS-цикл', '...')
+    expect(r).toEqual([])
+    expect(reqs).toEqual([])
+  })
+
+  it('событие dns при включённых каналах уходит в оба со строкой «DNS-списки»', async () => {
+    reqs.length = 0
+    await setSetting('notifyOnDns', 'true')
+    const failures = await notify.notifyEvent('dns', 'success', 'DNS-цикл (cron): список доменов собран', 'источники: успешно 3, ошибок 0')
+    expect(failures).toEqual([])
+    expect(reqs).toHaveLength(2)
+    const tg = reqs.find((r) => r.url.includes('api.telegram.org'))!
+    expect(JSON.parse(tg.opts.body!).text).toContain('DNS-списки')
+    const go = reqs.find((r) => r.url.includes('gotify.local/message'))!
+    expect(JSON.parse(go.opts.body!).title).toContain('DNS-списки')
+  })
 
   it('sendTest формирует тестовое сообщение', async () => {
     reqs.length = 0
@@ -203,3 +225,4 @@ describe('notify: события', () => {
     expect(reqs[0].opts.headers!['X-Gotify-Key']).toBe('gtfya.testcfg')
   })
 })
+

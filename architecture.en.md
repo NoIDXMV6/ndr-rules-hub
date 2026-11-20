@@ -154,7 +154,7 @@ flowchart LR
     FINAL["renderFinalFile():<br/>clearndr-import.rules,<br/>sha256 + Build record"]
     VALID["Validation: static compatibility<br/>filter (suricataOk);<br/>offline package — suricata -T loop"]
     EXPORT["Export — exporter.ts<br/>file · Clear NDR REST (Token) ·<br/>HTTP POST · volume directory"]
-    CRON["cron — node-cron<br/>fetch → build → export"]
+    CRON["cron — node-cron<br/>fetch → build → export<br/>(+ DNS cycle: inline or separate schedule)"]
     LOG["LogEntry: error —<br/>build aborted"]
 
     SRC1 --> AUTH
@@ -322,9 +322,10 @@ Categories / Records (search, duplicates, manual decisions) / Build & Export.
 | Merge (`dns.ts mergeDomainSources`) | sources by ascending `priority`: the first one takes the domain, the rest count duplicates; the allowlist is applied at the end; entries are lazy (AsyncIterable from the DB cursor — millions of rows without memory pressure) |
 | Dump import (`dns-import.ts`) | streaming export.sql parse (MariaDB/HeidiSQL): 502 MB → ~2.2M domains and 151 categories without loading into memory (~22 s); category counters are cached in the `dnsIfaroCategoryCounts` setting |
 | Dump → NDR conversion | the remaining resource types are not lost: **URL** — the host goes into the DNS list (with categories), the URL itself becomes an HTTP rule; **IP/CIDR** — chunked IP rules of 500 (drop ip, SID 1,200,000+); **Regex** — pcre on `http.uri.raw` (SID 1,400,000+, compile validation and too-broad pattern guard); **Phrase** — `http.response_body` content (SID 1,500,000+). Rules are written to `data/domains/ndr/*.rules` and registered as DISABLED “Filtering dump: …” sources (rules load into the DB immediately — the counter is honest; they enter the build only after the source is enabled) |
-| Build (`buildDomainList`) | 4 file formats: plain / hosts (`0.0.0.0 d`) / dnsmasq (`address=/d/`) / adblock (`||d^`); progress — a separate singleton (dns-progress.ts) |
+| Build (`buildDomainList`) | 4 file formats: plain / hosts (`0.0.0.0 d`) / dnsmasq (`address=/d/`) / adblock (`||d^`); progress — a separate singleton (dns-progress.ts). The “Build & Export” tab mirrors the rules “Final rule set build” tab: header button, file settings, staged progress with a terminal log, latest-build badges, a metric grid (input/duplicates/allowlist/categories/manual/TLD/final), the per-source table, the serve URL, the `data/exports/domains` files (GET /api/dns/build returns the build and the file list) |
 | Serving | `GET /api/dns/export` — with a download token of the "domains"/"both" scope, the global `dnsServeToken` key, a session; without keys — open (same as rules) |
-| Cron | the full cycle (`runPipeline`) with `dnsCronEnabled` updates the DNS sources and rebuilds the list |
+| DNS cycle (`dnsCycleMode` / `runDnsCycle`) | three modes: `inline` — right after the main cycle (`runPipeline`); `deferred` — on its own `dnsCronSchedule` schedule (a second scheduler cron job — peak-load staggering: rules first, domains later); `off` — disabled by `dnsCronEnabled`. An invalid expression logs a warning and falls back to `inline` |
+| DNS cycle notification | in the `deferred` mode the cycle sends its OWN Telegram/Gotify notification (scope `dns`, the “Domain lists” line, the `notifyOnDns` switch in “Integrations”): source update and list build results; in the `inline` mode the DNS results are part of the full-cycle notification (the “DNS: …” line) |
 
 ## 9. WireGuard VPN layer
 
@@ -417,9 +418,9 @@ sources OK/total, domains in DB and DNS sources OK/total (v1.31.0, amber on sour
 | Rules → Categories | classtype grouping, build toggles, per-rule off switches |
 | Rules → Rules | rule database with search by SID/msg/source and pagination |
 | Rules → Build & Export | build with progress, per-source statistics, files in the export directory |
-| DNS lists → Sources/Categories/Records/Build & Export | the DNS module mirroring “Rules” (v1.29.0): catalog of 46 lists, SQL dump import, search/duplicates/manual decisions, build and serving of the domain list |
-| Integrations → Notifications & services / Clear NDR Update / OpenSearch Dashboards / MISP / WireGuard VPN | system-level integrations (administrator only) |
-| Administration → Settings / Logs / Users | oinkcode and other secrets, dedup policies, export, cron, disk and auto-cleanup; engine log; verification and 2FA reset (Enterprise) |
+| DNS lists → Sources/Categories/Records/Build & Export | the DNS module mirroring “Rules” (v1.29.0): catalog of 46 lists, SQL dump import, search/duplicates/manual decisions; the build mirrors the “Final rule set build” (v1.32.0): staged progress with a log, badges, a metric grid, the per-source table, the serve URL, the `data/exports/domains` files |
+| Integrations → Notifications & services / Clear NDR Update / OpenSearch Dashboards / MISP / WireGuard VPN | system-level integrations (administrator only); notification events — pipeline/domain lists/WireGuard/disk, each with its own switch |
+| Administration → Settings / Logs / Users | oinkcode and other secrets, dedup policies, export, cron (incl. the separate DNS cycle schedule — peak-load staggering), disk and auto-cleanup; engine log; verification and 2FA reset (Enterprise) |
 | Account → Profile & 2FA / Tokens & access (Enterprise) | account details and 2FA (Telegram/TOTP); personal download tokens with rules/domains/both scope and ready-made serving Uri (v1.31.0: the tokens card moved here from “Build & Export”) |
 | Help → Help / About | goals/objectives, pipeline, limits, troubleshooting — accordions; about the system |
 
@@ -695,7 +696,10 @@ of the guide.
 - **docker-compose.yml** — `cap_add: NET_ADMIN`, the `/dev/net/tun` device, sysctls
   (`ip_forward`, `src_valid_mark`), volume `./data:/app/data`, port 3080→3000.
 - **Orchestration** — `service.ts`: cron (node-cron, `TZ`) runs “update sources → build →
-  export”; the same cycle is available via the “Full cycle” button.
+  export”; the same cycle is available via the “Full cycle” button. The DNS cycle (domain-source
+  updates + domain-list rebuild) runs right after the main one (`dnsCycleMode: inline`) or on its
+  own `dnsCronSchedule` schedule (a second cron job, `deferred` — peak-load staggering) with its
+  own Telegram/Gotify notification (`notifyOnDns`, the “Domain lists” line).
 - **Clear NDR integration scripts** — `scripts/clearndr-check.sh` (token, sources, rulesets
   check), `clearndr-setup-pull.sh` (idempotent PULL setup), `clearndr-push.sh` (push a ready
   file, cron-friendly), `clearndr-mock-server.py` (Scirius REST API mock).

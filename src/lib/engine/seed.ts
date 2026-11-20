@@ -634,6 +634,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   notifyOnPipeline: 'true', // события конвейера: загрузка/сборка/экспорт
   notifyOnVpn: 'true', // события WireGuard: поднятие/остановка туннеля
   notifyOnDisk: 'true', // события диска: очистка, пороги занятости
+  notifyOnDns: 'true', // события DNS-списков: отдельный DNS-цикл (обновление источников + сборка списка)
   // ── 2FA / Telegram-бот / рассылка о версиях ─────────────────────────────────
   releaseBroadcastEnabled: 'true', // уведомлять всех с привязанным Telegram о новой версии
   releaseNotes: '', // текст «что нового», добавляемый к рассылке о версии
@@ -685,6 +686,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   dnsBuildFormat: 'plain', // plain | hosts | dnsmasq | adblock — формат итогового файла
   dnsFileName: 'blocked-domains.txt', // имя итогового файла списка доменов
   dnsCronEnabled: 'true', // полный цикл (cron/«Полный цикл») обновляет DNS-источники и пересобирает список
+  dnsCronSchedule: '', // отдельное расписание DNS-цикла (cron): разнести по времени с основным циклом; пусто — сразу за основным
   dnsServeToken: '', // глобальный ключ отдачи /api/dns/export; пусто — открытая отдача (как и у правил)
 }
 

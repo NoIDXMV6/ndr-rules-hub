@@ -1,10 +1,11 @@
 // DNS-фильтрация: сборка списка заблокированных доменов (администратор).
-// POST /api/dns/build — запустить сборку фоном; GET /api/dns/build — последняя сборка.
+// POST /api/dns/build — запустить сборку фоном; GET /api/dns/build — последняя сборка
+// и файлы каталога экспорта DNS (зеркало GET /api/build + PUT /api/export).
 // GET /api/dns/build/progress — прогрессбар и журнал (по аналогии с /api/build/progress).
 import { NextRequest, NextResponse } from 'next/server'
 import { apiError } from '@/lib/api-error'
 import { guard } from '@/lib/security/guard'
-import { buildDomainList, lastDomainBuild } from '@/lib/engine/dns-service'
+import { buildDomainList, lastDomainBuild, listDnsExportFiles } from '@/lib/engine/dns-service'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 3600
@@ -27,8 +28,8 @@ export async function GET(req: NextRequest) {
   if (g instanceof NextResponse) return g
   if (g.role !== 'admin') return NextResponse.json({ error: 'Раздел доступен администратору' }, { status: 403 })
   try {
-    const build = await lastDomainBuild()
-    return NextResponse.json({ build })
+    const [build, files] = await Promise.all([lastDomainBuild(), listDnsExportFiles()])
+    return NextResponse.json({ build, files })
   } catch (e) {
     return apiError(e)
   }

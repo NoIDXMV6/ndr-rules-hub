@@ -8,20 +8,24 @@
 !include <C4/C4_Context>
 title NDR Rules Hub — C1. Контекст системы (редакции Community / Enterprise)
 
-Person(admin, "Администратор", "Полный кабинет: источники, категории, правила, сборка и экспорт, обновление Clear NDR, дашборды OpenSearch, VPN, настройки, журнал, пользователи и верификация")
+Person(admin, "Администратор", "Полный кабинет: источники, категории, правила, сборка и экспорт, DNS списки (фильтрация доменов), обновление Clear NDR, дашборды OpenSearch, VPN, настройки, журнал, пользователи и верификация")
 Person(user, "Пользователь (Enterprise)", "Верифицированный аккаунт: личный кабинет — Обзор, Источники (свои), Категории, Правила, Сборка и экспорт, Обновление Clear NDR, Дашборды OpenSearch, Помощь, О системе")
-System(hub, "NDR Rules Hub", "Управление источниками правил Snort/Suricata, конвейер сборки, экспорт в Clear NDR. Community: без аутентификации; Enterprise: сессии, роли, персональные токены скачивания, защита (rate limit, анти-брутфорс, очередь, троттлинг)")
+System(hub, "NDR Rules Hub", "Управление источниками правил Snort/Suricata + DNS-фильтрация (каталог хостлистов, импорт SQL-базы, сборка списка заблокированных доменов), конвейер сборки, экспорт в Clear NDR. Community: без аутентификации; Enterprise: сессии, роли, персональные токены скачивания (scope правила/домены), защита (rate limit, анти-брутфорс, очередь, троттлинг)")
 
 System_Ext(clearndr, "Clear NDR (Scirius)", "PUSH: REST-импорт по токену; PULL: забирает файл/архив URL-источником по ?token=/Authorization (персональный токен или глобальный ключ отдачи)")
-System_Ext(feeds, "Интернет-источники правил", "ET Open, Talos, abuse.ch, Phishing Army, PT и др. (HTTP(S), зеркала, oinkcode/Auth-Key)")
+System_Ext(feeds, "Интернет-источники", "правила: ET Open, Talos, abuse.ch, Phishing Army, PT и др. (HTTP(S), зеркала, oinkcode/Auth-Key); DNS-хостлисты: AdGuard HostlistsRegistry и др.")
 System_Ext(osd, "OpenSearch / Clear NDR Analytics", "Дашборды и аналитика (импорт пакетов через скрипты)")
 System_Ext(wg, "WireGuard-инфраструктура", "Загрузка правил через туннель (только администратор)")
+System_Ext(telegram, "Telegram Bot API", "Уведомления (конвейер/DNS-цикл/VPN/диск) и 2FA; http/https/socks-прокси")
+System_Ext(gotify, "Gotify-сервер", "Push-уведомления (self-hosted, app-токен)")
 
 Rel(admin, hub, "Настройка и управление (после входа в Enterprise; в Community — без входа)", "HTTPS")
 Rel(user, hub, "Работа в личном кабинете (после регистрации и верификации)", "HTTPS")
-Rel_Back(hub, feeds, "Загрузка правил/списков по расписанию cron и вручную", "HTTP(S)")
+Rel_Back(hub, feeds, "Загрузка правил и DNS-списков по cron (основной + отдельный DNS-цикл) и вручную", "HTTP(S)")
 Rel(clearndr, hub, "PULL: GET /api/export (файл datatype «sig», ?archive=1 — tgz «sigs»)", "HTTPS + token")
 Rel(hub, clearndr, "PUSH: REST upload + update_push_all; обновление стека (SSH/local)", "HTTPS + API-токен")
 Rel(hub, osd, "Импорт/удаление дашбордов, пробы кластера", "HTTP(9200)")
 Rel(hub, wg, "wg-quick up/down, статус", "локальные вызовы")
+Rel_Back(hub, telegram, "Уведомления Telegram и коды 2FA", "HTTPS")
+Rel_Back(hub, gotify, "Push-уведомления Gotify", "HTTPS")
 @enduml

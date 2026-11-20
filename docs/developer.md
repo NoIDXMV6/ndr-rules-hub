@@ -40,7 +40,7 @@ src/
 prisma/schema.prisma         # Source(+ownerId), Rule, Build, ..., User, Session, DownloadToken, AuthEvent
 scripts/db-heal.cjs          # самовосстановление схемы БД тома при старте контейнера
 docs/diagrams/*.puml         # C4 (C1/C2/C3) + sequence (PlantUML)
-openapi.json                 # REST-спецификация (28 путей)
+openapi.json                 # REST-спецификация (44 пути, вкл. DNS-модуль)
 tests/                       # vitest (199 тестов)
 ```
 

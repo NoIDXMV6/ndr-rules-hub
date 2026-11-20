@@ -350,6 +350,7 @@ function NotificationsCard({
         <div className="space-y-2">
           <p className="text-sm font-medium text-foreground">{t.settings.notifyEventsTitle}</p>
           <SwitchRow label={t.settings.notifyOnPipeline} checked={(s.notifyOnPipeline ?? 'true') === 'true'} onChange={(v) => set('notifyOnPipeline', String(v))} />
+          <SwitchRow label={t.settings.notifyOnDns} checked={(s.notifyOnDns ?? 'true') === 'true'} onChange={(v) => set('notifyOnDns', String(v))} />
           <SwitchRow label={t.settings.notifyOnVpn} checked={(s.notifyOnVpn ?? 'true') === 'true'} onChange={(v) => set('notifyOnVpn', String(v))} />
           <SwitchRow label={t.settings.notifyOnDisk} checked={(s.notifyOnDisk ?? 'true') === 'true'} onChange={(v) => set('notifyOnDisk', String(v))} />
         </div>

@@ -437,8 +437,25 @@ export const api = {
     resetOverride: (domain: string) =>
       fetch(`/api/dns/override?domain=${encodeURIComponent(domain)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
     build: () => fetch('/api/dns/build', { method: 'POST' }).then((r) => j<{ ok: boolean; started?: boolean; error?: string }>(r)),
-    lastBuild: () => fetch('/api/dns/build', { cache: 'no-store' }).then((r) => j<{ build: DomainBuildItem | null }>(r)),
+    lastBuild: () => fetch('/api/dns/build', { cache: 'no-store' }).then((r) => j<{ build: DomainBuildItem | null; files?: DnsExportFile[] }>(r)),
     buildProgress: () => fetch('/api/dns/build/progress', { cache: 'no-store' }).then((r) => j<{ progress: DnsBuildProgressInfo | null }>(r)),
+    /** Запустить DNS-сборку и дождаться завершения (опрос /api/dns/build/progress)
+     *  — зеркало api.buildWait для вкладки «Сборка и экспорт» DNS. */
+    buildWait: async (onProgress?: (p: DnsBuildProgressInfo) => void): Promise<DnsBuildProgressInfo['result'] | null> => {
+      const start = await api.dns.build()
+      if (!start.ok) throw new Error(start.error ?? 'не удалось запустить DNS-сборку')
+      const started = Date.now()
+      while (Date.now() - started < 30 * 60_000) {
+        const pr = await api.dns.buildProgress().catch(() => null)
+        const p = pr?.progress ?? null
+        if (p) onProgress?.(p)
+        if (p && !p.active) return p.result
+        // маршрут прогресса недоступен (старый сервер) — не зависаем
+        if (!p && Date.now() - started > 5000) return null
+        await new Promise((res) => setTimeout(res, 1000))
+      }
+      return null
+    },
     importDump: (file: File, name?: string) => {
       const fd = new FormData()
       fd.append('file', file)
@@ -807,6 +824,12 @@ export interface DnsRecordsResponse {
   duplicates?: Array<{ domain: string; sources: number }>
 }
 
+export interface DnsExportFile {
+  name: string
+  size: number
+  mtime: string
+}
+
 export interface DomainBuildItem {
   id: string
   createdAt: string
@@ -817,6 +840,7 @@ export interface DomainBuildItem {
   sizeBytes: number
   source: string
   stats?: {
+    totalInput?: number
     duplicateByDomain?: number
     allowedRemoved?: number
     categoryRemoved?: number

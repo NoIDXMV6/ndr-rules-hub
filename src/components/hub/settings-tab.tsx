@@ -276,6 +276,16 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
             <Input value={s.cronSchedule ?? ''} onChange={(e) => set('cronSchedule', e.target.value)} className="bg-card border-input font-mono" placeholder="0 4 * * *" />
             <p className="text-xs text-muted-foreground mt-1">{t.settings.cronHelp}</p>
           </div>
+          {/* DNS-цикл: отдельное расписание — разнос пиков нагрузки */}
+          <div className="rounded-lg border border-border p-3 space-y-3 max-w-xl">
+            <p className="text-sm font-medium text-foreground">{t.settings.dnsCronTitle}</p>
+            <SwitchRow label={t.settings.dnsCronEnabled} checked={(s.dnsCronEnabled ?? 'true') === 'true'} onChange={(v) => set('dnsCronEnabled', String(v))} />
+            <div className="max-w-sm">
+              <Label className="text-foreground">{t.settings.dnsCronExpr}</Label>
+              <Input value={s.dnsCronSchedule ?? ''} onChange={(e) => set('dnsCronSchedule', e.target.value)} className="bg-card border-input font-mono" placeholder="30 4 * * *" />
+              <p className="text-xs text-muted-foreground mt-1">{t.settings.dnsCronHelp}</p>
+            </div>
+          </div>
           <div className="max-w-sm">
             <Label className="text-foreground">{t.settings.homeNet}</Label>
             <Input value={s.homeNet ?? ''} onChange={(e) => set('homeNet', e.target.value)} className="bg-card border-input" />

@@ -28,6 +28,7 @@ export interface NotifySettings {
   notifyOnPipeline: boolean
   notifyOnVpn: boolean
   notifyOnDisk: boolean
+  notifyOnDns: boolean // события DNS-списков: отдельный DNS-цикл по расписанию
 }
 
 export async function getNotifySettings(): Promise<NotifySettings> {
@@ -48,6 +49,7 @@ export async function getNotifySettings(): Promise<NotifySettings> {
     notifyOnPipeline: (s('notifyOnPipeline') || 'true') === 'true',
     notifyOnVpn: (s('notifyOnVpn') || 'true') === 'true',
     notifyOnDisk: (s('notifyOnDisk') || 'true') === 'true',
+    notifyOnDns: (s('notifyOnDns') || 'true') === 'true',
   }
 }
 
@@ -173,7 +175,7 @@ export async function sendGotify(title: string, message: string, cfg?: { url?: s
 
 // ── События ──────────────────────────────────────────────────────────────────
 
-export type NotifyScope = 'pipeline' | 'vpn' | 'disk'
+export type NotifyScope = 'pipeline' | 'vpn' | 'disk' | 'dns'
 
 const LEVEL_ICON: Record<string, string> = { success: '✔', error: '✖', warn: '⚠', info: 'ℹ' }
 
@@ -184,9 +186,9 @@ const LEVEL_ICON: Record<string, string> = { success: '✔', error: '✖', warn:
  */
 export async function notifyEvent(scope: NotifyScope, level: 'success' | 'error' | 'warn' | 'info', title: string, message: string): Promise<Array<SendResult>> {
   const s = await getNotifySettings()
-  const on = scope === 'pipeline' ? s.notifyOnPipeline : scope === 'vpn' ? s.notifyOnVpn : s.notifyOnDisk
+  const on = scope === 'pipeline' ? s.notifyOnPipeline : scope === 'vpn' ? s.notifyOnVpn : scope === 'dns' ? s.notifyOnDns : s.notifyOnDisk
   if (!on) return []
-  const scopeRu = scope === 'pipeline' ? 'Конвейер правил' : scope === 'vpn' ? 'WireGuard VPN' : 'Диск'
+  const scopeRu = scope === 'pipeline' ? 'Конвейер правил' : scope === 'vpn' ? 'WireGuard VPN' : scope === 'dns' ? 'DNS-списки' : 'Диск'
   const text = `${LEVEL_ICON[level] ?? ''} ${scopeRu}: ${title}\n${message}`.trim()
   const out: SendResult[] = []
   if (s.notifyTgEnabled) out.push(await sendTelegram(text))

@@ -31,7 +31,35 @@ export const DNS_SETTING_DEFAULTS: Record<string, string> = {
   dnsBuildFormat: 'plain', // plain | hosts | dnsmasq | adblock — формат итогового файла
   dnsFileName: 'blocked-domains.txt',
   dnsCronEnabled: 'true', // полный цикл (cron) обновляет и DNS-источники, и пересобирает список
+  dnsCronSchedule: '', // отдельное расписание DNS-цикла: разнос по времени с основным циклом; пусто — сразу за основным
   dnsServeToken: '', // глобальный ключ отдачи списка доменов (PULL); пусто — открытая отдача
+}
+
+/** Файл в каталоге экспорта DNS (карточка «Файлы» на вкладке сборки) */
+export interface DnsExportFile {
+  name: string
+  size: number
+  mtime: string
+}
+
+/** Список файлов в каталоге экспорта DNS (data/exports/domains) — зеркально PUT /api/export */
+export async function listDnsExportFiles(dir: string = DNS_EXPORT_DIR): Promise<DnsExportFile[]> {
+  let names: string[] = []
+  try {
+    names = await fs.readdir(dir)
+  } catch {
+    return [] // каталога ещё нет — сборка не выполнялась
+  }
+  const out: DnsExportFile[] = []
+  for (const f of names) {
+    try {
+      const st = await fs.stat(path.join(dir, f))
+      if (st.isFile()) out.push({ name: f, size: st.size, mtime: st.mtime.toISOString() })
+    } catch {
+      /* файл исчез между readdir и stat — пропускаем */
+    }
+  }
+  return out.sort((a, b) => b.mtime.localeCompare(a.mtime))
 }
 
 export interface DomainSourceItem {

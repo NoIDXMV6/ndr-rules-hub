@@ -892,6 +892,49 @@ async function buildPersonalWorkspaces(origin: string): Promise<{ built: number;
   return { built, skipped, failed }
 }
 
+/** Режим DNS-цикла при основном полном цикле */
+export type DnsCycleMode = 'off' | 'inline' | 'deferred'
+
+/**
+ * Как запускать DNS-цикл (обновление DNS-источников + сборка списка доменов):
+ *  • 'off'      — выключен настройкой dnsCronEnabled=false;
+ *  • 'deferred' — по отдельному расписанию dnsCronSchedule (разнос пиков:
+ *    сначала правила и сборка набора, позже — домены);
+ *  • 'inline'   — сразу за основным циклом (расписание не задано или неверно).
+ */
+export function dnsCycleMode(dnsCronEnabled?: string, dnsCronSchedule?: string): DnsCycleMode {
+  if ((dnsCronEnabled ?? 'true') === 'false') return 'off'
+  const s = (dnsCronSchedule ?? '').trim()
+  return s && cron.validate(s) ? 'deferred' : 'inline'
+}
+
+/**
+ * DNS-цикл по собственному расписанию (dnsCronSchedule): обновление доменных
+ * источников, пересборка списка заблокированных доменов и СОБСТВЕННОЕ
+ * уведомление Telegram/Gotify (переключатель notifyOnDns в «Интеграциях»;
+ * в тексте — строка «DNS-списки»). Ошибки каналов не роняют цикл.
+ */
+export async function runDnsCycle(origin = 'cron'): Promise<{ ok: boolean; detail: Record<string, unknown> }> {
+  const dnsSvc = await import('./dns-service')
+  const fetched = await dnsSvc.fetchAllDomainSources(origin)
+  const built = await dnsSvc.buildDomainList(origin)
+  try {
+    const title = built.ok
+      ? `DNS-цикл (${origin}): список доменов собран — ${(built.total ?? 0).toLocaleString('ru-RU')} доменов`
+      : `Ошибка DNS-цикла: ${built.error ?? '—'}`
+    const parts = [
+      `источники: успешно ${fetched.ok}, ошибок ${fetched.failed} (всего ${fetched.total})`,
+      built.ok
+        ? `сборка списка: ${(built.total ?? 0).toLocaleString('ru-RU')} доменов → ${built.fileName ?? '—'}`
+        : `сборка списка: ОШИБКА — ${built.error}`,
+    ]
+    await notifyEvent('dns', built.ok && fetched.failed === 0 ? 'success' : fetched.failed || !built.ok ? 'error' : 'warn', title, parts.join('\n'))
+  } catch {
+    /* уведомления не роняют цикл */
+  }
+  return { ok: built.ok && fetched.failed === 0, detail: { fetch: fetched, build: built } }
+}
+
 /** Полный цикл по расписанию */
 export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detail: Record<string, unknown> }> {
   const fetchRes = await fetchAllSources(origin)
@@ -901,10 +944,14 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
   if (buildRes.ok && origin === 'cron' && settings.cronExport === 'true') {
     exportRes = await exportLatestBuild()
   }
-  // DNS-фильтрация: обновление доменных источников + пересборка списка доменов
-  // (настройка dnsCronEnabled; динамический импорт — без циклических связей модулей)
+  // DNS-фильтрация: обновление доменных источников + пересборка списка доменов.
+  // dnsCycleMode: 'inline' — сразу за основным циклом (по умолчанию), 'deferred' —
+  // по отдельному расписанию dnsCronSchedule (разнос пиков: правила утром, домены позже),
+  // 'off' — DNS-цикл выключен настройкой dnsCronEnabled.
+  // (динамический импорт dns-service — без циклических связей модулей)
   let dns: { ok: number; failed: number; total: number; build: { ok: boolean; total?: number; error?: string } } | null = null
-  if (settings.dnsCronEnabled !== 'false') {
+  const dnsMode = dnsCycleMode(settings.dnsCronEnabled, settings.dnsCronSchedule)
+  if (dnsMode === 'inline') {
     try {
       const dnsSvc = await import('./dns-service')
       const fetched = await dnsSvc.fetchAllDomainSources(origin)
@@ -932,6 +979,8 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
     if (exportRes) parts.push(exportRes.ok ? 'экспорт: выполнен' : `экспорт: ${exportRes.error}`)
     if (dns) {
       parts.push(`DNS: источники ${dns.ok}/${dns.total} успешно, список доменов: ${dns.build.ok ? `${(dns.build.total ?? 0).toLocaleString('ru-RU')} доменов` : `ошибка — ${dns.build.error}`}`)
+    } else if (dnsMode === 'deferred') {
+      parts.push(`DNS: отдельный цикл по расписанию «${(settings.dnsCronSchedule ?? '').trim()}» — обновление источников и сборка списка выполняются отдельно (разнос пиков)`)
     }
     if (fetchRes.errors.length) parts.push(`ошибки загрузки: ${fetchRes.errors.slice(0, 5).join('; ')}`)
     await notifyEvent('pipeline', buildRes.ok && fetchRes.failed === 0 ? 'success' : fetchRes.failed || !buildRes.ok ? 'error' : 'warn', title, parts.join('\n'))
@@ -955,11 +1004,19 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
 
 // ── Планировщик ──────────────────────────────────────────────────────────────
 let cronTask: { stop: () => void; destroy?: () => void } | null = null
+// DNS-цикл по отдельному расписанию (dnsCronSchedule) — разнос пиков нагрузки:
+// основной цикл собирает правила, DNS-источники обновляются и список доменов
+// пересобирается в отведённое отдельно время.
+let dnsCronTask: { stop: () => void; destroy?: () => void } | null = null
 
 export async function reinitScheduler() {
   if (cronTask) {
     cronTask.stop()
     cronTask = null
+  }
+  if (dnsCronTask) {
+    dnsCronTask.stop()
+    dnsCronTask = null
   }
   const settings = await getSettings()
   if (settings.cronEnabled === 'true' && cron.validate(settings.cronSchedule)) {
@@ -970,11 +1027,22 @@ export async function reinitScheduler() {
   } else {
     await log('info', 'scheduler', 'Планировщик остановлен' + (settings.cronEnabled !== 'true' ? ' (выключен)' : ` (неверное выражение: ${settings.cronSchedule})`))
   }
+  // DNS-цикл: отдельная cron-задача при заданном корректном расписании
+  const dnsSchedule = (settings.dnsCronSchedule ?? '').trim()
+  if (dnsCycleMode(settings.dnsCronEnabled, settings.dnsCronSchedule) === 'deferred') {
+    dnsCronTask = cron.schedule(dnsSchedule, () => {
+      void runDnsCycle('cron').catch((e) => log('error', 'scheduler', `Ошибка DNS-планировщика: ${e.message}`, undefined, `DNS scheduler error: ${e.message}`))
+    })
+    await log('info', 'scheduler', `DNS-цикл запущен по отдельному расписанию «${dnsSchedule}» (разнос с основным циклом)`, undefined, `DNS cycle scheduled separately: "${dnsSchedule}"`)
+  } else if (dnsSchedule) {
+    await log('warn', 'scheduler', `DNS-расписание «${dnsSchedule}» не применено: ${settings.dnsCronEnabled === 'false' ? 'DNS-цикл выключен (dnsCronEnabled)' : 'неверное cron-выражение'} — DNS выполняется вместе с основным циклом`, undefined, `DNS schedule "${dnsSchedule}" not applied: ${settings.dnsCronEnabled === 'false' ? 'dns cycle disabled' : 'invalid cron expression'} — DNS runs with the main cycle`)
+  }
 }
 
-export function schedulerState(): { running: boolean; schedule?: string } {
+export function schedulerState(): { running: boolean; schedule?: string; dnsRunning: boolean } {
   const s = cronTask
-  return { running: !!s }
+  const d = dnsCronTask
+  return { running: !!s, dnsRunning: !!d }
 }
 
 export { DATA_DIR, CACHE_DIR, EXPORTS_DIR }
