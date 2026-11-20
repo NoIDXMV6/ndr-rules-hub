@@ -306,7 +306,26 @@ snort.org behavior verified in practice:
 Statistics for every step (per source: fetched/in build/dropped by SID/by content/incompatible)
 are written to `Build.statsJson` and shown in the “Build & Export” tab.
 
-## 8. WireGuard VPN layer
+## 8. DNS filtering: domain lists (v1.29.0)
+
+A separate loop with the same ideology as the rules: sources → records → build → serving.
+The "DNS filtering" tab (admin): sources / categories / records (search, duplicates, manual
+decisions) / build & export.
+
+| Policy / entity | What it does |
+|---|---|
+| `DomainSource` | domain list source: hostlists (adguard `||domain^` / hosts / plain), the catalog of 46 AdGuard HostlistsRegistry lists + the imported SQL database; `purpose`: block / allow (allowlist) |
+| `DomainRecord` | a domain of a specific source; `mode`: block / allow (hostlist `@@` lines); `categories` — SQL-database category ids, comma-separated |
+| `DomainCategory` | build categories: catalog keys (ads/malware/phishing/…) + dump categories `ifaro:<number>:<Eng>` (a domain can carry several — it stays while at least one is enabled) |
+| `DomainOverride` | a manual per-domain decision: exclude from the build / force block over the allowlist |
+| `DomainBuild` | the build result: list file + sha256 + statistics |
+| Merge (`dns.ts mergeDomainSources`) | sources by ascending `priority`: the first one takes the domain, the rest count duplicates; the allowlist is applied at the end; entries are lazy (AsyncIterable from the DB cursor — millions of rows without memory pressure) |
+| Dump import (`dns-import.ts`) | streaming export.sql parse (MariaDB/HeidiSQL): 502 MB → ~2.2M domains and 151 categories without loading into memory (~22 s); category counters are cached in the `dnsIfaroCategoryCounts` setting |
+| Build (`buildDomainList`) | 4 file formats: plain / hosts (`0.0.0.0 d`) / dnsmasq (`address=/d/`) / adblock (`||d^`); progress — a separate singleton (dns-progress.ts) |
+| Serving | `GET /api/dns/export` — with a download token of the "domains"/"both" scope, the global `dnsServeToken` key, a session; without keys — open (same as rules) |
+| Cron | the full cycle (`runPipeline`) with `dnsCronEnabled` updates the DNS sources and rebuilds the list |
+
+## 9. WireGuard VPN layer
 
 `vpn.ts` manages the tunnel inside the container:
 
@@ -384,7 +403,7 @@ sequenceDiagram
     R-->>U: 200 — ok true, notes
 ```
 
-## 9. Web UI
+## 10. Web UI
 
 A single-page application (Next.js App Router, client components) with 9 tabs:
 
@@ -403,7 +422,7 @@ A single-page application (Next.js App Router, client components) with 9 tabs:
 Components — shadcn/ui (Radix primitives) + Tailwind CSS; icons — Lucide; technology logos —
 inline SVG from simple-icons (`tech-logos.tsx`, CC0).
 
-## 10. Localization (RU/EN)
+## 11. Localization (RU/EN)
 
 The layer lives in `src/lib/i18n/`:
 
@@ -430,7 +449,7 @@ Mechanics:
 6. Language parity is enforced by tests: equal key sets, no empty values, matching
    placeholders, no Cyrillic in EN.
 
-## 11. REST API
+## 12. REST API
 
 | Method/path | Purpose |
 |---|---|
@@ -452,7 +471,7 @@ Mechanics:
 API errors are returned as `{"error": "…"}` with the real cause (not an opaque HTTP 500) and
 duplicated into container logs.
 
-## 11.1 Community / Enterprise editions and the protection layer
+### 12.1 Community / Enterprise editions and the protection layer
 
 The edition is the `NDR_EDITION` environment variable (`src/lib/edition.ts`); one image for
 both. **Community** (default) — previous behavior: no authentication. **Enterprise** —
@@ -520,7 +539,7 @@ sequenceDiagram
     B->>B: card refresh or error banner
 ```
 
-## 12. Clear NDR integration: rule delivery
+## 13. Clear NDR integration: rule delivery
 
 The final ruleset reaches Clear NDR in one of four ways: download the file and import it
 manually; **PULL** — Clear NDR fetches the file from the Hub itself; **PUSH** — the Hub sends
@@ -529,7 +548,7 @@ shared directory. The step-by-step guide with commands, the token and a deployme
 [docs/clearndr-integration.en.md](docs/clearndr-integration.en.md) (RU:
 [docs/clearndr-integration.md](docs/clearndr-integration.md)).
 
-### 12.1 Two delivery schemes
+### 13.1 Two delivery schemes
 
 ```mermaid
 flowchart TB
@@ -572,7 +591,7 @@ flowchart TB
 | Configured in the Hub | nothing | “Clear NDR REST” mode, URL, token |
 | Auto-update | Clear NDR Recurrence / cron `update_push_all` | Hub cron (`cronExport`) / cron `update_push_all` |
 
-### 12.2 PUSH: the Scirius REST API call chain
+### 13.2 PUSH: the Scirius REST API call chain
 
 The “Clear NDR REST” mode (`exporter.ts → pushToClearndrRest`) performs three steps: find or
 create a local source, upload the file (multipart; the rules are imported immediately), apply
@@ -616,7 +635,7 @@ appended automatically), authorization type, token (a password field), source na
 401/403 — “token rejected… Edit Token → Regenerate”; “conflicting SID” — “enable deduplication
 in the build settings”. Every chain step is visible in the Logs (scope `export`).
 
-### 12.3 PULL: Clear NDR fetches the file itself
+### 13.3 PULL: Clear NDR fetches the file itself
 
 In Clear NDR, create a “HTTP URL” source pointing at `GET http://<hub>:3080/api/export` (the
 latest build is always served there), attach it to a ruleset, enable the category; the update
@@ -641,7 +660,7 @@ sequenceDiagram
     Note over C,X: the Suricata → Update button does the same immediately, a cron with update_push_all does the same without the UI
 ```
 
-### 12.4 Auto-update — three independent options
+### 13.4 Auto-update — three independent options
 
 | Option | Where it is configured | What happens on schedule |
 |---|---|---|
@@ -652,7 +671,7 @@ sequenceDiagram
 Option (c) also works with the PULL scheme: after the cron build the fresh file is already at
 `/api/export`, where (a) or (b) picks it up.
 
-### 12.5 Testing without a production server
+### 13.5 Testing without a production server
 
 `scripts/clearndr-mock-server.py` reproduces the Scirius REST API (Token auth, DRF pagination,
 multipart upload, the “conflicting SID” gate). End-to-end test: start the mock, set
@@ -662,7 +681,7 @@ Helper scripts: `clearndr-check.sh` (token, sources, rulesets check), `clearndr-
 (push a ready file from cron), `clearndr-setup-pull.sh` (PULL setup). Commands — section 5
 of the guide.
 
-## 13. Delivery and operations
+## 14. Delivery and operations
 
 - **Dockerfile** — multi-stage build: builder (`oven/bun`) → standalone runtime
   (`node:22-bookworm-slim`) + `wireguard-tools`, `iptables`, `iproute2`, `openresolv`, `procps`,

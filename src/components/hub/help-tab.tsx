@@ -349,6 +349,16 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       ],
     },
     {
+      trigger: 'DNS-фильтрация: доменные списки',
+      items: [
+        '**Источники** — каталог 46 доменных списков (AdGuard HostlistsRegistry, hosts-фиды) плюс импортированная SQL-база; «Обновить» качает список, разбор понимает adguard (||домен^), hosts (0.0.0.0 домен) и простой список; **Импорт базы** принимает export.sql или .rar — дамп разбирается потоково (502 МБ ≈ 22 с), домены и 151 категория становятся записями;',
+        '**Категории** — управляют составом сборки: у источников категория одна (ads/malware/…), у доменов SQL-базы может быть несколько — домен остаётся в сборке, пока включена хотя бы одна его категория;',
+        '**Записи** — поиск домена по всем источникам сразу (видно дубликаты), ручные решения: «исключить из сборки» переживает обновления источников, «принудительный блок» возвращает домен поверх белого списка;',
+        '**Сборка** — список заблокированных доменов: дубликаты достаются источнику с меньшим приоритетом, белый список исключает домены; файл в 4 форматах — plain / hosts / dnsmasq / AdGuard;',
+        '**Экспорт** — новый пойнт GET /api/dns/export: токен со scope «домены»/«оба списка» (создаётся на «Сборке и экспорте»), глобальный ключ dnsServeToken или сессия; «Полный цикл» и cron обновляют DNS-источники и пересобирают список (dnsCronEnabled);',
+      ],
+    },
+    {
       trigger: 'Мониторинг сервера, автоочистка диска и уведомления',
       paragraphs: [
         '**Обзор** показывает системные дашборды (только администратору, обновление каждые 5 с): утилизация CPU и память сервера (данные /proc хоста), аптайм, тома дисков с подсветкой порогов занятости, скорость и трафик сетевых интерфейсов, пиры и скорость WireGuard-туннеля, список запущенных контейнеров (docker ps через смонтированный /var/run/docker.sock:ro). Самое важное — свободное место: том данных хаба помечен значком, при превышении порогов (85 % / 92 %) сверху появляется баннер с кнопками действий.',
@@ -669,6 +679,16 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         '**dedupContent** — removes rules with identical content but different SIDs;',
         '**dropIncompatible** — excludes Suricata-incompatible constructs from the build (replace, rawbytes, etc.); a rule with an incompatible construct is flagged and does not reach the final set;',
         'the offline dist/ package additionally passes a validation loop with the `suricata -T` engine until zero errors — an unvalidated set is never published.',
+      ],
+    },
+    {
+      trigger: 'DNS filtering: domain lists',
+      items: [
+        '**Sources** — a catalog of 46 domain lists (AdGuard HostlistsRegistry, hosts feeds) plus the imported SQL database; "Update" fetches the list; the parser understands adguard (||domain^), hosts (0.0.0.0 domain) and plain lists; **Import database** accepts export.sql or .rar — the dump is parsed in a streaming way (502 MB ≈ 22 s), domains and 151 categories become records;',
+        '**Categories** — control the build composition: a source has one category (ads/malware/…), a SQL-database domain can carry several — it stays in the build while at least one of them is enabled;',
+        '**Records** — search a domain across all sources at once (duplicates are visible), manual decisions: "exclude from the build" survives source updates, "force block" returns a domain over the allowlist;',
+        '**Build** — the blocked-domain list: duplicates go to the source with the lower priority, the allowlist removes domains; the file comes in 4 formats — plain / hosts / dnsmasq / AdGuard;',
+        '**Export** — the new GET /api/dns/export endpoint: a token with the "domains"/"both" scope (created on "Build & Export"), the global dnsServeToken key or a session; the full cycle and cron update DNS sources and rebuild the list (dnsCronEnabled);',
       ],
     },
   ],

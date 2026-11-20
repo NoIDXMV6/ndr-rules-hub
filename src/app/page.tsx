@@ -10,6 +10,7 @@ import { SourcesTab } from '@/components/hub/sources-tab'
 import { CategoriesTab } from '@/components/hub/categories-tab'
 import { RulesTab } from '@/components/hub/rules-tab'
 import { BuildTab } from '@/components/hub/build-tab'
+import { DnsTab } from '@/components/hub/dns-tab'
 import { VpnTab } from '@/components/hub/vpn-tab'
 import { UpdateTab } from '@/components/hub/update-tab'
 import { OsdTab } from '@/components/hub/osd-tab'
@@ -90,6 +91,9 @@ export default function Home() {
   useEffect(() => {
     const admin = !me?.multiUser || me.user?.role === 'admin'
     const allowed = new Set(['overview', 'sources', 'categories', 'rules', 'build', 'help', 'about'])
+    if (admin) {
+      allowed.add('dns') // «DNS-фильтрация» — вкладка уровня системы (администратор)
+    }
     if (me?.multiUser) allowed.add('account') // кабинет доступен всем вошедшим
     if (admin) {
       allowed.add('update') // «Обновление Clear NDR» (меню «Интеграции»)
@@ -239,6 +243,11 @@ export default function Home() {
             <BuildTab data={data} onChange={refresh} role={role} />
           </TabsContent>
           {isAdmin && (
+            <TabsContent value="dns" className="mt-4">
+              <DnsTab data={data} onChange={refresh} />
+            </TabsContent>
+          )}
+          {isAdmin && (
             <TabsContent value="vpn" className="mt-4">
               <VpnTab data={data} onChange={refresh} />
             </TabsContent>
@@ -340,6 +349,12 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAcco
     },
     { kind: 'direct', key: 'build', grow: 1.25, item: { value: 'build', label: t.tabs.build, icon: ico(Package) } },
   ]
+
+  // DNS-фильтрация — прямая кнопка, только администратору (вкладка уровня системы:
+  // единые списки доменов и единая сборка, без персональных пространств)
+  if (isAdmin) {
+    groups.push({ kind: 'direct', key: 'dns', grow: 1.2, item: { value: 'dns', label: t.tabs.dns, icon: ico(Globe) } })
+  }
 
   // «Интеграции» — только администратор (v1.27.0): у пользователя нет доступа
   // к обновлению Clear NDR, OSD-дашбордам, MISP, VPN и уведомлениям

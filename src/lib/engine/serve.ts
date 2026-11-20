@@ -63,7 +63,7 @@ export interface ServeAuth {
   workspaceUserId?: string | null
 }
 
-type Access = { ok: boolean; reason?: string; blocked?: boolean; tokenRow?: { id: string; userId: string } }
+type Access = { ok: boolean; reason?: string; blocked?: boolean; tokenRow?: { id: string; userId: string; scope?: string } }
 
 /** Проверка доступа к отдаче: персональный токен → serveToken → сессия → открытая отдача. */
 async function checkServeAccess(provided: string, opts: ServeAuth): Promise<Access> {
@@ -72,7 +72,11 @@ async function checkServeAccess(provided: string, opts: ServeAuth): Promise<Acce
   // 1) персональный токен скачивания (Enterprise): лимит неудач внутри
   if (provided && provided.startsWith(DOWNLOAD_TOKEN_PREFIX)) {
     const v = await verifyDownloadToken(provided, ip)
-    if (v.ok) return { ok: true, tokenRow: { id: v.tokenId, userId: v.userId } }
+    if (v.ok) {
+      // scope: токен только для доменов (domains) не даёт доступа к правилам
+      if (v.scope === 'domains') return { ok: false, reason: 'scope' }
+      return { ok: true, tokenRow: { id: v.tokenId, userId: v.userId, scope: v.scope } }
+    }
     return { ok: false, reason: v.reason, blocked: v.reason === 'blocked' }
   }
 
@@ -118,7 +122,9 @@ export async function serveBuild(opts: ServeAuth & { archive?: boolean } = {}): 
     return {
       status: 403,
       contentType: TEXT,
-      body: 'NDR Rules Hub: доступ запрещён — неверный ключ отдачи. Вставьте токен в поле authkey источника Clear NDR (scirius передаст его в заголовке Authorization) или добавьте к URL ?token=<токен>. Токен скачивания выдаётся на вкладке «Сборка и экспорт» → «Токены скачивания правил».',
+      body: access.reason === 'scope'
+        ? 'NDR Rules Hub: доступ запрещён — этот токен выдан только для списка доменов (DNS-фильтрация). Для скачивания правил создайте токен со scope «правила» или «оба списка» (вкладка «Сборка и экспорт» → «Токены скачивания»).'
+        : 'NDR Rules Hub: доступ запрещён — неверный ключ отдачи. Вставьте токен в поле authkey источника Clear NDR (scirius передаст его в заголовке Authorization) или добавьте к URL ?token=<токен>. Токен скачивания выдаётся на вкладке «Сборка и экспорт» → «Токены скачивания правил».',
     }
   }
 

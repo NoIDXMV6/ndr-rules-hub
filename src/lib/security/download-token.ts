@@ -1,12 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Персональные токены скачивания правил (Enterprise).
+// Персональные токены скачивания (Enterprise).
 // Токен вида ndrt_<43 символа base64url> выдаётся пользователю в кабинете
 // (вкладка «Сборка и экспорт» → «Токены скачивания»). В БД — только SHA-256,
-// полный токен показывается один раз при создании. Токен принимается вместе
-// с глобальным ключом отдачи (serveToken): ?token=<токен> или заголовок
-// Authorization («<токен>», «Token <токен>», «Bearer <токен>»).
-// Перебор токенов отсекается rate-лимитом (dlfail:<ip>): 10 неудач за 5 минут
-// → блокировка IP на 15 минут.
+// полный токен показывается один раз. scope задаёт, ЧТО доступно токену:
+//   rules   — сборка правил GET /api/export (дефолт, историческое поведение);
+//   domains — список заблокированных доменов GET /api/dns/export;
+//   both    — оба списка одновременно.
+// Токен принимается вместе с глобальным ключом отдачи (serveToken):
+// ?token=<токен> или заголовок Authorization («<токен>», «Token <токен>»,
+// «Bearer <токен>»). Перебор токенов отсекается rate-лимитом (dlfail:<ip>):
+// 10 неудач за 5 минут → блокировка IP на 15 минут.
 // ─────────────────────────────────────────────────────────────────────────────
 import { db } from '@/lib/db'
 import { randomToken, sha256hex } from './ids'
@@ -18,26 +21,33 @@ export const DOWNLOAD_TOKEN_PREFIX = 'ndrt_'
 export const DL_FAIL_RULE = { limit: 10, windowMs: 5 * 60_000, blockMs: 15 * 60_000 }
 const DL_FAIL_KEY = (ip: string) => `dlfail:${ip}`
 
+export type DownloadTokenScope = 'rules' | 'domains' | 'both'
+
+export function normalizeTokenScope(v: unknown): DownloadTokenScope {
+  return v === 'domains' || v === 'both' ? v : 'rules'
+}
+
 export interface CreatedDownloadToken {
   id: string
   token: string // полный токен — показывается один раз
   name: string
   prefix: string
+  scope: DownloadTokenScope
   expiresAt: Date | null
 }
 
-export async function createDownloadToken(userId: string, name: string, ttlDays?: number | null): Promise<CreatedDownloadToken> {
+export async function createDownloadToken(userId: string, name: string, ttlDays?: number | null, scope: DownloadTokenScope = 'rules'): Promise<CreatedDownloadToken> {
   const token = DOWNLOAD_TOKEN_PREFIX + randomToken(32)
   const expiresAt = ttlDays && ttlDays > 0 ? new Date(Date.now() + ttlDays * 24 * 3600 * 1000) : null
   const row = await db.downloadToken.create({
-    data: { userId, name: name.slice(0, 100), tokenHash: sha256hex(token), prefix: token.slice(0, 12), expiresAt },
+    data: { userId, name: name.slice(0, 100), tokenHash: sha256hex(token), prefix: token.slice(0, 12), scope, expiresAt },
   })
-  void audit('token_create', { userId, detail: `name=${name.slice(0, 100)} prefix=${row.prefix}` })
-  return { id: row.id, token, name: row.name, prefix: row.prefix, expiresAt: row.expiresAt }
+  void audit('token_create', { userId, detail: `name=${name.slice(0, 100)} prefix=${row.prefix} scope=${row.scope}` })
+  return { id: row.id, token, name: row.name, prefix: row.prefix, scope: row.scope as DownloadTokenScope, expiresAt: row.expiresAt }
 }
 
 export type DownloadTokenVerdict =
-  | { ok: true; tokenId: string; userId: string }
+  | { ok: true; tokenId: string; userId: string; scope: DownloadTokenScope }
   | { ok: false; reason: 'unknown' | 'expired' | 'revoked' | 'blocked' }
 
 /**
@@ -82,8 +92,8 @@ export async function verifyDownloadToken(provided: string, ip: string): Promise
     where: { id: row.id },
     data: { lastUsedAt: new Date(), lastIp: ip.slice(0, 100), downloadCount: { increment: 1 } },
   }).catch(() => undefined)
-  void audit('download', { userId: row.userId, ip, detail: `токен ${row.prefix}…` })
-  return { ok: true, tokenId: row.id, userId: row.userId }
+  void audit('download', { userId: row.userId, ip, detail: `токен ${row.prefix}… scope=${row.scope}` })
+  return { ok: true, tokenId: row.id, userId: row.userId, scope: row.scope as DownloadTokenScope }
 }
 
 export async function revokeDownloadToken(id: string, userId?: string): Promise<boolean> {

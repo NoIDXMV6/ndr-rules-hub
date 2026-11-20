@@ -69,6 +69,7 @@ export function sameOriginOk(req: Request): boolean {
 /** Ключи настроек, которые нельзя отдавать не-администратору (секреты) */
 export const SECRET_SETTING_KEYS = [
   'serveToken',
+  'dnsServeToken', // ключ отдачи списка доменов (GET /api/dns/export)
   'oinkcode',
   'etProOinkcode', // oinkcode ET Pro (Proofpoint) — отдельно от снортовского
   'abusechAuthKey',

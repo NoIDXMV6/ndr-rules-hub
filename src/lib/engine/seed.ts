@@ -1,6 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Каталог источников правил + настройки по умолчанию (первичная инициализация)
 // ─────────────────────────────────────────────────────────────────────────────
+import { db } from '@/lib/db'
+import { getSetting as getSettingRaw } from './service'
+import { log } from './service'
 
 export interface SeedSource {
   name: string
@@ -678,4 +681,438 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   mispConnMikrotikLastRun: '',
   mispConnMikrotikLastStatus: '',
   mispConnMikrotikLastCount: '0',
+  // ── DNS-фильтрация (вкладка «DNS-фильтрация») ─────────────────────────────
+  dnsBuildFormat: 'plain', // plain | hosts | dnsmasq | adblock — формат итогового файла
+  dnsFileName: 'blocked-domains.txt', // имя итогового файла списка доменов
+  dnsCronEnabled: 'true', // полный цикл (cron/«Полный цикл») обновляет DNS-источники и пересобирает список
+  dnsServeToken: '', // глобальный ключ отдачи /api/dns/export; пусто — открытая отдача (как и у правил)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Каталог DNS-источников (фильтрация нежелательных ресурсов по доменам).
+// Приоритет задаёт, кто забирает домен себе при дубликате между списками:
+// чем меньше число, тем раньше источник обрабатывается (угрозы → трекеры →
+// тематические списки → реклама → смешанные; для белых списков порядок не важен).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface DnsSeedSource {
+  name: string
+  url?: string
+  kind?: 'url' | 'local'
+  format?: 'auto' | 'adguard' | 'hosts' | 'plain'
+  category: string // ключ DomainCategory: ads | tracking | malware | phishing | gambling | piracy | adult | spam | rkn | mixed | allowlist
+  purpose?: 'block' | 'allow'
+  enabled?: boolean
+  priority?: number
+  notes?: string
+  notesEn?: string
+}
+
+export const DNS_CATALOG: DnsSeedSource[] = [
+  // ── Угрозы: threat intelligence, малварь ────────────────────────────────────
+  {
+    name: "HaGeZi's Threat Intelligence Feeds",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_44.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Крупнейший threat-intel фид HaGeZi (~1,6 млн доменов): C2, малварь, фишинг, скам. Основной источник блока угроз.',
+    notesEn: "The largest HaGeZi threat-intel feed (~1.6M domains): C2, malware, phishing, scams. The primary threat-block source.",
+  },
+  {
+    name: 'POL: CERT Polska List of malicious domains',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_41.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Список вредоносных доменов CERT Polska (~107 тыс.): ботнеты, фишинг, распространители малвари. Официальный источник польского CSIRT.',
+    notesEn: 'Malicious domain list by CERT Polska (~107K): botnets, phishing, malware distribution. Official Polish CSIRT source.',
+  },
+  {
+    name: "Dandelion Sprout's Anti-Malware List",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_12.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Список доменов-распространителей вредоносного ПО (~12,5 тыс.), собран из нескольких фидов.',
+    notesEn: 'Malware distribution domains (~12.5K), aggregated from multiple feeds.',
+  },
+  {
+    name: "ShadowWhisperer's Malware List",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_42.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Домены вредоносного ПО и нежелательного софта (~29,5 тыс.).',
+    notesEn: 'Malware and unwanted software domains (~29.5K).',
+  },
+  {
+    name: 'Malicious URL Blocklist (URLHaus)',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_11.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Домены вредоносных URL из фида abuse.ch URLhaus (~2 тыс.), обновляется в реальном времени.',
+    notesEn: 'Malicious URL domains from abuse.ch URLhaus feed (~2K), updated in real time.',
+  },
+  {
+    name: 'The Big List of Hacked Malware Web Sites',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_9.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Список взломанных и заражённых сайтов (~13,5 тыс., dns-bh cybercrime-tracker).',
+    notesEn: 'Hacked and malware-infected websites (~13.5K, cybercrime-tracker dns-bh).',
+  },
+  {
+    name: 'NoCoin Filter List',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_8.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Домены скрытого криптоджекинга (~300): майнинг-скрипты без согласия пользователя.',
+    notesEn: 'Cryptojacking domains (~300): mining scripts without user consent.',
+  },
+  {
+    name: "HaGeZi's Badware Hoster Blocklist",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_55.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Хостинги и CDN, известные раздачей вредоносного ПО (~1,2 тыс.).',
+    notesEn: 'Hosting providers and CDNs known for malware distribution (~1.2K).',
+  },
+  {
+    name: 'Stalkerware Indicators List',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_31.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Индикаторы сталкервари (~900 доменов): C2 и панели слежки за устройствами (фиды ESET/STOPStalkerware).',
+    notesEn: 'Stalkerware indicators (~900 domains): C2 and device-tracking panels (ESET/STOPStalkerware feeds).',
+  },
+  {
+    name: 'Ukrainian Security Filter',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_62.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Украинский фид безопасности (~1,7 тыс.): фишинг, малварь, пропагандистские ресурсы.',
+    notesEn: 'Ukrainian security feed (~1.7K): phishing, malware, propaganda resources.',
+  },
+  {
+    name: 'uBlock₀ filters – Badware risks',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_50.txt',
+    category: 'malware', enabled: true, priority: 20,
+    notes: 'Домены с риском вредоносного ПО из списков uBlock Origin (~3,5 тыс.).',
+    notesEn: 'Badware-risk domains from uBlock Origin lists (~3.5K).',
+  },
+  // ── Фишинг и мошенничество ──────────────────────────────────────────────────
+  {
+    name: 'Phishing Army',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_18.txt',
+    category: 'phishing', enabled: true, priority: 21,
+    notes: 'Фишинговые домены Phishing Army (~145 тыс., из Telegram-каналов и фидов).',
+    notesEn: 'Phishing Army domains (~145K, from Telegram channels and feeds).',
+  },
+  {
+    name: 'Phishing URL Blocklist (PhishTank and OpenPhish)',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_30.txt',
+    category: 'phishing', enabled: true, priority: 21,
+    notes: 'Фишинговые URL из PhishTank и OpenPhish (~17 тыс.), обновляется каждые 15-30 минут.',
+    notesEn: 'Phishing URLs from PhishTank and OpenPhish (~17K), refreshed every 15-30 minutes.',
+  },
+  {
+    name: 'Scam Blocklist by DurableNapkin',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_10.txt',
+    category: 'phishing', enabled: true, priority: 21,
+    notes: 'Скам-домены (~900): мошеннические магазины, «выигрыши», фейковые сервисы.',
+    notesEn: 'Scam domains (~900): fraudulent shops, fake giveaways and services.',
+  },
+  // ── Трекеры и слежка ────────────────────────────────────────────────────────
+  {
+    name: 'ShadowWhisperer Tracking List',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_69.txt',
+    category: 'tracking', enabled: true, priority: 30,
+    notes: 'Домены трекеров и аналитики (~132 тыс.): телеметрия, пиксели слежки, data-брокеры.',
+    notesEn: 'Tracking and analytics domains (~132K): telemetry, tracking pixels, data brokers.',
+  },
+  {
+    name: 'WindowsSpyBlocker - Hosts spy rules',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_23.txt',
+    category: 'tracking', enabled: true, priority: 30,
+    notes: 'Телеметрия Windows (~350 доменов): сбор данных, диагностика, реклама Windows.',
+    notesEn: 'Windows telemetry (~350 domains): data collection, diagnostics, Windows ads.',
+  },
+  {
+    name: "HaGeZi's Windows/Office Tracker Blocklist",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_63.txt',
+    category: 'tracking', enabled: true, priority: 30,
+    notes: 'Трекеры Microsoft Windows и Office (~400).',
+    notesEn: 'Microsoft Windows and Office trackers (~400).',
+  },
+  {
+    name: "HaGeZi's Xiaomi Tracker Blocklist",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_60.txt',
+    category: 'tracking', enabled: true, priority: 30,
+    notes: 'Трекеры Xiaomi MIUI и устройств (~400).',
+    notesEn: 'Xiaomi MIUI and device trackers (~400).',
+  },
+  {
+    name: "Perflyst and Dandelion Sprout's Smart-TV Blocklist",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_7.txt',
+    category: 'tracking', enabled: true, priority: 30,
+    notes: 'Телеметрия Smart-TV (~150): Samsung, LG, Roku, Vizio и др.',
+    notesEn: 'Smart-TV telemetry (~150): Samsung, LG, Roku, Vizio, etc.',
+  },
+  // ── Тематические списки ─────────────────────────────────────────────────────
+  {
+    name: "HaGeZi's Gambling Blocklist",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_47.txt',
+    category: 'gambling', enabled: true, priority: 40,
+    notes: 'Домены азартных игр и казино (~670 тыс. — крупнейший тематический список HaGeZi).',
+    notesEn: "Gambling and casino domains (~670K — HaGeZi's largest thematic list).",
+  },
+  {
+    name: "HaGeZi's Anti-Piracy Blocklist",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_46.txt',
+    category: 'piracy', enabled: true, priority: 40,
+    notes: 'Пиратские ресурсы и файлообменники (~62 тыс.).',
+    notesEn: 'Piracy sites and file-sharing resources (~62K).',
+  },
+  {
+    name: "ShadowWhisperer's Dating List",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_57.txt',
+    category: 'adult', enabled: true, priority: 40,
+    notes: 'Сайты знакомств (~1,4 тыс.) — для политики «без dating» в корпоративных сетях.',
+    notesEn: 'Dating sites (~1.4K) — for a "no dating" policy in corporate networks.',
+  },
+  {
+    name: "HaGeZi's The World's Most Abused TLDs",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_56.txt',
+    category: 'spam', enabled: true, priority: 45,
+    notes: 'Злоупотребляемые TLD (~20 одно-меточных записей: .top, .zip, .click…). Блокировка целых доменных зон — может задевать легитимные сайты.',
+    notesEn: 'Most abused TLDs (~20 single-label entries: .top, .zip, .click…). Blocks whole TLD zones — may affect legitimate sites.',
+  },
+  // ── Реклама ─────────────────────────────────────────────────────────────────
+  {
+    name: '1Hosts (Lite)',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_24.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Лёгкий вариант 1Hosts (~102 тыс.): реклама и трекеры без агрессивных правил.',
+    notesEn: '1Hosts Lite variant (~102K): ads and trackers without aggressive rules.',
+  },
+  {
+    name: "Steven Black's List",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_33.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Объединённый hosts-список Steven Black (~76 тыс.): реклама, трекеры, малварь.',
+    notesEn: "Steven Black's unified hosts list (~76K): ads, trackers, malware.",
+  },
+  {
+    name: 'AdAway Default Blocklist',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Стандартный список AdAway (~6,5 тыс.): классический hosts от рекламы.',
+    notesEn: 'AdAway default blocklist (~6.5K): classic ad-blocking hosts.',
+  },
+  {
+    name: "Dan Pollock's List",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_4.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Список Дэна Поллока (~13 тыс.): реклама, трекеры, малварь; hosts-формат.',
+    notesEn: "Dan Pollock's list (~13K): ads, trackers, malware; hosts format.",
+  },
+  {
+    name: 'AD servers by yoyo.org',
+    url: 'https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Рекламные серверы yoyo.org (~3,5 тыс.), один из старейших hosts-списков.',
+    notesEn: 'Ad servers by yoyo.org (~3.5K), one of the oldest hosts lists.',
+  },
+  {
+    name: "Peter Lowe's Blocklist",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_3.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Список Питера Лоу (~3,5 тыс.): рекламные серверы и трекеры.',
+    notesEn: "Peter Lowe's list (~3.5K): ad servers and trackers.",
+  },
+  {
+    name: 'winhelp2002.mvps.org',
+    url: 'http://winhelp2002.mvps.org/hosts.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Классический MVPS hosts-список (~8,7 тыс.) — обновляется редко, но стабилен.',
+    notesEn: 'Classic MVPS hosts list (~8.7K) — rarely updated but stable.',
+  },
+  {
+    name: 'AdGuard DNS Popup Hosts filter',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_59.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Домены попапов и push-уведомлений (~1 тыс.).',
+    notesEn: 'Popup and push-notification domains (~1K).',
+  },
+  {
+    name: 'AWAvenue Ads Rule',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_53.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'AWAvenue Ads (~900): реклама китайских и глобальных сетей, аккуратный отбор.',
+    notesEn: 'AWAvenue Ads (~900): Chinese and global ad networks, carefully curated.',
+  },
+  {
+    name: "Dandelion Sprout's Anti Push Notifications",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_39.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Домены браузерных push-уведомлений (~500).',
+    notesEn: 'Browser push-notification domains (~500).',
+  },
+  {
+    name: "Dandelion Sprout's Game Console Adblock List",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_6.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Реклама на игровых консолях (~20 записей): PlayStation, Xbox, Nintendo.',
+    notesEn: 'Game console ads (~20 entries): PlayStation, Xbox, Nintendo.',
+  },
+  // ── Смешанные и специальные ──────────────────────────────────────────────────
+  {
+    name: 'AdGuard DNS filter',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt',
+    category: 'mixed', enabled: true, priority: 60,
+    notes: 'Официальный фильтр AdGuard DNS (~191 тыс.): реклама, трекеры, фишинг, малварь в одном списке. Рекомендуемая база DNS-фильтрации.',
+    notesEn: 'Official AdGuard DNS filter (~191K): ads, trackers, phishing, malware in one list. The recommended DNS-filtering base.',
+  },
+  {
+    name: 'OISD Blocklist Big',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_27.txt',
+    category: 'mixed', enabled: true, priority: 60,
+    notes: 'OISD Big (~227 тыс.): реклама, трекеры, малварь, фишинг; собран без ложных срабатываний.',
+    notesEn: 'OISD Big (~227K): ads, trackers, malware, phishing; compiled to avoid false positives.',
+  },
+  {
+    name: 'hpHosts',
+    url: 'https://cdn.jsdelivr.net/gh/evankrob/hosts-filenetrehost@master/ad_servers.txt',
+    category: 'mixed', enabled: true, priority: 60,
+    notes: 'Редакционный список hpHosts (~46 тыс.): рекламные и вредоносные домены.',
+    notesEn: 'hpHosts editorial list (~46K): advertising and malware domains.',
+  },
+  {
+    name: 'someonewhocares.org',
+    url: 'https://someonewhocares.org/hosts/hosts',
+    category: 'mixed', enabled: true, priority: 60,
+    notes: 'Список someonewhocares.org (~13 тыс.): реклама, трекеры, вредоносные и нежелательные сайты.',
+    notesEn: 'someonewhocares.org list (~13K): ads, trackers, malware and unwanted sites.',
+  },
+  {
+    name: 'No Google',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_37.txt',
+    category: 'mixed', enabled: false, priority: 60,
+    notes: 'Строгий список доменов Google (~1,6 тыс. во включённой части) — для полного отказа от экосистемы Google; почти наверняка сломает часть сайтов.',
+    notesEn: 'Strict Google domains list (~1.6K in the enabled part) — for fully de-Googling; very likely breaks parts of many sites.',
+  },
+  {
+    name: "HaGeZi's Ultimate Blocklist",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_49.txt',
+    category: 'mixed', enabled: false, priority: 60,
+    notes: 'Максимальный список HaGeZi (агрегат всех его списков). Включайте ВМЕСТО остальных списков HaGeZi, а не вместе с ними — иначе двойная нагрузка без прироста.',
+    notesEn: "HaGeZi's ultimate aggregation of all his lists. Enable INSTEAD of the other HaGeZi lists, not alongside them.",
+  },
+  // ── Региональные списки ─────────────────────────────────────────────────────
+  {
+    name: 'POL: Polish filters for Pi-hole',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_14.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Польский список для Pi-hole (~400): реклама и трекеры польских сайтов.',
+    notesEn: 'Polish Pi-hole list (~400): ads and trackers of Polish websites.',
+  },
+  {
+    name: "SWE: Frellwit's Swedish Hosts File",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_17.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Шведский hosts-список Frellwit (~1,2 тыс.): реклама, трекеры, малварь шведских сайтов.',
+    notesEn: "Frellwit's Swedish hosts file (~1.2K): ads, trackers, malware of Swedish sites.",
+  },
+  {
+    name: 'TUR: turk-adlist',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_26.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Турецкий список рекламы (~1,2 тыс.).',
+    notesEn: 'Turkish ad list (~1.2K).',
+  },
+  {
+    name: 'TUR: Turkish Ad Hosts',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_40.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Турецкие рекламные домены (~2 тыс.).',
+    notesEn: 'Turkish ad domains (~2K).',
+  },
+  {
+    name: 'VNM: ABPVN List',
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_16.txt',
+    category: 'ads', enabled: true, priority: 50,
+    notes: 'Вьетнамский список ABPVN (~19 тыс.): реклама и трекеры вьетнамских сайтов.',
+    notesEn: 'Vietnamese ABPVN list (~19K): ads and trackers of Vietnamese sites.',
+  },
+  // ── Белые списки (allow) ────────────────────────────────────────────────────
+  {
+    name: "HaGeZi's Allowlist Referral",
+    url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_45.txt',
+    category: 'allowlist', purpose: 'allow', enabled: true, priority: 90,
+    notes: 'Белый список HaGeZi (~950): партнёрские и реферальные ссылки, которые не нужно блокировать. Домены исключаются из итогового списка.',
+    notesEn: "HaGeZi allowlist (~950): affiliate and referral links that should not be blocked. Domains are excluded from the final list.",
+  },
+]
+
+/** Категории DNS-модуля каталога: ключи с русскими подписями (label) */
+export const DNS_CATALOG_CATEGORIES: Array<{ name: string; label: string }> = [
+  { name: 'ads', label: 'Реклама' },
+  { name: 'tracking', label: 'Трекеры и слежка' },
+  { name: 'malware', label: 'Вредоносные домены' },
+  { name: 'phishing', label: 'Фишинг и мошенничество' },
+  { name: 'gambling', label: 'Азартные игры' },
+  { name: 'piracy', label: 'Пиратство и файлообмен' },
+  { name: 'adult', label: '18+ и знакомства' },
+  { name: 'spam', label: 'Спам и вредоносные TLD' },
+  { name: 'rkn', label: 'Запрещённые ресурсы (импорт)' },
+  { name: 'mixed', label: 'Смешанные списки' },
+  { name: 'allowlist', label: 'Белые списки' },
+]
+
+/**
+ * Первичная инициализация DNS-модуля: каталог доменных списков + категории.
+ * Докатка при каждом старте: недостающие источники каталога и категории
+ * добавляются; удалённые пользователем (purgedDnsSources) не восстанавливаются.
+ */
+export async function ensureDnsSeed(): Promise<{ added: string[] }> {
+  const added: string[] = []
+  const purged = new Set<string>(JSON.parse((await getSettingRaw('purgedDnsSources')) || '[]') as string[])
+  // категории каталога
+  for (const c of DNS_CATALOG_CATEGORIES) {
+    await db.domainCategory.upsert({ where: { name: c.name }, create: { name: c.name, label: c.label }, update: {} })
+  }
+  // источники
+  const count = await db.domainSource.count()
+  if (count === 0) {
+    for (const s of DNS_CATALOG) {
+      if (purged.has(s.name)) continue
+      await db.domainSource.create({
+        data: {
+          name: s.name,
+          url: s.url ?? null,
+          kind: s.kind ?? 'url',
+          format: s.format ?? 'auto',
+          category: s.category,
+          purpose: s.purpose ?? 'block',
+          enabled: s.enabled ?? true,
+          priority: s.priority ?? 100,
+          notes: s.notes ?? null,
+          notesEn: s.notesEn ?? null,
+          builtin: true,
+        },
+      })
+    }
+    await log('info', 'system', `Каталог DNS-источников инициализирован: ${DNS_CATALOG.length} списков`, undefined, `DNS catalog initialized: ${DNS_CATALOG.length} lists`)
+  } else {
+    const rows = await db.domainSource.findMany({ select: { name: true }, where: { deletedAt: null } })
+    const byName = new Set(rows.map((r) => r.name))
+    for (const s of DNS_CATALOG) {
+      if (purged.has(s.name) || byName.has(s.name)) continue
+      await db.domainSource.create({
+        data: {
+          name: s.name,
+          url: s.url ?? null,
+          kind: s.kind ?? 'url',
+          format: s.format ?? 'auto',
+          category: s.category,
+          purpose: s.purpose ?? 'block',
+          enabled: s.enabled ?? true,
+          priority: s.priority ?? 100,
+          notes: s.notes ?? null,
+          notesEn: s.notesEn ?? null,
+          builtin: true,
+        },
+      })
+      added.push(s.name)
+    }
+    if (added.length) await log('info', 'system', `Каталог DNS-источников дополнен: ${added.join(', ')}`, undefined, `DNS catalog updated: ${added.join(', ')}`)
+  }
+  return { added }
 }

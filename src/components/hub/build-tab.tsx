@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, Dashboard, DownloadTokenItem, BuildProgressInfo, fmtSize, fmtTime } from '@/components/hub/api'
 import { useI18n, type Lang } from '@/lib/i18n'
 import { copyToClipboard } from '@/lib/utils'
@@ -273,8 +274,11 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
   const [tokens, setTokens] = useState<DownloadTokenItem[]>([])
   const [name, setName] = useState('')
   const [ttlDays, setTtlDays] = useState('0')
+  // scope: правила (историческое поведение) | домены (DNS-фильтрация) | оба списка
+  const [scope, setScope] = useState('rules')
   const [busy, setBusy] = useState(false)
-  const [created, setCreated] = useState<string | null>(null) // полный токен — показывается один раз
+  const [created, setCreated] = useState<string | null>(null)
+  const [createdScope, setCreatedScope] = useState<string>('rules') // scope созданного токена
   const [msg, setMsg] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -294,11 +298,13 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
     setBusy(true)
     setMsg(null)
     try {
-      const r = await api.createToken({ name: name.trim() || 'Токен', ttlDays: parseInt(ttlDays, 10) || 0 })
+      const r = await api.createToken({ name: name.trim() || 'Токен', ttlDays: parseInt(ttlDays, 10) || 0, scope })
       if (r.ok && r.token) {
         setCreated(r.token.token)
+        setCreatedScope(r.token.scope ?? 'rules')
         setName('')
         setTtlDays('0')
+        setScope('rules')
         await refresh()
       } else {
         setMsg(r.error ?? 'error')
@@ -368,8 +374,15 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
                 «Optional authorization key» источника. Так пользователь видит ровно
                 то, что нужно вставить в каждое поле формы Clear NDR, без путаницы. */}
             <p className="text-xs text-emerald-800 font-medium pt-1">{t.tokens.createdUrlsTitle}</p>
-            <ServeRow label={t.tokens.createdUrlFile} url={`${origin}/api/export`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
-            <ServeRow label={t.tokens.createdUrlArchive} url={`${origin}/api/export?archive=1`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+            {(createdScope === 'rules' || createdScope === 'both') && (
+              <>
+                <ServeRow label={t.tokens.createdUrlFile} url={`${origin}/api/export`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+                <ServeRow label={t.tokens.createdUrlArchive} url={`${origin}/api/export?archive=1`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+              </>
+            )}
+            {(createdScope === 'domains' || createdScope === 'both') && (
+              <ServeRow label={t.tokens.createdUrlDomains} url={`${origin}/api/dns/export`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+            )}
             <p className="text-[11px] text-emerald-900/80">{t.tokens.authkeyHint}</p>
             <p className="text-[11px] text-emerald-900/80">{t.tokens.urlOriginNote}</p>
           </div>
@@ -382,6 +395,17 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
           <div className="w-44">
             <Label className="text-foreground">{t.tokens.ttlLabel}</Label>
             <Input type="number" min={0} max={365} value={ttlDays} onChange={(e) => setTtlDays(e.target.value)} className="bg-card border-input mt-1" />
+          </div>
+          <div className="w-56">
+            <Label className="text-foreground">{t.tokens.scopeLabel}</Label>
+            <Select value={scope} onValueChange={setScope}>
+              <SelectTrigger className="bg-card border-input mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                <SelectItem value="rules">{t.tokens.scopeRules}</SelectItem>
+                <SelectItem value="domains">{t.tokens.scopeDomains}</SelectItem>
+                <SelectItem value="both">{t.tokens.scopeBoth}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <Button onClick={create} disabled={busy} className="bg-primary hover:bg-primary/90 text-primary-foreground">
             <Plus className="h-4 w-4 mr-1.5" /> {t.tokens.createBtn}
@@ -413,6 +437,7 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
                 <tr className="text-muted-foreground text-left">
                   <th className="px-3 py-2 font-medium">{t.tokens.thName}</th>
                   <th className="px-3 py-2 font-medium">{t.tokens.thPrefix}</th>
+                  <th className="px-3 py-2 font-medium">{t.tokens.thScope}</th>
                   {role === 'admin' && <th className="px-3 py-2 font-medium">{t.tokens.thOwner}</th>}
                   <th className="px-3 py-2 font-medium">{t.tokens.thLastUsed}</th>
                   <th className="px-3 py-2 font-medium">{t.tokens.thDownloads}</th>
@@ -431,6 +456,11 @@ function TokensCard({ role, origin, lang }: { role: 'admin' | 'user'; origin: st
                         {tk.prefix}…
                         {tk.revokedAt && <Badge variant="outline" className="ml-1.5 border-red-300 text-red-600">{t.tokens.revokedBadge}</Badge>}
                         {!tk.revokedAt && expired && <Badge variant="outline" className="ml-1.5 border-amber-400 text-amber-700">{t.tokens.expiredBadge}</Badge>}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <Badge variant="outline" className={tk.scope === 'both' ? 'border-emerald-400 text-emerald-700' : tk.scope === 'domains' ? 'border-input text-foreground' : 'border-input text-muted-foreground'}>
+                          {tk.scope === 'domains' ? t.tokens.scopeDomains : tk.scope === 'both' ? t.tokens.scopeBoth : t.tokens.scopeRules}
+                        </Badge>
                       </td>
                       {role === 'admin' && <td className="px-3 py-1.5 text-muted-foreground">{tk.owner}</td>}
                       <td className="px-3 py-1.5 text-muted-foreground">{tk.lastUsedAt ? fmtTime(tk.lastUsedAt, lang) : t.tokens.neverUsed}</td>
