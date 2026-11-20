@@ -21,8 +21,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { api, Dashboard } from '@/components/hub/api'
+import { RstCheckDialog } from '@/components/hub/rst-check-dialog'
 import { useI18n } from '@/lib/i18n'
-import { Save, Send, Rocket, Trash2, Eye, EyeOff } from 'lucide-react'
+import { Save, Send, Rocket, Trash2, Eye, EyeOff, SearchCheck } from 'lucide-react'
 
 export function IntegrationsTab({ data, onChange }: { data: Dashboard | null; onChange: () => void }) {
   const { t, tr } = useI18n()
@@ -34,7 +35,6 @@ export function IntegrationsTab({ data, onChange }: { data: Dashboard | null; on
   // исчезал из поля до нажатия «Сохранить»). Теперь отредактированные значения
   // переживают обновление дашборда, пока их не сохранит «Сохранить»/«Тест».
   const editedRef = useRef<Set<string>>(new Set())
-
   useEffect(() => {
     if (data?.settings) {
       setS((prev) => {
@@ -165,10 +165,30 @@ function NotificationsCard({
     }
   }
 
+  // RST Cloud: диалог проверки индикаторов (IoC Lookup / Noise Control / Whois)
+  const [rstDialogVisible, setRstDialogVisible] = useState(false)
   const tgOn = (s.notifyTgEnabled ?? 'false') === 'true'
   const goOn = (s.notifyGotifyEnabled ?? 'false') === 'true'
 
   return (
+    <>
+    <Card className="bg-card border-border mb-5">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <SearchCheck className="h-4 w-4 text-primary" /> {t.settings.rstCardTitle}
+        </CardTitle>
+        <CardDescription>{t.settings.rstCardDesc}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => setRstDialogVisible(true)}>
+            <SearchCheck className="h-4 w-4 mr-1.5" /> {t.settings.rstCardBtn}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground whitespace-pre-line">{t.settings.rstCardHint}</p>
+      </CardContent>
+      {rstDialogVisible && <RstCheckDialog onClose={() => setRstDialogVisible(false)} />}
+    </Card>
     <Card className="bg-card border-border">
       <CardHeader className="pb-2">
         <CardTitle className="text-base">{t.settings.notifyTitle}</CardTitle>
@@ -356,6 +376,7 @@ function NotificationsCard({
         </div>
       </CardContent>
     </Card>
+    </>
   )
 }
 

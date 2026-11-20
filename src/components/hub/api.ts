@@ -847,6 +847,8 @@ export interface DomainRecordRow {
 
 export interface DnsRecordsResponse {
   total?: number
+  /** true — счётчик ограничен («20000+»): точный COUNT по 6 млн строк недопустим (v1.35.0) */
+  totalCapped?: boolean
   page?: number
   pageSize?: number
   rows?: DomainRecordRow[]

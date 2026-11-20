@@ -114,8 +114,15 @@ Schema — `prisma/schema.prisma`. The client is generated with `binaryTargets =
 | `LogEntry` | event log | `level` (ok/warn/error/success), `scope`, `message` |
 | `VpnProfile` | stored wg-quick config | `name`, `config`, `active`, `lastStatusJson` |
 
-DB reliability: **WAL mode** (against “Socket timeout” under parallel requests) and automatic
-schema recovery: the entrypoint compares the version stamp (`/app/data/.schema-version`) with
+DB reliability: **WAL mode** (against “Socket timeout” under parallel requests),
+**two Prisma clients** (v1.35.0): `db` — interactive (web API), `dbHeavy` — heavy work
+(rules/DNS builds, dump import, bulk inserts): under WAL readers do not block each other —
+the UI stays responsive during builds; long operations breathe the event loop (batched
+with pauses), sorting millions of strings is chunked (k-way merge), the build file is
+written streaming, a “hung” build (no signs of life for 10 minutes) is force-finished by
+a watchdog, dashboard counters are TTL-cached (60s, background refresh) and every build
+event is mirrored to the container stdout, and
+automatic schema recovery: the entrypoint compares the version stamp (`/app/data/.schema-version`) with
 the sample from the image; on mismatch the old database is backed up to `data/hub.db.bak-<date>`
 and a new one is created. The stamp is computed from models only, so generator edits do not
 recreate the DB.

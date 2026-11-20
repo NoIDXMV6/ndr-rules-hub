@@ -21,6 +21,7 @@ export function DnsRecordsTab() {
   const [rows, setRows] = useState<DomainRecordRow[]>([])
   const [dups, setDups] = useState<Array<{ domain: string; sources: number }>>([])
   const [total, setTotal] = useState<number | null>(null)
+  const [totalCapped, setTotalCapped] = useState(false)
   const [mode, setMode] = useState<'search' | 'dups'>('search')
   const [busy, setBusy] = useState(false)
   const [searched, setSearched] = useState(false)
@@ -34,6 +35,7 @@ export function DnsRecordsTab() {
       setRows(r.rows ?? [])
       setDups(r.duplicates ?? [])
       setTotal(r.total ?? null)
+      setTotalCapped(r.totalCapped ?? false)
       setSearched(true)
     } finally {
       setBusy(false)
@@ -76,7 +78,7 @@ export function DnsRecordsTab() {
               {t.dns.resetBtn}
             </Button>
           </div>
-          {searched && <p className="text-xs text-muted-foreground">{total !== null ? tr(t.dns.rowsCount, { n: total.toLocaleString(loc) }) : ''}</p>}
+          {searched && <p className="text-xs text-muted-foreground">{total !== null ? tr(t.dns.rowsCount, { n: `${total.toLocaleString(loc)}${totalCapped ? '+' : ''}` }) : ''}</p>}
           {searched && mode === 'dups' && (
             <div className="rounded-lg border border-border p-3">
               <p className="text-sm text-foreground mb-2">{t.dns.dupTitle}</p>

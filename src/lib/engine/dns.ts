@@ -8,6 +8,7 @@
 //   renderDomainFile   — итоговый файл: plain | hosts | dnsmasq | adblock.
 // Чистые функции без БД — покрываются unit-тестами (tests/dns.test.ts).
 // ─────────────────────────────────────────────────────────────────────────────
+import { yieldToLoop } from './loop'
 
 export type DomainListFormat = 'adguard' | 'hosts' | 'plain' | 'auto'
 export type DomainExportFormat = 'plain' | 'hosts' | 'dnsmasq' | 'adblock'
@@ -168,6 +169,11 @@ export interface DomainMergeOptions {
   forcedDomains?: Set<string>
   /** верхняя граница аудита дубликатов */
   duplicateAuditCap?: number
+  /**
+   * признак жизни долгой операции (watchdog сборки): вызывается периодически
+   * по мере обработки записей — сборка из миллионов доменов не считается зависшей
+   */
+  onHeartbeat?: (processed: number) => void
 }
 
 /**
@@ -212,12 +218,21 @@ export async function mergeDomainSources(sources: DomainSourceInput[], opts: Dom
     .filter((s) => s.enabled)
     .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name))
 
+  let processedSinceYield = 0
   for (const s of ordered) {
     const per = stats.perSource[s.name]
     const disabledSrc = s.purpose === 'block' && (opts.disabledCategories?.has(s.category) ?? false)
     for await (const [d, mode] of s.entries) {
       per.total++
       stats.totalInput++
+      // разрядка event loop: между батчами чтения из БД интерактивные запросы
+      // (опрос прогресса, дашборд) должны обслуживаться; плюс признак жизни
+      // для watchdog — сборка миллионов записей не считается зависшей
+      if (++processedSinceYield >= 200_000) {
+        processedSinceYield = 0
+        await yieldToLoop()
+      }
+      if ((stats.totalInput & 0x3ffff) === 0) opts.onHeartbeat?.(stats.totalInput)
       if (mode === 'allow' || s.purpose === 'allow') {
         allowSet.add(d)
         continue
@@ -266,9 +281,92 @@ export async function mergeDomainSources(sources: DomainSourceInput[], opts: Dom
   stats.uniqueSids = final.length + finalTld.length
   stats.tldCount = finalTld.length
   stats.duplicateDomains = dupList
-  final.sort()
-  finalTld.sort()
-  return { domains: final, tld: finalTld, stats }
+  // сортировка с паузами: arr.sort() на 6 млн доменов блокирует event loop
+  // на секунды (опрос прогресса «зависает») — см. sortStringsYielded
+  const [sortedDomains, sortedTld] = await Promise.all([sortStringsYielded(final, opts.onHeartbeat), sortStringsYielded(finalTld, opts.onHeartbeat)])
+  return { domains: sortedDomains, tld: sortedTld, stats }
+}
+
+// ── Сортировка миллионов строк без блокировки event loop ────────────────────
+
+/**
+ * Сортировка больших массивов строк с паузами event loop.
+ * Обычный Array.sort() на 6 млн доменов — несколько СЕКУНД полного блока:
+ * Node не обслуживает запросы, опрос GET /api/dns/build/progress «зависает»,
+ * UI показывает непонятный статус. Чанковая схема:
+ *  1) массив режется на чанки (SORT_CHUNK), каждый сортируется отдельно —
+ *     короткие синхронные куски ~десятки мс;
+ *  2) чанки сливаются k-way слиянием через min-кучу (тот же порядок,
+ *     что у дефолтного sort — по кодовым единицам UTF-16);
+ *  3) между чанками и порциями слияния — yieldToLoop(): интерактивные
+ *     запросы пробиваются между порциями работы.
+ * Возвращает НОВЫЙ отсортированный массив; вход не мутируется.
+ */
+export const SORT_CHUNK = 100_000
+
+export async function sortStringsYielded(input: string[], onHeartbeat?: (done: number) => void, chunkSize: number = SORT_CHUNK): Promise<string[]> {
+  if (input.length <= chunkSize) {
+    input.sort()
+    onHeartbeat?.(input.length)
+    return input
+  }
+  const chunks: string[][] = []
+  for (let i = 0; i < input.length; i += chunkSize) {
+    chunks.push(input.slice(i, i + chunkSize).sort())
+    onHeartbeat?.(Math.min(input.length, i + chunkSize))
+    await yieldToLoop()
+  }
+  // k-way слияние: min-куча пар [значение, номер чанка]
+  interface HeapItem { v: string; c: number }
+  const heap: HeapItem[] = []
+  const push = (item: HeapItem): void => {
+    heap.push(item)
+    let i = heap.length - 1
+    while (i > 0) {
+      const p = (i - 1) >> 1
+      if (heap[p].v <= heap[i].v) break
+      ;[heap[p], heap[i]] = [heap[i], heap[p]]
+      i = p
+    }
+  }
+  const pop = (): HeapItem | undefined => {
+    const top = heap[0]
+    const last = heap.pop()
+    if (heap.length > 0 && last) {
+      heap[0] = last
+      let i = 0
+      for (;;) {
+        const l = 2 * i + 1
+        const r = l + 1
+        let m = i
+        if (l < heap.length && heap[l].v < heap[m].v) m = l
+        if (r < heap.length && heap[r].v < heap[m].v) m = r
+        if (m === i) break
+        ;[heap[m], heap[i]] = [heap[i], heap[m]]
+        i = m
+      }
+    }
+    return top
+  }
+  const pos = new Array<number>(chunks.length).fill(0)
+  for (let c = 0; c < chunks.length; c++) {
+    if (chunks[c].length > 0) push({ v: chunks[c][0], c })
+  }
+  const out: string[] = new Array(input.length)
+  let n = 0
+  while (heap.length > 0) {
+    const min = pop()!
+    out[n++] = min.v
+    const next = pos[min.c] + 1
+    pos[min.c] = next
+    if (next < chunks[min.c].length) push({ v: chunks[min.c][next], c: min.c })
+    if (n % chunkSize === 0) {
+      onHeartbeat?.(n)
+      await yieldToLoop()
+    }
+  }
+  onHeartbeat?.(input.length)
+  return out
 }
 
 // ── Рендер итогового файла ───────────────────────────────────────────────────
@@ -279,8 +377,22 @@ export interface DomainFileMeta {
   stats?: Partial<DomainMergeStats> & { allowedSources?: string[]; fileName?: string }
 }
 
-/** Строка-заголовок итогового файла (аналог renderFinalFile в build.ts) */
-export function renderDomainFile(domains: string[], tld: string[], format: DomainExportFormat, meta: DomainFileMeta = {}): string {
+/**
+ * Строка итогового файла для одного домена (формат отдачи).
+ * Выделена отдельно: стриминговая запись сборки (dns-service) рендерит файл
+ * порциями, не собирая гигантскую строку всего файла в памяти.
+ */
+export function domainExportLine(d: string, format: DomainExportFormat): string {
+  switch (format) {
+    case 'hosts': return `0.0.0.0 ${d}`
+    case 'dnsmasq': return `address=/${d}/`
+    case 'adblock': return `||${d}^`
+    default: return d
+  }
+}
+
+/** Шапка итогового файла (строки до пустой строки-разделителя) */
+export function domainExportHeaderLines(format: DomainExportFormat, meta: DomainFileMeta, totalDomains: number): string[] {
   const gen = (meta.generatedAt ?? new Date()).toISOString()
   const lines: string[] = []
   lines.push('# ─────────────────────────────────────────────────────────────')
@@ -289,7 +401,7 @@ export function renderDomainFile(domains: string[], tld: string[], format: Domai
   lines.push(`# Сгенерировано: ${gen} / Generated: ${gen}`)
   if (meta.sources?.length) lines.push(`# Источники: ${meta.sources.join(', ')}`)
   if (meta.stats) {
-    lines.push(`# Всего доменов: ${domains.length + tld.length}`)
+    lines.push(`# Всего доменов: ${totalDomains}`)
     if (meta.stats.duplicateByDomain) lines.push(`# Дубликатов устранено: ${meta.stats.duplicateByDomain}`)
     if (meta.stats.allowedRemoved) lines.push(`# Исключено белым списком: ${meta.stats.allowedRemoved}`)
     if (meta.stats.categoryRemoved) lines.push(`# Исключено категориями: ${meta.stats.categoryRemoved}`)
@@ -297,22 +409,13 @@ export function renderDomainFile(domains: string[], tld: string[], format: Domai
     if (meta.stats.tldCount) lines.push(`# TLD-записей: ${meta.stats.tldCount}`)
   }
   lines.push('# ─────────────────────────────────────────────────────────────')
-  lines.push('')
-  for (const d of domains) {
-    switch (format) {
-      case 'hosts': lines.push(`0.0.0.0 ${d}`); break
-      case 'dnsmasq': lines.push(`address=/${d}/`); break
-      case 'adblock': lines.push(`||${d}^`); break
-      default: lines.push(d)
-    }
-  }
-  for (const d of tld) {
-    switch (format) {
-      case 'hosts': lines.push(`0.0.0.0 ${d}`); break
-      case 'dnsmasq': lines.push(`address=/${d}/`); break
-      case 'adblock': lines.push(`||${d}^`); break
-      default: lines.push(d)
-    }
-  }
+  return lines
+}
+
+/** Строка-заголовок итогового файла (аналог renderFinalFile в build.ts) */
+export function renderDomainFile(domains: string[], tld: string[], format: DomainExportFormat, meta: DomainFileMeta = {}): string {
+  const lines = [...domainExportHeaderLines(format, meta, domains.length + tld.length), '']
+  for (const d of domains) lines.push(domainExportLine(d, format))
+  for (const d of tld) lines.push(domainExportLine(d, format))
   return lines.join('\n') + '\n'
 }

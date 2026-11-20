@@ -1,9 +1,13 @@
 'use client'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Диалог «Проверить в RST Cloud» (вкладка «DNS списки → Записи»):
-//  • RST IoC Lookup — балл/теги/описание индикатора (запускается автоматически);
-//  • RST Noise Control — считается ли домен доброкачественным (false positives);
+// Диалог «Проверка в RST Cloud» (v1.35.0 — универсальный):
+//  • открывается с готовым значением (кнопка «Проверить в RST Cloud» у записи
+//    в «DNS списки → Записи») или с пустым полем ввода (карточка «Интеграций»,
+//    тулбар «Правил») — проверяется ЛЮБОЙ индикатор: домен, IP, URL, хэш;
+//  • RST IoC Lookup — балл/теги/описание индикатора (запускается автоматически
+//    для переданного значения, для введённого вручную — по кнопке «Проверить»);
+//  • RST Noise Control — считается ли значение доброкачественным (false positives);
 //  • RST Whois — регистрационные данные домена.
 // Каждая проверка тратит 1 запрос квоты ключа RST Cloud (обычно 1000/день).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -11,32 +15,38 @@ import { useCallback, useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { api, RstLookupResult } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
 import { Globe, SearchCheck, Waves } from 'lucide-react'
 
 type Mode = 'ioc' | 'benign' | 'whois'
 
-export function RstCheckDialog({ domain, onClose }: { domain: string; onClose: () => void }) {
+export function RstCheckDialog({ domain, onClose }: { domain?: string; onClose: () => void }) {
   const { t, tr } = useI18n()
-  const [busy, setBusy] = useState<Mode | null>('ioc')
+  const [value, setValue] = useState(domain?.trim() ?? '')
+  const [busy, setBusy] = useState<Mode | null>(null)
   const [res, setRes] = useState<Partial<Record<Mode, RstLookupResult>>>({})
 
-  const run = useCallback(async (mode: Mode) => {
+  const run = useCallback(async (mode: Mode, v: string) => {
+    const value = v.trim()
+    if (!value) return
     setBusy(mode)
     try {
-      const r = await api.rst.lookup(domain, mode)
+      const r = await api.rst.lookup(value, mode)
       setRes((prev) => ({ ...prev, [mode]: r }))
     } catch (e) {
-      setRes((prev) => ({ ...prev, [mode]: { ok: false, status: 0, mode, value: domain, error: (e as Error).message } as RstLookupResult }))
+      setRes((prev) => ({ ...prev, [mode]: { ok: false, status: 0, mode, value, error: (e as Error).message } as RstLookupResult }))
     } finally {
       setBusy(null)
     }
-  }, [domain])
+  }, [])
 
+  // переданное значение (кнопка у записи) проверяется сразу
   useEffect(() => {
-    void run('ioc')
-  }, [run])
+    const v = domain?.trim()
+    if (v) void run('ioc', v)
+  }, [domain, run])
 
   const ioc = res.ioc
   const iocScore = ioc?.ok ? Math.round(Number((ioc.data?.score as Record<string, unknown> | undefined)?.total ?? 0) || 0) : null
@@ -47,16 +57,42 @@ export function RstCheckDialog({ domain, onClose }: { domain: string; onClose: (
   const iocDesc = ioc?.ok && typeof ioc.data?.description === 'string' ? ioc.data!.description as string : ''
   const benign = res.benign
   const whois = res.whois
+  const shown = domain?.trim() ? tr(t.dns.rstDialogTitle, { domain: domain!.trim() }) : t.dns.rstDialogTitleAny
 
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="bg-card border-border max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-foreground text-base flex items-center gap-2">
-            <SearchCheck className="h-4 w-4 text-primary" /> {tr(t.dns.rstDialogTitle, { domain })}
+            <SearchCheck className="h-4 w-4 text-primary" /> {shown}
           </DialogTitle>
           <DialogDescription>{t.dns.rstDialogDesc}</DialogDescription>
         </DialogHeader>
+
+        {/* Ручной ввод: домен/IP/URL/хэш — тип определяется на стороне RST Cloud */}
+        {!domain?.trim() && (
+          <section className="space-y-1.5">
+            <div className="flex gap-2">
+              <Input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && value.trim() && busy === null) void run('ioc', value) }}
+                placeholder={t.dns.rstInputPlaceholder}
+                className="bg-card border-input font-mono"
+                autoFocus
+              />
+              <Button
+                size="sm"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground shrink-0"
+                disabled={!value.trim() || busy !== null}
+                onClick={() => void run('ioc', value)}
+              >
+                <SearchCheck className="h-4 w-4 mr-1.5" /> {t.dns.rstRunBtn}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">{t.dns.rstInputHint}</p>
+          </section>
+        )}
 
         {/* IoC Lookup — балл и теги */}
         <section className="space-y-2">
@@ -94,7 +130,7 @@ export function RstCheckDialog({ domain, onClose }: { domain: string; onClose: (
               <Waves className="h-3.5 w-3.5 text-muted-foreground" />
               <h4 className="text-sm font-medium text-foreground">{t.dns.rstBenignTitle}</h4>
             </div>
-            <Button variant="outline" size="sm" className="border-input text-foreground" disabled={busy !== null} onClick={() => void run('benign')}>
+            <Button variant="outline" size="sm" className="border-input text-foreground" disabled={busy !== null || !value.trim()} onClick={() => void run('benign', value)}>
               {busy === 'benign' ? t.dns.rstLoading : t.dns.rstBenignBtn}
             </Button>
             {benign && (
@@ -106,7 +142,7 @@ export function RstCheckDialog({ domain, onClose }: { domain: string; onClose: (
               <Globe className="h-3.5 w-3.5 text-muted-foreground" />
               <h4 className="text-sm font-medium text-foreground">{t.dns.rstWhoisTitle}</h4>
             </div>
-            <Button variant="outline" size="sm" className="border-input text-foreground" disabled={busy !== null} onClick={() => void run('whois')}>
+            <Button variant="outline" size="sm" className="border-input text-foreground" disabled={busy !== null || !value.trim()} onClick={() => void run('whois', value)}>
               {busy === 'whois' ? t.dns.rstLoading : t.dns.rstWhoisBtn}
             </Button>
             {whois && (

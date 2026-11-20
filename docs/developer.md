@@ -34,7 +34,7 @@ src/
     edition.ts               # редакции Community/Enterprise
     security/                # слой защиты (§4) — единственное место с auth-логикой
     engine/                  # fetcher, parser, build, serve, exporter, scheduler...
-    db.ts                    # Prisma (SQLite WAL, connection_limit=1)
+    db.ts                    # Prisma (SQLite WAL; db — интерфейс, dbHeavy — сборки)
     i18n/                    # ru.ts (канон) → en.ts типизирован как Dictionary
   components/hub/            # UI-вкладки, api.ts (клиент), auth-screen, users-tab
 prisma/schema.prisma         # Source(+ownerId), Rule, Build, ..., User, Session, DownloadToken, AuthEvent

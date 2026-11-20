@@ -15,6 +15,12 @@
 // не раздувает память. Состояние персистентно в пределах процесса Node:
 // перезапуск сервера сбрасывает прогресс (это честно — незавершённая сборка
 // при перезапуске прерывается физически).
+//
+// Watchdog (v1.35.0): признак жизни (touch на каждой стадии/строке журнала);
+// если активная сборка молчит дольше BUILD_STALE_MS — принудительное
+// завершение с ошибкой (раньше «active» висело вечно и новые сборки
+// отклонялись «уже выполняется»). Каждое событие дублируется в stdout —
+// контейнерные логи диагностируются даже при заблокированной БД.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface BuildLogLine {
@@ -48,12 +54,25 @@ export interface BuildProgressState {
 }
 
 const LOG_CAP = 600
+/** Предохранитель «вечной сборки»: нет признаков жизни N минут — аварийное завершение */
+let BUILD_STALE_MS = 10 * 60_000
+
+/** Только для тестов: подменить порог watchdog (мс) */
+export function setBuildStaleMs(ms: number): void {
+  BUILD_STALE_MS = ms
+}
 
 let state: BuildProgressState | null = null
 let jobSeq = 0
+let startedMs = 0
+let updatedMs = 0
 
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+function consoleLog(msg: string): void {
+  console.log(`[build ${nowIso().slice(11, 19)}] ${msg}`)
 }
 
 /** Начать новое задание прогресса (сбрасывает предыдущее состояние). */
@@ -71,6 +90,9 @@ export function startBuildProgress(origin: string): BuildProgressState {
     log: [],
     result: null,
   }
+  startedMs = Date.now()
+  updatedMs = startedMs
+  consoleLog(`сборка набора правил запущена (origin=${origin}, jobId=${state.jobId})`)
   return state
 }
 
@@ -79,9 +101,21 @@ export function getBuildProgress(): BuildProgressState | null {
   return state
 }
 
-/** Есть ли незавершённая сборка прямо сейчас. */
+/** Признак жизни долгой операции (сбрасывает watchdog) — вызывать из циклов сборки */
+export function touchBuild(): void {
+  if (state?.active) updatedMs = Date.now()
+}
+
+/** Есть ли незавершённая сборка прямо сейчас (watchdog: молчание = зависание). */
 export function isBuildActive(): boolean {
-  return state?.active ?? false
+  if (!state?.active) return false
+  const idle = Date.now() - Math.max(startedMs, updatedMs)
+  if (idle > BUILD_STALE_MS) {
+    const err = `сборка прервана watchdog: признаков жизни нет ${(idle / 60_000).toFixed(0)} мин (стадия «${state.stage}») — операция считалась зависшей`
+    failBuildProgress(err)
+    return false
+  }
+  return true
 }
 
 /** Смена фазы сборки: код фазы + процент готовности (0..100). */
@@ -89,6 +123,8 @@ export function setBuildStage(stage: string, percent: number): void {
   if (!state) return
   state.stage = stage
   state.percent = Math.max(0, Math.min(100, Math.round(percent)))
+  updatedMs = Date.now()
+  consoleLog(`стадия ${stage} (${state.percent}%)`)
 }
 
 /** Добавить строку в журнал сборки (показывается в UI под прогрессбаром). */
@@ -96,6 +132,9 @@ export function addBuildLog(msg: string): void {
   if (!state) return
   state.log.push({ ts: nowIso(), msg: msg.slice(0, 500) })
   if (state.log.length > LOG_CAP) state.log.splice(0, state.log.length - LOG_CAP)
+  updatedMs = Date.now()
+  // зеркало в stdout: единственная диагностика, когда БД/UI недоступны
+  consoleLog(msg)
 }
 
 /** Успешное (или частично — export с ошибкой) завершение сборки. */
@@ -106,6 +145,7 @@ export function finishBuildProgress(result: NonNullable<BuildProgressState['resu
   state.percent = 100
   state.finishedAt = nowIso()
   state.result = result
+  consoleLog(`сборка завершена за ${((Date.now() - startedMs) / 1000).toFixed(1)} с: ${result.ok ? `OK, ${result.total ?? 0} правил, файл ${result.fileName ?? '—'}` : `ошибка: ${result.error ?? '—'}`}`)
 }
 
 /** Аварийное завершение сборки (исключение/гейт). */
@@ -115,6 +155,7 @@ export function failBuildProgress(error: string): void {
   state.finishedAt = nowIso()
   state.error = error.slice(0, 500)
   state.result = { ok: false, error: state.error }
+  console.error(`[build ${nowIso().slice(11, 19)}] СБОЙ: ${state.error} (стадия ${state.stage}, прошло ${((Date.now() - startedMs) / 1000).toFixed(1)} с)`)
 }
 
 /** Только для тестов: обнулить состояние прогресса. */

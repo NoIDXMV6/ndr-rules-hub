@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { ensureSeed, getSettings, maybeStartScheduler } from '@/lib/engine/service'
 import { ensureDnsSeed } from '@/lib/engine/seed'
 import { domainDashboard } from '@/lib/engine/dns-service'
+import { rulesCountCached } from '@/lib/engine/count-cache'
 import { isSourceVisible, effectiveEnabled } from '@/lib/engine/workspace'
 import { maybeStartCleanupScheduler } from '@/lib/engine/cleanup'
 import { maybeStartTelegramPoller, checkReleaseBroadcast } from '@/lib/engine/telegram'
@@ -46,13 +47,15 @@ export async function GET(req: NextRequest) {
     const stateRows: Array<{ sourceId: string; enabled: boolean }> = !isAdminRole && uid
       ? await db.sourceState.findMany({ where: { userId: uid } })
       : []
-    const [allSources, builds, settings, ruleAgg] = await Promise.all([
+    const [allSources, builds, settings, rulesCount] = await Promise.all([
       // стабильный порядок: по времени добавления — вкл/выкл источника НЕ перемещает
       // его в списке (раньше orderBy по enabled перемещал строку при каждом toggle)
       db.source.findMany({ orderBy: [{ createdAt: 'asc' }] }),
       db.build.findMany({ where: isAdminRole ? { userId: null } : uid ? { userId: uid } : { userId: '—none—' }, orderBy: { createdAt: 'desc' }, take: 1 }),
       getSettings(),
-      db.rule.aggregate({ _count: { _all: true } }),
+      // v1.35.0: счётчик правил через TTL-кэш — COUNT(*) по 478k строк на каждый
+      // опрос дашборда замедлял чтение из БД до неприемлемых показателей
+      rulesCountCached(),
     ])
     // события: пользователь видит ТОЛЬКО свои; системные (userId = null) — только админ
     const logs = isAdminRole
@@ -89,7 +92,7 @@ export async function GET(req: NextRequest) {
           createdAt: s.createdAt,
         })),
       },
-      rules: { inDb: ruleAgg._count._all, inBuild: builds0?.totalRules ?? 0 },
+      rules: { inDb: rulesCount, inBuild: builds0?.totalRules ?? 0 },
       lastBuild: builds0
         ? {
             id: builds0.id, createdAt: builds0.createdAt, totalRules: builds0.totalRules,

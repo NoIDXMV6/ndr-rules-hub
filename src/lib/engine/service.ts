@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Сервисный слой: сид каталога, загрузка источников, сборка, экспорт, cron
 // ─────────────────────────────────────────────────────────────────────────────
-import { db } from '@/lib/db'
+import { db, dbHeavy } from '@/lib/db'
 import { multiUserEnabled } from '@/lib/edition'
 import { SEED_SOURCES, DEFAULT_SETTINGS } from './seed'
 import { isSourceVisible, effectiveEnabled, personalFileName, workspaceSignature } from './workspace'
@@ -14,7 +14,9 @@ import { saveExportFile, pushToClearndr, ClearndrExportCfg } from './exporter'
 import { SidMapper, remapToClearndrBlock } from './sidmap'
 import { ruleCategory, applyCategoryAndRuleFilter } from './categories'
 import { notifyEvent } from './notify'
-import { startBuildProgress, isBuildActive, setBuildStage, addBuildLog, finishBuildProgress, failBuildProgress } from './build-progress'
+import { startBuildProgress, isBuildActive, setBuildStage, addBuildLog, touchBuild, finishBuildProgress, failBuildProgress } from './build-progress'
+import { yieldToLoop } from './loop'
+import { invalidateCounts } from './count-cache'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { execFile } from 'child_process'
@@ -375,7 +377,7 @@ export async function fetchSourceById(sourceId: string, userId?: string | null):
   // удаления старых строк: sid есть только в новом наборе — добавлено; sid в обоих,
   // но строка правила изменилась — изменено; sid исчез — удалено. Если изменений
   // нет — пересборка/переимпорт правил для Suricata не требуется.
-  const prevRows = await db.rule.findMany({ where: { sourceId: src.id }, select: { sid: true, raw: true } })
+  const prevRows = await dbHeavy.rule.findMany({ where: { sourceId: src.id }, select: { sid: true, raw: true } })
   const prevRaw = new Map(prevRows.map((r) => [r.sid, r.raw]))
   const nextRaw = new Map(rows.map((r) => [r.sid, r.raw]))
   let diffAdded = 0
@@ -392,10 +394,14 @@ export async function fetchSourceById(sourceId: string, userId?: string | null):
   // времени и старых правил): сравнивать не с чем, диф не показываем как изменения
   const firstFetch = !src.lastFetchAt && prevRows.length === 0
 
-  await db.rule.deleteMany({ where: { sourceId: src.id } })
+  // v1.35.0: массовая замена правил источника — через dbHeavy (отдельная
+  // коннекция): загрузка Snort (~53k правил) больше не блокирует UI
+  await dbHeavy.rule.deleteMany({ where: { sourceId: src.id } })
   for (let i = 0; i < rows.length; i += 500) {
-    await db.rule.createMany({ data: rows.slice(i, i + 500) })
+    await dbHeavy.rule.createMany({ data: rows.slice(i, i + 500) })
+    await yieldToLoop() // разрядка event loop: UI обслуживается между чанками
   }
+  invalidateCounts() // счётчик правил изменился — кэш дашборда обновится
 
   const patch: {
     status: string
@@ -527,16 +533,49 @@ export async function fetchAllSources(origin = 'manual', userId?: string | null)
 /** Источники персонального рабочего пространства: видимые пользователю
  *  (системные кроме adminOnly, свои, опубликованные другими) и эффективно
  *  включённые (SourceState, без строки — наследуется Source.enabled).
- *  Возвращает ПОЛНЫЕ строки Source (с правилами) для сборки. */
+ *  Возвращает метаданные строк Source БЕЗ правил — правила грузятся пакетно
+ *  в buildFinal (v1.35.0: include:{rules:true} одним запросом держал единственную
+ *  коннекцию и сотни МБ памяти — UI/дашборд при этом стояли в очереди). */
 async function userWorkspaceSources(userId: string) {
   const [sources, states] = await Promise.all([
-    db.source.findMany({ where: { deletedAt: null }, orderBy: { priority: 'asc' }, include: { rules: true } }),
+    dbHeavy.source.findMany({ where: { deletedAt: null }, orderBy: { priority: 'asc' } }),
     db.sourceState.findMany({ where: { userId } }),
   ])
   const stMap = new Map(states.map((st) => [st.sourceId, st]))
   return sources
     .filter((s) => isSourceVisible(s, 'user', userId) && effectiveEnabled(s, stMap.get(s.id)))
     .map((s) => ({ ...s, effectiveEnabled: true }))
+}
+
+/** Размер пакета чтения правил одного источника */
+const RULES_BATCH = 20_000
+
+/**
+ * Пакетное чтение правил одного источника (cursor по id).
+ * На батче — touchBuild() (признак жизни для watchdog) и yieldToLoop():
+ * event loop обслуживает интерактивные запросы между пакетами, коннекция
+ * dbHeavy не «монополизируется» одним гигантским запросом.
+ */
+async function loadSourceRulesBatched(sourceId: string, sourceName: string, priority: number): Promise<SourceRules> {
+  const rules: SourceRules['rules'] = []
+  let cursor: number | undefined = undefined
+  for (;;) {
+    touchBuild()
+    const rows = await dbHeavy.rule.findMany({
+      where: { sourceId },
+      // id обязателен в select: по нему идёт cursor-пагинация (без id курсор
+      // всегда undefined — вечный цикл)
+      select: { id: true, sid: true, rev: true, raw: true, action: true, proto: true, contentHash: true, suricataOk: true, compatNotes: true, clsType: true },
+      orderBy: { id: 'asc' },
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      take: RULES_BATCH,
+    })
+    if (rows.length === 0) break
+    cursor = rows[rows.length - 1].id
+    rules.push(...rows)
+    await yieldToLoop()
+  }
+  return { sourceId, sourceName, priority, rules }
 }
 
 /** Сборка итогового файла правил. userId = null — системная сборка (админ,
@@ -558,13 +597,20 @@ export async function buildFinal(origin = 'manual', userId: string | null = null
   // (состояние в памяти процесса, UI опрашивает GET /api/build/progress)
   if (!isBuildActive()) startBuildProgress(origin)
   const settings = await getSettings()
+
   const user = userId ? await db.user.findUnique({ where: { id: userId }, select: { id: true, email: true } }) : null
+  // v1.35.0: метаданные источников — через dbHeavy; правила каждого источника
+  // читаются ПАКЕТНО (cursor-батчи по RULES_BATCH с разрядкой event loop):
+  // раньше include:{rules:true} грузил все правила одним запросом через
+  // единственную коннекцию — UI/дашборд/опрос прогресса стояли в очереди
+  // (чтение из БД «замедлилось до неприемлемых показателей»), а последующие
+  // синхронные фазы делали прогресс непонятным.
+  setBuildStage('db-read', 3)
   const sources = userId
     ? await userWorkspaceSources(userId)
-    : await db.source.findMany({
+    : await dbHeavy.source.findMany({
         where: { enabled: true, deletedAt: null },
         orderBy: { priority: 'asc' },
-        include: { rules: true },
       })
   if (sources.length === 0) {
     const emptyMsg = userId
@@ -573,25 +619,16 @@ export async function buildFinal(origin = 'manual', userId: string | null = null
     failBuildProgress(emptyMsg)
     return { ok: false, error: emptyMsg }
   }
-  setBuildStage('db-read', 5)
-  addBuildLog(`Чтение источников из базы: ${sources.length} шт., правил на входе ${sources.reduce((n, s) => n + s.rules.length, 0).toLocaleString('ru-RU')}`)
-
-  const srcRules: SourceRules[] = sources.map((s) => ({
-    sourceId: s.id,
-    sourceName: s.name,
-    priority: s.priority,
-    rules: s.rules.map((r) => ({
-      sid: r.sid,
-      rev: r.rev,
-      raw: r.raw,
-      action: r.action,
-      proto: r.proto,
-      contentHash: r.contentHash,
-      suricataOk: r.suricataOk,
-      compatNotes: r.compatNotes,
-      clsType: r.clsType,
-    })),
-  }))
+  addBuildLog(`Чтение правил из базы пакетно (батчи по ${RULES_BATCH.toLocaleString('ru-RU')})…`)
+  const srcRules: SourceRules[] = []
+  let totalInRules = 0
+  for (const meta of sources) {
+    const loaded = await loadSourceRulesBatched(meta.id, meta.name, meta.priority)
+    srcRules.push(loaded)
+    totalInRules += loaded.rules.length
+    addBuildLog(`Источник «${meta.name}»: ${loaded.rules.length.toLocaleString('ru-RU')} правил`)
+  }
+  addBuildLog(`Чтение завершено: источников ${sources.length} шт., правил на входе ${totalInRules.toLocaleString('ru-RU')}`)
 
   // Фильтр категорий и пользовательских исключений правил (раздел «Категории»):
   // правила включённых источников дополнительно проходят через выключенные
@@ -649,7 +686,14 @@ export async function buildFinal(origin = 'manual', userId: string | null = null
   // подпись рабочего пространства (персональные сборки): cron сравнивает её
   // с прошлой персональной сборкой и пропускает пересборку без изменений
   if (userId) {
-    stats.workspaceSignature = workspaceSignature(sources.map((s) => ({ id: s.id, enabled: s.enabled, eff: true, priority: s.priority, ruleCount: s.rules.length, updatedAt: s.updatedAt })))
+    stats.workspaceSignature = workspaceSignature(srcRules.map((sr) => ({
+      id: sr.sourceId,
+      enabled: sources.find((s) => s.id === sr.sourceId)?.enabled ?? true,
+      eff: true,
+      priority: sr.priority,
+      ruleCount: sr.rules.length,
+      updatedAt: sources.find((s) => s.id === sr.sourceId)?.updatedAt,
+    })))
     stats.workspace = { userId, sources: sources.length }
   }
   setBuildStage('conflict-dedup', 45)

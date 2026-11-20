@@ -3,15 +3,16 @@
 // сборка списка заблокированных доменов, отдача по токену.
 // Идеология аналогична service.ts (правила NDR), но записи — домены.
 // ─────────────────────────────────────────────────────────────────────────────
-import { db } from '@/lib/db'
+import { db, dbHeavy } from '@/lib/db'
 import { createHash } from 'crypto'
-import { promises as fs } from 'fs'
+import { promises as fs, createWriteStream } from 'fs'
 import path from 'path'
 import { DATA_DIR, EXPORTS_DIR } from './fetcher'
 import { log, getSettings, fetchSourceById } from './service'
 import {
-  parseDomainList, mergeDomainSources, renderDomainFile,
-  type DomainExportFormat, type DomainSourceInput,
+  parseDomainList, mergeDomainSources,
+  domainExportHeaderLines, domainExportLine,
+  type DomainExportFormat, type DomainSourceInput, type DomainFileMeta,
 } from './dns'
 import { maybeGunzip, parseRstFeedCsv } from './rst'
 import {
@@ -20,9 +21,11 @@ import {
   dumpRulesHeader,
 } from './dns-import'
 import {
-  startDnsBuildProgress, setDnsBuildStage, addDnsBuildLog,
+  startDnsBuildProgress, setDnsBuildStage, addDnsBuildLog, touchDnsBuild,
   finishDnsBuildProgress, failDnsBuildProgress, isDnsBuildActive, getDnsBuildProgress,
 } from './dns-progress'
+import { yieldToLoop } from './loop'
+import { domainRecordsCountCached, invalidateCounts } from './count-cache'
 
 export const DNS_EXPORT_DIR = path.join(EXPORTS_DIR, 'domains')
 export const DNS_UPLOAD_DIR = path.join(DATA_DIR, 'domains')
@@ -159,9 +162,11 @@ async function fetchDomainText(src: { id: string; name: string; kind: string; ur
   }
 }
 
-/** Обновить записи источника: диф по доменам (новые/удалённые), пересчёт счётчиков */
+/** Обновить записи источника: диф по доменам (новые/удалённые), пересчёт счётчиков.
+ *  dbHeavy (v1.35.0): чтение ВСЕХ прежних записей источника и массовые
+ *  createMany/deleteMany идут через отдельную коннекцию — UI не блокируется. */
 export async function replaceDomainRecords(sourceId: string, records: Array<{ domain: string; mode: 'block' | 'allow'; categories?: string }>): Promise<{ added: number; removed: number; total: number }> {
-  const prev = await db.domainRecord.findMany({ where: { sourceId }, select: { id: true, domain: true, mode: true, categories: true } })
+  const prev = await dbHeavy.domainRecord.findMany({ where: { sourceId }, select: { id: true, domain: true, mode: true, categories: true } })
   const prevMap = new Map(prev.map((r) => [r.domain, r]))
   const nextMap = new Map(records.map((r) => [r.domain, r]))
   const toCreate = records.filter((r) => {
@@ -171,14 +176,16 @@ export async function replaceDomainRecords(sourceId: string, records: Array<{ do
   const toDelete = prev.filter((r) => !nextMap.has(r.domain)).map((r) => r.id)
   const CHUNK = 5000
   for (let i = 0; i < toCreate.length; i += CHUNK) {
-    await db.domainRecord.createMany({
+    await dbHeavy.domainRecord.createMany({
       data: toCreate.slice(i, i + CHUNK).map((r) => ({
         sourceId, domain: r.domain, mode: r.mode, categories: r.categories ?? '',
       })),
     })
+    await yieldToLoop() // разрядка event loop: UI обслуживается между чанками
   }
   for (let i = 0; i < toDelete.length; i += CHUNK) {
-    await db.domainRecord.deleteMany({ where: { id: { in: toDelete.slice(i, i + CHUNK) } } })
+    await dbHeavy.domainRecord.deleteMany({ where: { id: { in: toDelete.slice(i, i + CHUNK) } } })
+    await yieldToLoop()
   }
   // изменившиеся mode/categories — точечные апдейты (обычно их немного)
   const changed = records.filter((r) => {
@@ -186,11 +193,12 @@ export async function replaceDomainRecords(sourceId: string, records: Array<{ do
     return p && (p.mode !== r.mode || p.categories !== (r.categories ?? ''))
   })
   for (const r of changed) {
-    await db.domainRecord.updateMany({
+    await dbHeavy.domainRecord.updateMany({
       where: { sourceId, domain: r.domain },
       data: { mode: r.mode, categories: r.categories ?? '' },
     })
   }
+  invalidateCounts() // счётчик доменных записей изменился — кэш дашборда обновится
   return { added: toCreate.length, removed: toDelete.length, total: nextMap.size }
 }
 
@@ -388,7 +396,7 @@ export async function importDomainDump(filePath: string, opts: { name?: string; 
 
   const t0 = Date.now()
   try {
-    await db.domainRecord.deleteMany({ where: { sourceId: src.id } })
+    await dbHeavy.domainRecord.deleteMany({ where: { sourceId: src.id } })
     let created = 0
     let urlHosts = 0
     let dumpDuplicates = 0
@@ -427,7 +435,7 @@ export async function importDomainDump(filePath: string, opts: { name?: string; 
         })
         dumpDuplicates += batch.length - fresh.length
         if (!fresh.length) return
-        await db.domainRecord.createMany({
+        await dbHeavy.domainRecord.createMany({
           data: fresh.map((d) => ({
             sourceId: src!.id,
             domain: d.domain,
@@ -435,6 +443,7 @@ export async function importDomainDump(filePath: string, opts: { name?: string; 
             categories: d.categoryIds.length ? d.categoryIds.join(',') : '',
           })),
         })
+        await yieldToLoop() // разрядка event loop: UI обслуживается между батчами импорта
         created += fresh.length
         for (const d of fresh) {
           if (d.fromUrl) urlHosts++
@@ -473,6 +482,7 @@ export async function importDomainDump(filePath: string, opts: { name?: string; 
     }
 
     const dt = ((Date.now() - t0) / 1000).toFixed(1)
+    invalidateCounts() // счётчик доменных записей изменился — кэш дашборда обновится
     await db.domainSource.update({
       where: { id: src.id },
       data: { status: 'ok', lastError: null, lastFetchAt: new Date(), domainCount: created, sizeBytes: 0 },
@@ -520,25 +530,99 @@ export interface DomainBuildResult {
 }
 
 /**
+ * Стриминговая запись итогового файла: порции строк → поток + инкрементальный
+ * sha256. Раньше renderDomainFile собирал ВЕСЬ файл одной строкой (на 6 млн
+ * доменов — массив из 6 млн строк + строка ~100 МБ в join) — пик памяти и
+ * длинная блокировка event loop. Порции по 20k строк (~300 КБ) пишутся
+ * с await drain, хэш считается на лету — память плоская, UI отвечает.
+ */
+async function writeDomainFileStreaming(
+  domains: string[],
+  tld: string[],
+  format: DomainExportFormat,
+  meta: DomainFileMeta,
+  filePath: string,
+  onHeartbeat?: () => void,
+): Promise<{ sizeBytes: number; sha256: string }> {
+  const header = domainExportHeaderLines(format, meta, domains.length + tld.length)
+  const hash = createHash('sha256')
+  let sizeBytes = 0
+  const stream = createWriteStream(filePath, { encoding: 'utf8' })
+  let finished = false
+  const writeChunk = (chunk: string): Promise<void> =>
+    new Promise((resolve, reject) => {
+      hash.update(chunk, 'utf8')
+      sizeBytes += Buffer.byteLength(chunk, 'utf8')
+      if (!stream.write(chunk)) stream.once('drain', resolve)
+      else resolve()
+    })
+  try {
+    await writeChunk(header.join('\n') + '\n\n')
+    const buf: string[] = []
+    const flush = async (): Promise<void> => {
+      if (buf.length) {
+        await writeChunk(buf.join('\n') + '\n')
+        buf.length = 0
+      }
+    }
+    for (let i = 0; i < domains.length; i++) {
+      buf.push(domainExportLine(domains[i], format))
+      if (buf.length >= 20_000) {
+        await flush()
+        onHeartbeat?.()
+        await yieldToLoop()
+      }
+    }
+    for (let i = 0; i < tld.length; i++) {
+      buf.push(domainExportLine(tld[i], format))
+      if (buf.length >= 20_000) {
+        await flush()
+        onHeartbeat?.()
+        await yieldToLoop()
+      }
+    }
+    await flush()
+    await new Promise<void>((resolve, reject) => {
+      stream.end(() => { finished = true; resolve() })
+      stream.on('error', reject)
+    })
+    return { sizeBytes, sha256: hash.digest('hex') }
+  } finally {
+    if (!finished) stream.destroy()
+  }
+}
+
+/**
  * Сборка итогового списка доменов: включённые источники по приоритету,
  * белый список, дубликаты, категории, ручные решения; файл + запись DomainBuild.
+ * v1.35.0 (снятие блокировки БД):
+ *  • чтение записей и запись результата — через ОТДЕЛЬНУЮ коннекцию dbHeavy:
+ *    в режиме WAL читатели не блокируют друг друга, UI/дашборд отвечают
+ *    во время сборки (раньше всё шло через одну коннекцию — интерактивные
+ *    запросы выстраивались в очередь и падали по таймауту);
+ *  • признак жизни (touchDnsBuild) в каждом батче чтения — watchdog больше
+ *    не позволит «вечной» сборке заблокировать очередь;
+ *  • файл пишется стримингово (без гигантской строки), sha256 на лету;
+ *  • timings каждой фазы — в журнал сборки и stdout (диагностика «куда
+ *    уходит время» без доступа к БД).
  */
 export async function buildDomainList(origin = 'manual'): Promise<DomainBuildResult> {
   if (isDnsBuildActive()) return { ok: false, error: 'DNS-сборка уже выполняется' }
   startDnsBuildProgress(origin)
   addDnsBuildLog('DNS-сборка: чтение источников…')
+  const t0 = Date.now()
   try {
     const settings = await getSettings()
     const format = (['plain', 'hosts', 'dnsmasq', 'adblock'].includes(settings.dnsBuildFormat) ? settings.dnsBuildFormat : 'plain') as DomainExportFormat
     const fileName = (settings.dnsFileName || 'blocked-domains.txt').replace(/[^\w.\-а-яё]+/gi, '-')
 
-    const sources = await db.domainSource.findMany({ where: { enabled: true, deletedAt: null }, orderBy: { priority: 'asc' } })
+    const sources = await dbHeavy.domainSource.findMany({ where: { enabled: true, deletedAt: null }, orderBy: { priority: 'asc' } })
     if (sources.length === 0) {
       addDnsBuildLog('Нет включённых DNS-источников — сборка невозможна')
       failDnsBuildProgress('нет включённых DNS-источников')
       return { ok: false, error: 'нет включённых DNS-источников' }
     }
-    const cats = await db.domainCategory.findMany()
+    const cats = await dbHeavy.domainCategory.findMany()
     const disabledCategories = new Set(cats.filter((c) => !c.enabled).map((c) => c.name))
     // категории дампа (ifaro:<номер>:<Eng>): выключенные — фильтруются на чтении батчей
     const disabledDumpIds = new Set<number>()
@@ -548,12 +632,15 @@ export async function buildDomainList(origin = 'manual'): Promise<DomainBuildRes
         if (Number.isFinite(n)) disabledDumpIds.add(n)
       }
     }
-    const overrides = await db.domainOverride.findMany()
+    const overrides = await dbHeavy.domainOverride.findMany()
     const disabledDomains = new Set(overrides.filter((o) => !o.enabled).map((o) => o.domain))
     const forcedDomains = new Set(overrides.filter((o) => o.enabled && o.note === 'force').map((o) => o.domain))
 
     setDnsBuildStage('db-read', 5)
     addDnsBuildLog(`Источников: ${sources.length}, категорий: ${cats.length}${disabledCategories.size ? ` (выключено ${disabledCategories.size})` : ''}`)
+
+    // оценка объёма входа — для процента прогресса слияния
+    const estimated = Math.max(1, sources.reduce((n, s) => n + Math.max(0, s.domainCount), 0))
 
     const inputs: DomainSourceInput[] = sources.map((s) => ({
       id: s.id,
@@ -567,11 +654,19 @@ export async function buildDomainList(origin = 'manual'): Promise<DomainBuildRes
 
     setDnsBuildStage('merge', 20)
     addDnsBuildLog('Слияние источников (приоритет → дубликаты → белый список)…')
+    const tMerge = Date.now()
     const { domains, tld, stats } = await mergeDomainSources(inputs, {
       disabledCategories,
       disabledDomains,
       forcedDomains,
+      // признак жизни + живой процент по мере обработки записей
+      onHeartbeat: (processed) => {
+        touchDnsBuild()
+        const pct = 20 + Math.min(40, Math.round((40 * processed) / estimated))
+        if (statePercent() < pct) setDnsBuildStage('merge', pct)
+      },
     })
+    const mergeSec = ((Date.now() - tMerge) / 1000).toFixed(1)
 
     // по-источниковая сводка в журнал
     for (const s of sources) {
@@ -581,21 +676,22 @@ export async function buildDomainList(origin = 'manual'): Promise<DomainBuildRes
     }
 
     setDnsBuildStage('render', 70)
-    addDnsBuildLog(`Итог: ${domains.length.toLocaleString('ru-RU')} доменов + ${tld.length} TLD; дубликатов ${stats.duplicateByDomain.toLocaleString('ru-RU')}, исключено белым списком ${stats.allowedRemoved.toLocaleString('ru-RU')}, категориями ${stats.categoryRemoved.toLocaleString('ru-RU')}, вручную ${stats.overrideRemoved.toLocaleString('ru-RU')}`)
-    const content = renderDomainFile(domains, tld, format, {
+    addDnsBuildLog(`Итог: ${domains.length.toLocaleString('ru-RU')} доменов + ${tld.length} TLD; дубликатов ${stats.duplicateByDomain.toLocaleString('ru-RU')}, исключено белым списком ${stats.allowedRemoved.toLocaleString('ru-RU')}, категориями ${stats.categoryRemoved.toLocaleString('ru-RU')}, вручную ${stats.overrideRemoved.toLocaleString('ru-RU')}; слияние ${mergeSec} с`)
+    await fs.mkdir(DNS_EXPORT_DIR, { recursive: true })
+    const filePath = path.join(DNS_EXPORT_DIR, fileName)
+    const tWrite = Date.now()
+    const written = await writeDomainFileStreaming(domains, tld, format, {
       generatedAt: new Date(),
       sources: sources.map((s) => s.name),
       stats: { ...stats, fileName },
+    }, filePath, () => {
+      touchDnsBuild()
     })
+    const writeSec = ((Date.now() - tWrite) / 1000).toFixed(1)
+    const { sha256, sizeBytes } = written
 
     setDnsBuildStage('save', 85)
-    await fs.mkdir(DNS_EXPORT_DIR, { recursive: true })
-    const filePath = path.join(DNS_EXPORT_DIR, fileName)
-    await fs.writeFile(filePath, content, 'utf8')
-    const sha256 = createHash('sha256').update(content, 'utf8').digest('hex')
-    const sizeBytes = Buffer.byteLength(content, 'utf8')
-
-    await db.domainBuild.create({
+    await dbHeavy.domainBuild.create({
       data: {
         totalDomains: domains.length + tld.length,
         statsJson: JSON.stringify(stats),
@@ -606,8 +702,10 @@ export async function buildDomainList(origin = 'manual'): Promise<DomainBuildRes
         source: origin,
       },
     })
+    invalidateCounts() // состав записей не изменился, но обновим счётчики дашборда фоново
     setDnsBuildStage('done', 100)
-    addDnsBuildLog(`Файл сохранён: ${fileName} (${(sizeBytes / 1024 / 1024).toFixed(1)} МБ, sha256 ${sha256.slice(0, 12)}…), формат ${format}`)
+    addDnsBuildLog(`Файл сохранён: ${fileName} (${(sizeBytes / 1024 / 1024).toFixed(1)} МБ, sha256 ${sha256.slice(0, 12)}…), формат ${format}, запись ${writeSec} с`)
+    addDnsBuildLog(`Всего: ${((Date.now() - t0) / 1000).toFixed(1)} с`)
     await log('success', 'build',
       `Сборка списка доменов: ${domains.length.toLocaleString('ru-RU')} доменов, дубликатов ${stats.duplicateByDomain.toLocaleString('ru-RU')}, файл ${fileName} (${(sizeBytes / 1024 / 1024).toFixed(1)} МБ)`,
       undefined,
@@ -623,12 +721,23 @@ export async function buildDomainList(origin = 'manual'): Promise<DomainBuildRes
   }
 }
 
-/** Асинхронный поток записей источника из БД (батчи по 10000, категории дампа фильтруются на лету) */
+/** Текущий процент прогресса (для плавного «merge» без лишних перезаписей) */
+function statePercent(): number {
+  return getDnsBuildProgress()?.percent ?? 0
+}
+
+/**
+ * Асинхронный поток записей источника из БД (батчи по 10000, категории дампа
+ * фильтруются на лету). v1.35.0: чтение через dbHeavy (отдельная коннекция —
+ * UI не мешается), touchDnsBuild на каждом батче — сборка миллионов записей
+ * не «зависает» по watchdog, event loop разряжается между батчами.
+ */
 async function * domainEntries(sourceId: string, disabledDumpIds: Set<number>): AsyncIterable<[string, 'block' | 'allow']> {
   const BATCH = 10_000
   let cursor: number | undefined = undefined
   for (;;) {
-    const rows = await db.domainRecord.findMany({
+    touchDnsBuild()
+    const rows = await dbHeavy.domainRecord.findMany({
       where: { sourceId },
       select: { id: true, domain: true, mode: true, categories: true },
       orderBy: { id: 'asc' },
@@ -637,6 +746,7 @@ async function * domainEntries(sourceId: string, disabledDumpIds: Set<number>): 
     })
     if (rows.length === 0) break
     cursor = rows[rows.length - 1].id
+    await yieldToLoop()
     for (const r of rows) {
       if (r.mode === 'allow') { yield [r.domain, 'allow' as const]; continue }
       if (disabledDumpIds.size > 0 && r.categories) {
@@ -669,16 +779,18 @@ export async function lastDomainBuild() {
 
 /** Статистика для дашборда («Обзор») */
 export async function domainDashboard() {
-  const [sources, agg, build, cats] = await Promise.all([
+  const [sources, domains, build, cats] = await Promise.all([
     db.domainSource.findMany({ where: { deletedAt: null }, select: { enabled: true, status: true, purpose: true } }),
-    db.domainRecord.aggregate({ _count: { _all: true } }),
+    // v1.35.0: COUNT(*) по 6 млн доменных записей на каждый опрос дашборда —
+    // через TTL-кэш (фоновое обновление); дашборд больше не ждёт скан таблицы
+    domainRecordsCountCached(),
     lastDomainBuild(),
     db.domainCategory.count(),
   ])
   const enabled = sources.filter((s) => s.enabled)
   return {
     sources: { total: sources.length, enabled: enabled.length, ok: enabled.filter((s) => s.status === 'ok').length, error: enabled.filter((s) => s.status === 'error').length },
-    domains: agg._count._all,
+    domains,
     categories: cats,
     lastBuild: build ? { createdAt: build.createdAt, totalDomains: build.totalDomains, fileName: build.fileName, sha256: build.sha256, sizeBytes: build.sizeBytes, source: build.source } : null,
   }

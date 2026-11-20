@@ -9,8 +9,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { api, Dashboard, RuleRow } from '@/components/hub/api'
+import { RstCheckDialog } from '@/components/hub/rst-check-dialog'
 import { useI18n } from '@/lib/i18n'
-import { ChevronDown, ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Search, SearchCheck } from 'lucide-react'
 
 export function RulesTab({ data }: { data: Dashboard | null }) {
   const { t, tr, loc } = useI18n()
@@ -22,6 +23,8 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
   const [sourceId, setSourceId] = useState('')
   const [expanded, setExpanded] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
+  // RST Cloud: проверка индикатора (домен/IP/URL/хэш) прямо из тулбара «Правил»
+  const [rstOpen, setRstOpen] = useState(false)
   const perPage = 50
 
   const load = useCallback(async () => {
@@ -52,6 +55,15 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
           {t.rules.title}
           <Badge variant="outline" className="border-input text-muted-foreground">{tr(t.rules.records, { n: total.toLocaleString(loc) })}</Badge>
           <div className="ml-auto flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-sky-300 text-sky-700 hover:bg-sky-50"
+              title={t.dns.rstCheckBtn}
+              onClick={() => setRstOpen(true)}
+            >
+              <SearchCheck className="h-4 w-4 mr-1.5" /> {t.dns.rstCheckBtn}
+            </Button>
             <Input
               placeholder={t.rules.sidPlaceholder}
               value={sid}
@@ -145,6 +157,7 @@ export function RulesTab({ data }: { data: Dashboard | null }) {
           </Button>
           <Button size="sm" variant="outline" className="border-input" disabled={page >= pages} onClick={() => setPage(pages)}>»»</Button>
         </div>
+        {rstOpen && <RstCheckDialog onClose={() => setRstOpen(false)} />}
       </CardContent>
     </Card>
   )
