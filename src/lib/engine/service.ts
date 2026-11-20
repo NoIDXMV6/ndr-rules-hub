@@ -901,6 +901,19 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
   if (buildRes.ok && origin === 'cron' && settings.cronExport === 'true') {
     exportRes = await exportLatestBuild()
   }
+  // DNS-фильтрация: обновление доменных источников + пересборка списка доменов
+  // (настройка dnsCronEnabled; динамический импорт — без циклических связей модулей)
+  let dns: { ok: number; failed: number; total: number; build: { ok: boolean; total?: number; error?: string } } | null = null
+  if (settings.dnsCronEnabled !== 'false') {
+    try {
+      const dnsSvc = await import('./dns-service')
+      const fetched = await dnsSvc.fetchAllDomainSources(origin)
+      const built = await dnsSvc.buildDomainList(origin)
+      dns = { ...fetched, build: { ok: built.ok, total: built.total, error: built.error } }
+    } catch (e) {
+      await log('warn', 'scheduler', `DNS-цикл не выполнен: ${(e as Error).message}`, undefined, `DNS cycle failed: ${(e as Error).message}`)
+    }
+  }
   // уведомление о цикле (Telegram/Gotify; шлётся, только если каналы включены)
   try {
     const title = buildRes.ok
@@ -917,6 +930,9 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
       }
     }
     if (exportRes) parts.push(exportRes.ok ? 'экспорт: выполнен' : `экспорт: ${exportRes.error}`)
+    if (dns) {
+      parts.push(`DNS: источники ${dns.ok}/${dns.total} успешно, список доменов: ${dns.build.ok ? `${(dns.build.total ?? 0).toLocaleString('ru-RU')} доменов` : `ошибка — ${dns.build.error}`}`)
+    }
     if (fetchRes.errors.length) parts.push(`ошибки загрузки: ${fetchRes.errors.slice(0, 5).join('; ')}`)
     await notifyEvent('pipeline', buildRes.ok && fetchRes.failed === 0 ? 'success' : fetchRes.failed || !buildRes.ok ? 'error' : 'warn', title, parts.join('\n'))
   } catch { /* уведомления не роняют цикл */ }
@@ -933,7 +949,7 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
   }
   return {
     ok: buildRes.ok && fetchRes.failed === 0,
-    detail: { fetch: fetchRes, build: buildRes, export: exportRes, personal },
+    detail: { fetch: fetchRes, build: buildRes, export: exportRes, personal, dns },
   }
 }
 

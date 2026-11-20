@@ -10,6 +10,10 @@ import { SourcesTab } from '@/components/hub/sources-tab'
 import { CategoriesTab } from '@/components/hub/categories-tab'
 import { RulesTab } from '@/components/hub/rules-tab'
 import { BuildTab } from '@/components/hub/build-tab'
+import { DnsSourcesTab } from '@/components/hub/dns-sources-tab'
+import { DnsCategoriesTab } from '@/components/hub/dns-categories-tab'
+import { DnsRecordsTab } from '@/components/hub/dns-records-tab'
+import { DnsBuildTab } from '@/components/hub/dns-build-tab'
 import { VpnTab } from '@/components/hub/vpn-tab'
 import { UpdateTab } from '@/components/hub/update-tab'
 import { OsdTab } from '@/components/hub/osd-tab'
@@ -27,9 +31,9 @@ import { api, Dashboard, fmtSize, fmtTime, type Me } from '@/components/hub/api'
 import { useI18n, type Dictionary, type Lang } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import {
-  Activity, Bell, Blocks, ChartColumn, Check, ChevronDown, CircleHelp, Database,
+  Activity, Bell, Blocks, Building2, ChartColumn, Check, ChevronDown, CircleHelp, Database,
   Download, FolderTree, Globe, Info, Layers, LayoutDashboard, Library,
-  LifeBuoy, LogOut, Network, Package, RefreshCw, ScrollText, Settings,
+  LifeBuoy, ListChecks, LogOut, Network, Package, RefreshCw, ScrollText, Search, Settings,
   Share2, Shield, UserRound, Users, Wifi, Wrench,
 } from 'lucide-react'
 
@@ -90,6 +94,14 @@ export default function Home() {
   useEffect(() => {
     const admin = !me?.multiUser || me.user?.role === 'admin'
     const allowed = new Set(['overview', 'sources', 'categories', 'rules', 'build', 'help', 'about'])
+    if (admin) {
+      // «DNS списки» — раздел уровня системы (администратор): единые списки
+      // доменов и единая сборка, без персональных пространств
+      allowed.add('dns-sources')
+      allowed.add('dns-categories')
+      allowed.add('dns-records')
+      allowed.add('dns-build')
+    }
     if (me?.multiUser) allowed.add('account') // кабинет доступен всем вошедшим
     if (admin) {
       allowed.add('update') // «Обновление Clear NDR» (меню «Интеграции»)
@@ -239,6 +251,26 @@ export default function Home() {
             <BuildTab data={data} onChange={refresh} role={role} />
           </TabsContent>
           {isAdmin && (
+            <TabsContent value="dns-sources" className="mt-4">
+              <DnsSourcesTab data={data} onChange={refresh} />
+            </TabsContent>
+          )}
+          {isAdmin && (
+            <TabsContent value="dns-categories" className="mt-4">
+              <DnsCategoriesTab />
+            </TabsContent>
+          )}
+          {isAdmin && (
+            <TabsContent value="dns-records" className="mt-4">
+              <DnsRecordsTab />
+            </TabsContent>
+          )}
+          {isAdmin && (
+            <TabsContent value="dns-build" className="mt-4">
+              <DnsBuildTab data={data} onChange={refresh} />
+            </TabsContent>
+          )}
+          {isAdmin && (
             <TabsContent value="vpn" className="mt-4">
               <VpnTab data={data} onChange={refresh} />
             </TabsContent>
@@ -318,8 +350,9 @@ type MenuGroupDef =
 
 /**
  * Структура главного меню: пункты сгруппированы по типу функционала.
- * Обзор и Сборка/экспорт — прямые кнопки (главный экран и главный рабочий процесс),
- * остальное собрано в drop-down группы; видимость зависит от роли.
+ * Обзор — прямая кнопка (главный экран); «Правила» и «DNS списки» — группы
+ * второго уровня с одинаковым составом (источники → категории → записи →
+ * сборка и экспорт); остальное собрано в drop-down группы; видимость зависит от роли.
  */
 function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAccount: boolean): MenuGroupDef[] {
   const ico = (Icon: React.ComponentType<{ className?: string }>) => <Icon className="h-4 w-4 shrink-0 opacity-80" />
@@ -328,18 +361,37 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAcco
     { kind: 'direct', key: 'overview', item: { value: 'overview', label: t.tabs.overview, icon: ico(LayoutDashboard) } },
     {
       kind: 'dropdown',
-      key: 'catalog',
-      grow: 1.15,
-      label: t.menu.catalog,
+      key: 'rules',
+      grow: 1.05,
+      label: t.menu.rules,
       icon: ico(Library),
       items: [
         { value: 'sources', label: t.tabs.sources, icon: ico(Globe) },
         { value: 'categories', label: t.tabs.categories, icon: ico(FolderTree) },
         { value: 'rules', label: t.tabs.rules, icon: ico(Shield) },
+        { value: 'build', label: t.tabs.build, icon: ico(Package) },
       ],
     },
-    { kind: 'direct', key: 'build', grow: 1.25, item: { value: 'build', label: t.tabs.build, icon: ico(Package) } },
   ]
+
+  // «DNS списки» — группа второго уровня, структура зеркальна «Правилам»
+  // (источники → категории → записи → сборка и экспорт); вкладки уровня
+  // системы — только администратору (в Community роль всегда admin)
+  if (isAdmin) {
+    groups.push({
+      kind: 'dropdown',
+      key: 'dns',
+      grow: 1.05,
+      label: t.menu.dnsLists,
+      icon: ico(Globe),
+      items: [
+        { value: 'dns-sources', label: t.dns.subSources, icon: ico(Globe) },
+        { value: 'dns-categories', label: t.dns.subCategories, icon: ico(ListChecks) },
+        { value: 'dns-records', label: t.dns.subRecords, icon: ico(Search) },
+        { value: 'dns-build', label: t.dns.subBuild, icon: ico(Building2) },
+      ],
+    })
+  }
 
   // «Интеграции» — только администратор (v1.27.0): у пользователя нет доступа
   // к обновлению Clear NDR, OSD-дашбордам, MISP, VPN и уведомлениям

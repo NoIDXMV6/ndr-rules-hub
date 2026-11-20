@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ensureSeed, getSettings } from '@/lib/engine/service'
+import { ensureDnsSeed } from '@/lib/engine/seed'
+import { domainDashboard } from '@/lib/engine/dns-service'
 import { isSourceVisible, effectiveEnabled } from '@/lib/engine/workspace'
 import { maybeStartCleanupScheduler } from '@/lib/engine/cleanup'
 import { maybeStartTelegramPoller, checkReleaseBroadcast } from '@/lib/engine/telegram'
@@ -16,6 +18,8 @@ export async function GET(req: NextRequest) {
   if (g instanceof NextResponse) return g
   try {
     await ensureSeed()
+    // DNS-модуль: докатка каталога доменных списков (недостающие источники/категории)
+    await ensureDnsSeed().catch(() => undefined)
     // cron проверки диска (пороги/автоочистка) поднимается один раз на процесс
     maybeStartCleanupScheduler()
     // Telegram-поллер (привязка чатов, коды 2FA) + проверка рассылки о версии —
@@ -56,6 +60,8 @@ export async function GET(req: NextRequest) {
     const builds0 = builds[0] ?? null
     // VPN — только администратору (статус туннелей/ключи пиров не для кабинета)
     const wg = g.role === 'admin' ? await wgStatus() : { available: false, error: 'WireGuard доступен только администратору', interfaces: [], tools: { wgQuick: false, wg: false, tunDevice: false, netAdmin: false, sysctl: false, srcValidMark: false, notes: [] as string[] } }
+    // DNS-фильтрация: сводка для вкладки и «Обзора» (администратору)
+    const dnsBlock = g.role === 'admin' ? await domainDashboard().catch(() => null) : null
     return NextResponse.json({
       sources: {
         total: visibleSources.length,
@@ -87,6 +93,7 @@ export async function GET(req: NextRequest) {
         : null,
       // секреты (serveToken, oinkcode, Auth-Key abuse.ch, токен Scirius) — только админу
       settings: sanitizeSettings(settings, g.role),
+      dns: dnsBlock,
       vpn: wg,
       logs: logs.map((l) => ({ id: l.id, ts: l.ts, level: l.level, scope: l.scope, message: l.message, messageEn: l.messageEn })),
     })

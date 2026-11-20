@@ -306,7 +306,27 @@ flowchart TD
 Статистика каждого шага (по источникам: загружено/в сборке/сброшено по SID/по содержимому/
 несовместимых) пишется в `Build.statsJson` и отображается во вкладке «Сборка и экспорт».
 
-## 8. WireGuard VPN слой
+## 8. DNS-фильтрация: доменные списки (v1.29.0)
+
+Отдельный контур с идеологией, аналогичной правилам: источники → записи → сборка → отдача.
+Меню **«DNS списки»** (администратор) с подменю второго уровня, зеркальным «Правилам»:
+Источники / Категории / Записи (поиск, дубликаты, ручные решения) / Сборка и экспорт.
+
+| Политика/сущность | Что делает |
+|---|---|
+| `DomainSource` | источник доменных списков: хостлисты (adguard `||домен^` / hosts / plain), каталог 46 списков AdGuard HostlistsRegistry + импортированная SQL-база; `purpose`: block / allow (белый список) |
+| `DomainRecord` | домен конкретного источника; `mode`: block / allow (строки `@@` хостлистов); `categories` — ids категорий SQL-базы через запятую |
+| `DomainCategory` | категории сборки: ключи каталога (ads/malware/phishing/…) + категории дампа `ifaro:<номер>:<Eng>` (у домена их может быть несколько — он остаётся в сборке, пока включена хотя бы одна) |
+| `DomainOverride` | ручное решение по домену: исключить из сборки / принудительный блок поверх белого списка |
+| `DomainBuild` | результат сборки: файл списка + sha256 + статистика |
+| Слияние (`dns.ts mergeDomainSources`) | источники по возрастанию `priority`: домен достаётся первому, у остальных — дубликат; белый список применяется в конце; записи ленивые (AsyncIterable из курсора БД — миллионы строк без нагрузки на память) |
+| Импорт дампа (`dns-import.ts`) | потоковый разбор export.sql (MariaDB/HeidiSQL): 502 МБ → ~2,2 млн доменов и 151 категория без загрузки в память (~22 с); счётчики категорий кэшируются в настройке `dnsIfaroCategoryCounts` |
+| Конвертация дампа → NDR | прочие типы resource дампа не теряются: **URL** — хост попадает в DNS-список (с категориями), сам URL — HTTP-правило; **IP/CIDR** — IP-правила чанками по 500 (drop ip, SID 1 200 000+); **Regex** — pcre на `http.uri.raw` (SID 1 400 000+, валидация компиляции и защита от слишком широких шаблонов); **Phrase** — `http.response_body` content (SID 1 500 000+). Правила пишутся в `data/domains/ndr/*.rules` и регистрируются ВЫКЛЮЧЕННЫМИ источниками «Дамп фильтрации: …» (правила загружаются в БД сразу — счётчик честный, в сборку попадают только после включения) |
+| Сборка (`buildDomainList`) | 4 формата файла: plain / hosts (`0.0.0.0 d`) / dnsmasq (`address=/d/`) / adblock (`||d^`); прогресс — отдельный singleton (dns-progress.ts) |
+| Отдача | `GET /api/dns/export` — по токену скачивания со scope «domains»/«both», глобальному ключу `dnsServeToken`, сессии; без ключей — открыто (как у правил) |
+| Cron | полный цикл (`runPipeline`) при `dnsCronEnabled` обновляет DNS-источники и пересобирает список |
+
+## 9. WireGuard VPN слой
 
 `vpn.ts` управляет туннелем внутри контейнера:
 
@@ -384,7 +404,7 @@ sequenceDiagram
     R-->>U: 200 — ok true, notes
 ```
 
-## 9. Web UI
+## 10. Web UI
 
 Single-page приложение (Next.js App Router, клиентские компоненты) с 9 вкладками:
 
@@ -403,7 +423,7 @@ Single-page приложение (Next.js App Router, клиентские ко�
 Компоненты — shadcn/ui (Radix-примитивы) + Tailwind CSS; иконки — Lucide; логотипы технологий —
 inline-SVG из simple-icons (`tech-logos.tsx`, CC0).
 
-## 10. Локализация (RU/EN)
+## 11. Локализация (RU/EN)
 
 Слой — `src/lib/i18n/`:
 
@@ -430,7 +450,7 @@ index.tsx    I18nProvider (useSyncExternalStore поверх localStorage) + use
 6. Паритет языков контролируется тестами: равенство наборов ключей, пустых значений нет,
    плейсхолдеры совпадают, в EN нет кириллицы.
 
-## 11. REST API
+## 12. REST API
 
 | Метод/путь | Назначение |
 |---|---|
@@ -452,7 +472,7 @@ index.tsx    I18nProvider (useSyncExternalStore поверх localStorage) + use
 Ошибки API возвращаются как `{"error": "…"}` с реальной причиной (не безликий HTTP 500) и
 дублируются в контейнерные логи.
 
-## 11.1 Редакции Community / Enterprise и слой защиты
+### 12.1 Редакции Community / Enterprise и слой защиты
 
 Редакция — переменная окружения `NDR_EDITION` (`src/lib/edition.ts`), один образ для обеих.
 **Community** (по умолчанию) — прежнее поведение: без аутентификации. **Enterprise** —
@@ -519,7 +539,7 @@ sequenceDiagram
     B->>B: обновление карточек или баннер с ошибкой
 ```
 
-## 12. Интеграция с Clear NDR: доставка правил
+## 13. Интеграция с Clear NDR: доставка правил
 
 Итоговый набор попадает в Clear NDR одним из четырёх способов: скачать файл и импортировать
 вручную; **PULL** — Clear NDR сам забирает файл с Hub; **PUSH** — Hub сам отправляет его через
@@ -528,7 +548,7 @@ REST API Scirius; HTTP POST на произвольный эндпоинт ил�
 [docs/clearndr-integration.md](docs/clearndr-integration.md) (EN:
 [docs/clearndr-integration.en.md](docs/clearndr-integration.en.md)).
 
-### 12.1 Две схемы доставки
+### 13.1 Две схемы доставки
 
 ```mermaid
 flowchart TB
@@ -571,7 +591,7 @@ flowchart TB
 | Настройка в Hub | ничего | режим «Clear NDR REST», URL, токен |
 | Автообновление | Recurrence Clear NDR / cron `update_push_all` | cron Hub (`cronExport`) / cron `update_push_all` |
 
-### 12.2 PUSH: цепочка вызовов REST API Scirius
+### 13.2 PUSH: цепочка вызовов REST API Scirius
 
 Режим «Clear NDR REST» (`exporter.ts → pushToClearndrRest`) выполняет три шага: найти или
 создать локальный источник, загрузить файл (multipart; импорт правил происходит сразу),
@@ -614,7 +634,7 @@ sequenceDiagram
 подсказками: 401/403 — «токен отклонён… Edit Token → Regenerate»; «conflicting SID» —
 «включите дедупликацию в настройках сборки». Все шаги цепочки видны в Журнале (scope `export`).
 
-### 12.3 PULL: Clear NDR забирает файл сам
+### 13.3 PULL: Clear NDR забирает файл сам
 
 В Clear NDR создаётся источник типа «HTTP URL» на `GET http://<hub>:3080/api/export` (последняя
 сборка всегда доступна по этому адресу), привязывается к набору, включается категория; обновление
@@ -639,7 +659,7 @@ sequenceDiagram
     Note over C,X: кнопка Suricata → Update делает то же немедленно, а cron с update_push_all — то же без UI
 ```
 
-### 12.4 Автообновление — три независимых варианта
+### 13.4 Автообновление — три независимых варианта
 
 | Вариант | Где настраивается | Что происходит по расписанию |
 |---|---|---|
@@ -650,7 +670,7 @@ sequenceDiagram
 Вариант (c) работает и при PULL-схеме: после cron-сборки свежий файл уже лежит на `/api/export`,
 откуда его забирает (a) или (b).
 
-### 12.5 Проверка без боевого сервера
+### 13.5 Проверка без боевого сервера
 
 `scripts/clearndr-mock-server.py` воспроизводит REST API Scirius (Token-авторизация,
 DRF-пагинация, multipart-upload, гейт «conflicting SID»). Сквозной тест: запустить mock, в
@@ -660,7 +680,7 @@ DRF-пагинация, multipart-upload, гейт «conflicting SID»). Скв�
 `clearndr-push.sh` (push готового файла из cron), `clearndr-setup-pull.sh` (PULL-настройка).
 Команды — раздел 5 инструкции.
 
-## 13. Поставка и эксплуатация
+## 14. Поставка и эксплуатация
 
 - **Dockerfile** — многоэтапная сборка: builder (`oven/bun`) → standalone runtime
   (`node:22-bookworm-slim`) + `wireguard-tools`, `iptables`, `iproute2`, `openresolv`, `procps`,

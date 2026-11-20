@@ -154,6 +154,13 @@ export interface Dashboard {
     personal?: boolean
     stats: BuildStats
   }
+  /** DNS-фильтрация: сводка (только администратору; null — Community/недоступно) */
+  dns: null | {
+    sources: { total: number; enabled: number; ok: number; error: number }
+    domains: number
+    categories: number
+    lastBuild: null | { createdAt: string; totalDomains: number; fileName: string; sha256: string; sizeBytes: number; source: string }
+  }
   settings: Record<string, string>
   vpn: VpnState
   logs: Array<{ id: number; ts: string; level: string; scope: string; message: string; messageEn?: string | null }>
@@ -397,13 +404,48 @@ export const api = {
     fetch('/api/auth/users', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ registrationOpen: open }) }).then((r) => j<{ ok: boolean; registrationOpen: boolean }>(r)),
   authEvents: (take = 100) => fetch(`/api/auth/events?take=${take}`, { cache: 'no-store' }).then((r) => j<{ events: AuthEventItem[] }>(r)),
   tokens: () => fetch('/api/tokens', { cache: 'no-store' }).then((r) => j<{ tokens: DownloadTokenItem[] }>(r)),
-  createToken: (data: { name: string; ttlDays?: number }) =>
-    fetch('/api/tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; token?: { id: string; token: string; name: string; prefix: string; expiresAt: string | null }; error?: string }>(r)),
+  createToken: (data: { name: string; ttlDays?: number; scope?: string }) =>
+    fetch('/api/tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ ok: boolean; token?: { id: string; token: string; name: string; prefix: string; scope?: string; expiresAt: string | null }; error?: string }>(r)),
   revokeToken: (id: string) => fetch(`/api/tokens/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   restoreToken: (id: string) =>
     fetch(`/api/tokens/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'restore' }) }).then((r) => j<{ ok: boolean }>(r)),
   deleteToken: (id: string) =>
     fetch(`/api/tokens/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete' }) }).then((r) => j<{ ok: boolean }>(r)),
+
+  // ── DNS-фильтрация: доменные списки ──────────────────────────────────────────
+  dns: {
+    sources: () => fetch('/api/dns/sources', { cache: 'no-store' }).then((r) => j<{ sources: DomainSourceItem[] }>(r)),
+    addSource: (data: { name: string; url?: string; kind?: string; format?: string; category?: string; purpose?: string; priority?: number; enabled?: boolean }) =>
+      fetch('/api/dns/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ source: DomainSourceItem; error?: string }>(r)),
+    patchSource: (id: string, data: Partial<DomainSourceItem>) =>
+      fetch(`/api/dns/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ source: DomainSourceItem; error?: string }>(r)),
+    deleteSource: (id: string) => fetch(`/api/dns/sources/${id}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean; error?: string }>(r)),
+    fetchSource: (id: string) => fetch(`/api/dns/sources/${id}/fetch`, { method: 'POST' }).then((r) => j<{ ok: boolean; count: number; error?: string; diff?: { added: number; removed: number } }>(r)),
+    categories: () => fetch('/api/dns/categories', { cache: 'no-store' }).then((r) => j<{ categories: DomainCategoryItem[] }>(r)),
+    patchCategory: (id: string, data: { enabled?: boolean; hidden?: boolean; label?: string }) =>
+      fetch('/api/dns/categories', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, ...data }) }).then((r) => j<{ category: DomainCategoryItem; error?: string }>(r)),
+    records: (q: { sourceId?: string; search?: string; page?: number; duplicates?: boolean }) => {
+      const sp = new URLSearchParams()
+      if (q.sourceId) sp.set('sourceId', q.sourceId)
+      if (q.search) sp.set('search', q.search)
+      if (q.page) sp.set('page', String(q.page))
+      if (q.duplicates) sp.set('duplicates', '1')
+      return fetch(`/api/dns/records?${sp.toString()}`, { cache: 'no-store' }).then((r) => j<DnsRecordsResponse>(r))
+    },
+    setOverride: (domain: string, enabled: boolean, force = false) =>
+      fetch('/api/dns/override', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain, enabled, force }) }).then((r) => j<{ override: { domain: string; enabled: boolean; note: string | null }; error?: string }>(r)),
+    resetOverride: (domain: string) =>
+      fetch(`/api/dns/override?domain=${encodeURIComponent(domain)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
+    build: () => fetch('/api/dns/build', { method: 'POST' }).then((r) => j<{ ok: boolean; started?: boolean; error?: string }>(r)),
+    lastBuild: () => fetch('/api/dns/build', { cache: 'no-store' }).then((r) => j<{ build: DomainBuildItem | null }>(r)),
+    buildProgress: () => fetch('/api/dns/build/progress', { cache: 'no-store' }).then((r) => j<{ progress: DnsBuildProgressInfo | null }>(r)),
+    importDump: (file: File, name?: string) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      if (name) fd.append('name', name)
+      return fetch('/api/dns/import', { method: 'POST', body: fd }).then((r) => j<ImportDumpResponse>(r))
+    },
+  },
 }
 
 // ── Раздел «Обновление Clear NDR» ────────────────────────────────────────────
@@ -650,6 +692,7 @@ export interface DownloadTokenItem {
   id: string
   name: string
   prefix: string
+  scope?: string
   createdAt: string
   expiresAt: string | null
   revokedAt: string | null
@@ -707,4 +750,118 @@ export function fmtTime(ts: string | null, lang: Lang = 'ru'): string {
   if (!ts) return '—'
   const d = new Date(ts)
   return d.toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+// ── DNS-фильтрация: доменные списки ──────────────────────────────────────────
+
+export interface DomainSourceItem {
+  id: string
+  name: string
+  url: string | null
+  kind: string
+  format: string
+  authType: string
+  extraJson: string | null
+  category: string
+  purpose: string
+  enabled: boolean
+  priority: number
+  status: string
+  lastFetchAt: string | null
+  lastError: string | null
+  domainCount: number
+  sizeBytes: number
+  diffAdded: number
+  diffChanged: number
+  diffRemoved: number
+  notes: string | null
+  notesEn: string | null
+  builtin: boolean
+}
+
+export interface DomainCategoryItem {
+  id: string
+  name: string
+  label: string | null
+  enabled: boolean
+  hidden: boolean
+  domains: number
+}
+
+export interface DomainRecordRow {
+  id: number
+  domain: string
+  mode: string
+  categories?: string
+  sourceName: string
+  sourcePriority: number
+  sourcePurpose: string
+  override: { enabled: boolean; note: string | null } | null
+}
+
+export interface DnsRecordsResponse {
+  total?: number
+  page?: number
+  pageSize?: number
+  rows?: DomainRecordRow[]
+  duplicates?: Array<{ domain: string; sources: number }>
+}
+
+export interface DomainBuildItem {
+  id: string
+  createdAt: string
+  totalDomains: number
+  fileName: string
+  filePath?: string
+  sha256: string
+  sizeBytes: number
+  source: string
+  stats?: {
+    duplicateByDomain?: number
+    allowedRemoved?: number
+    categoryRemoved?: number
+    overrideRemoved?: number
+    tldCount?: number
+    perSource?: Record<string, { total: number; kept: number; droppedDuplicate: number; droppedAllowed: number; droppedCategory: number; droppedOverride: number }>
+    duplicateDomains?: Array<{ domain: string; count: number }>
+  }
+}
+
+export interface DnsBuildProgressInfo {
+  jobId: string
+  origin: string
+  active: boolean
+  stage: string
+  percent: number
+  startedAt: string
+  finishedAt: string | null
+  error: string | null
+  log: Array<{ ts: string; msg: string }>
+  result: { ok: boolean; error?: string; total?: number; fileName?: string } | null
+}
+
+export interface ImportDumpResponse {
+  ok: boolean
+  error?: string
+  sourceId?: string
+  stats?: {
+    domains: number
+    categories: number
+    otherTypes: number
+    invalidDomains: number
+    categoryLinks: number
+    /** типы дампа (по resource_type): URL/IP/CIDR/Regex/Phrase */
+    urlCount?: number
+    ipCount?: number
+    cidrCount?: number
+    regexCount?: number
+    phraseCount?: number
+    /** хосты URL, добавленные в DNS-список */
+    urlHosts?: number
+    /** сгенерированные правила NDR (в выключенных источниках «Дамп фильтрации: …») */
+    ndrIpRules?: number
+    ndrUrlRules?: number
+    ndrRegexRules?: number
+    ndrPhraseRules?: number
+  }
 }

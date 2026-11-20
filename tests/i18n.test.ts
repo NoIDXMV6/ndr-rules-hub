@@ -122,16 +122,21 @@ describe('паритет словарей ru/en', () => {
   })
 
   it('меню: все группы функционала локализованы в обоих словарях', () => {
-    // 4 группы + aria-подпись навигации; прямые пункты (Обзор, Сборка и экспорт) берут tabs.*
-    const groups = ['menu.aria', 'menu.catalog', 'menu.integrations', 'menu.admin', 'menu.help']
+    // группы «Правила» и «DNS списки» (второй уровень) + прочие drop-down; прямые
+    // пункты (Обзор) берут tabs.*
+    const groups = ['menu.aria', 'menu.rules', 'menu.dnsLists', 'menu.integrations', 'menu.admin', 'menu.help']
     for (const k of groups) {
       expect(ruFlat.has(k), `нет ключа ru.${k}`).toBe(true)
       expect(enFlat.has(k), `нет ключа en.${k}`).toBe(true)
     }
-    // группа каталога покрывает три вкладки контента, интеграции — две + VPN, админ — настройки/журнал/пользователи
-    expect(ruFlat.get('menu.catalog')).toContain('правил')
+    expect(ruFlat.get('menu.rules')).toBe('Правила')
+    expect(ruFlat.get('menu.dnsLists')).toBe('DNS списки')
+    expect(enFlat.get('menu.dnsLists')).toBe('DNS lists')
     expect(ruFlat.get('menu.admin')).toBe('Администрирование')
     expect(enFlat.get('menu.admin')).toBe('Administration')
+    // «DNS списки» — только администратору: подменю зеркально «Правилам»
+    expect(ruFlat.get('dns.subSources')).toBe('Источники')
+    expect(ruFlat.get('dns.subBuild')).toBe('Сборка и экспорт')
   })
 })
 

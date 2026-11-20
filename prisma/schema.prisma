@@ -219,8 +219,12 @@ model Session {
   @@index([userId])
 }
 
-// Персональный токен скачивания правил (GET /api/export, ?token= / Authorization).
-// В БД — только SHA-256; полный токен показывается пользователю один раз.
+// Персональный токен скачивания (GET /api/export — правила; GET /api/dns/export —
+// список заблокированных доменов). В БД — только SHA-256; полный токен показывается
+// пользователю один раз. scope задаёт, ЧТО доступно токену:
+//   rules   — только сборка правил (историческое поведение, дефолт);
+//   domains — только список доменов (DNS-фильтрация);
+//   both    — оба списка одновременно.
 model DownloadToken {
   id            String    @id @default(cuid())
   userId        String
@@ -228,6 +232,7 @@ model DownloadToken {
   name          String
   tokenHash     String    @unique
   prefix        String    // первые 12 символов для отображения в кабинете
+  scope         String    @default("rules") // rules | domains | both
   createdAt     DateTime  @default(now())
   expiresAt     DateTime?
   revokedAt     DateTime?
@@ -250,4 +255,94 @@ model AuthEvent {
   detail String?
   @@index([ts])
   @@index([kind])
+}
+
+// ── DNS-фильтрация: доменные списки (идеология аналогична правилам NDR) ────────
+// Источники — хостлисты (AdGuard/hosts/plain), записи — домены; сборка —
+// итоговый список заблокированных доменов; отдача — GET /api/dns/export.
+
+// Источник доменных списков
+model DomainSource {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  url         String?
+  kind        String   @default("url")   // url | upload | local (upload — импортированная база, файл в data/)
+  format      String   @default("auto")  // adguard | hosts | plain | sql | auto
+  authType    String   @default("none")  // none | basic | authkey
+  extraJson   String?  // userAgent, basicUser/basicPassword, authKey и др. (см. dns.ts)
+  // тематическая категория списка; у записей из SQL-базы своя категория
+  // (DomainRecord.categories), а здесь — категория «по умолчанию»
+  category    String   @default("mixed")
+  purpose     String   @default("block") // block — блокировать; allow — белый список (домены исключаются из сборки)
+  enabled     Boolean  @default(true)
+  priority    Int      @default(100)     // чем ниже, тем раньше источник забирает домен себе (конфликты дубликатов)
+  status      String   @default("never") // ok | error | never
+  lastFetchAt DateTime?
+  lastError   String?
+  domainCount Int      @default(0)
+  sizeBytes   Int      @default(0)
+  diffAdded   Int      @default(0)
+  diffChanged Int      @default(0)
+  diffRemoved Int      @default(0)
+  notes       String?
+  notesEn     String?
+  builtin     Boolean  @default(false)
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  domains     DomainRecord[]
+  @@index([enabled])
+}
+
+// Доменная запись источника
+model DomainRecord {
+  id         Int    @id @default(autoincrement())
+  sourceId   String
+  source     DomainSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  domain     String
+  // block — блокировать; allow — исключение (строки @@ хостлистов и все
+  // записи allow-источников: домен НЕ попадает в итоговый список)
+  mode       String @default("block")
+  // ids категорий SQL-базы (импорт дампа) через запятую; пусто — домен наследует
+  // категорию источника (DomainSource.category)
+  categories String @default("")
+  createdAt  DateTime @default(now())
+  @@unique([sourceId, domain])
+  @@index([domain])
+}
+
+// Категория доменных списков: ключи каталога (ads, malware, phishing…) и
+// импортированные категории SQL-базы (ifaro:<number>:<Eng>); управление
+// включением в сборку и скрытием — по аналогии с категориями правил
+model DomainCategory {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  label     String?
+  enabled   Boolean  @default(true)
+  hidden    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Пользовательское решение по конкретному домену (переживает обновление источников):
+// enabled=false — домен исключён из сборки; enabled=true на домене из allow-источника
+// можно не использовать — белый список задаётся источником целиком
+model DomainOverride {
+  domain    String   @id
+  enabled   Boolean  @default(true)
+  note      String?
+  updatedAt DateTime @updatedAt
+}
+
+// Результат сборки списка заблокированных доменов (по аналогии с Build)
+model DomainBuild {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+  totalDomains Int
+  statsJson    String   // статистика: по источникам, дубликатам, allowlist, категориям
+  fileName     String
+  filePath     String
+  sha256       String
+  sizeBytes    Int
+  source       String   @default("manual") // manual | cron
 }
