@@ -34,6 +34,10 @@ services:
       - DATABASE_URL=file:/app/data/hub.db
       - RULES_DATA_DIR=/app/data
       - WG_CONFIG_DIR=/app/data/wireguard
+      # Глобальный таймаут проверки/докатки схемы БД при старте (db-heal,
+      # секунды). На огромной БД / медленном диске увеличьте; при превышении
+      # БД НЕ стирается — сервер стартует с существующей БД (код 2).
+      - DB_HEAL_TIMEOUT=${DB_HEAL_TIMEOUT:-300}
       - TZ=${TZ:-Europe/Moscow}
       # Редакция: community (по умолчанию, без аутентификации) | enterprise
       # (многопользовательский режим: регистрация, верификация, личный кабинет)

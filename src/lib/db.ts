@@ -47,6 +47,39 @@ function initPragmas(p: PrismaClient): void {
   void p.$queryRawUnsafe('PRAGMA synchronous=NORMAL').catch(() => undefined)
 }
 
+// Стартовая диагностика SQLite в stdout (инцидент v1.36.0: «в логах контейнера
+// пусто» — невозможно понять, жива ли БД). Одна строка на клиент при старте
+// процесса: режим журнала, размер страницы/страниц, свободные страницы и
+// размер wal-файла на диске (гигабайтный WAL — след зависших сборок).
+const dbDiagDone = new Set<string>()
+async function logDbDiagnostics(p: PrismaClient, label: string): Promise<void> {
+  if (dbDiagDone.has(label)) return
+  dbDiagDone.add(label)
+  try {
+    const [journal, pages, pageSize, freelist] = await Promise.all([
+      p.$queryRawUnsafe<{ journal_mode: string }[]>('PRAGMA journal_mode'),
+      p.$queryRawUnsafe<{ page_count: bigint }[]>('PRAGMA page_count'),
+      p.$queryRawUnsafe<{ page_size: bigint }[]>('PRAGMA page_size'),
+      p.$queryRawUnsafe<{ freelist_count: bigint }[]>('PRAGMA freelist_count'),
+    ])
+    const bytes = Number(pages[0]?.page_count ?? 0) * Number(pageSize[0]?.page_size ?? 0)
+    const dbPath = (process.env.DATABASE_URL ?? '').replace(/^file:/, '').split('?')[0]
+    let wal = '—'
+    if (dbPath) {
+      try {
+        const { statSync } = await import('node:fs')
+        wal = `${(statSync(`${dbPath}-wal`).size / 1024 / 1024).toFixed(1)} MB`
+      } catch { wal = '0 MB' }
+    }
+    console.log(
+      `[db ${label}] SQLite: journal=${journal[0]?.journal_mode ?? '?'}, ` +
+        `БД ${(bytes / 1024 / 1024).toFixed(1)} MB, freelist ${Number(freelist[0]?.freelist_count ?? 0)} страниц, wal-файл ${wal}`
+    )
+  } catch {
+    // диагностика не критична: ошибка подключения проявится в запросах
+  }
+}
+
 export const db =
   globalForPrisma.prisma ??
   new PrismaClient({
@@ -55,6 +88,7 @@ export const db =
   })
 
 initPragmas(db)
+void logDbDiagnostics(db, 'interactive')
 
 /** Тяжёлый клиент для сборок/импорта — отдельная коннекция (см. шапку файла) */
 export const dbHeavy =
@@ -65,6 +99,7 @@ export const dbHeavy =
   })
 
 initPragmas(dbHeavy)
+void logDbDiagnostics(dbHeavy, 'heavy')
 
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = db

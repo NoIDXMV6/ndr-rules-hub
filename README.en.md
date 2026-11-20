@@ -247,10 +247,21 @@ curl -s http://localhost:3080/api/health    # self-diagnostics: DB, schema, file
 ```
 
 `/api/health` answers 200 even with a broken DB and shows the exact error (for example,
-`PrismaClientKnownRequestError P2022` with an outdated schema). The DB schema is fixed
-automatically: the entrypoint compares the version stamp (`/app/data/.schema-version`) with the
-one from the image and, on mismatch, backs up the old DB to `./data/hub.db.bak-<date>` and
-creates a new one.
+`PrismaClientKnownRequestError P2022` with an outdated schema). The DB schema is healed
+automatically (db-heal at container startup): missing tables/columns/indexes are added WITHOUT
+data loss. Every heavy step is time-bounded (DB_HEAL_TIMEOUT_MS, 90 s per step by default —
+integrity scan, snapshot restore, VACUUM backup, CREATE INDEX; the entrypoint global guard is
+DB_HEAL_TIMEOUT, 300 s), so initialization can no longer hang silently on a huge DB. db-heal
+exit codes: 0 — ok/healed; 1 — proven corruption without healthy snapshots (the entrypoint
+backs up to `./data/hub.db.bak-<date>` and creates a DB from the template); 2 — the check did
+NOT FINISH (timeout) — the DB is NOT considered corrupted, the server starts with the existing
+DB and the check repeats on the next restart.
+
+The first container log lines always show hub.db/-wal/-shm sizes and the free volume space (a
+gigabyte `-wal` is a footprint of stuck builds; after a successful check db-heal trims it via
+`wal_checkpoint(TRUNCATE)`), and the first application log line is
+`[db …] SQLite: journal=wal, DB … MB, wal-file … MB`. "Empty logs" with an unhealthy container
+are no longer possible: even a stuck db-heal step prints which step exceeded its timeout.
 
 The error `Prisma Client could not locate the Query Engine for runtime …` means the Prisma
 platform mismatched between build stages (builder ≠ runtime). The repo already accounts for
@@ -278,6 +289,8 @@ bunx vitest run        # engine tests
 | `RULES_DATA_DIR` | data directory (cache, exports, archives) | `/app/data` |
 | `WG_CONFIG_DIR` | where to store WireGuard configs | `/app/data/wireguard` |
 | `TZ` | cron timezone | `Europe/Moscow` |
+| `DB_HEAL_TIMEOUT` | global timeout of the DB schema check/heal at container startup (seconds) | `300` |
+| `DB_HEAL_TIMEOUT_MS` | timeout of a single heavy db-heal step (milliseconds) | `90000` |
 | `NDR_EDITION` | edition: `community` (no authentication) / `enterprise` (multi-user mode) | `community` |
 
 ## WireGuard in the container

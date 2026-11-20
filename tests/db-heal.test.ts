@@ -193,7 +193,8 @@ describe('db-heal: повреждённая БД (SQLITE_CORRUPT «database disk
     await corruptPage1(db)
 
     const out = await execFileP('node', ['scripts/db-heal.cjs', db, manifestPath], { cwd: ROOT })
-    expect(out.stdout).toContain('integrity_check НЕ ПРОЙДЕН')
+    // v1.36.0: битая страница 1 ловится дешёвой структурной проверкой (без скана)
+    expect(out.stdout).toContain('структурная проверка НЕ ПРОЙДЕНА')
     expect(out.stdout).toContain('восстановлена из снимка hub.db.preheal-')
     expect(out.stdout).toContain('добавлена колонка Source.deletedAt')
     expect(out.stdout).toContain('схема докатана')
@@ -229,6 +230,117 @@ describe('db-heal: повреждённая БД (SQLITE_CORRUPT «database disk
 
     const after = await fs.readFile(db)
     expect(Buffer.compare(before, after)).toBe(0)
+  })
+})
+
+describe('db-heal v1.36.0: bounded-сканы, таймауты, коды выхода (инцидент: пустые логи, контейнер unhealthy)', () => {
+  it('здоровая БД — скан целостности ok (quick_check(25)), код 0', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-heal-ok-'))
+    tmpDirs.push(dir)
+    const db = path.join(dir, 'hub.db')
+    await fs.copyFile(templateDb, db)
+    const out = await execFileP('node', ['scripts/db-heal.cjs', db, manifestPath], { cwd: ROOT })
+    expect(out.stdout).toContain('скан целостности: ok')
+    expect(out.stdout).toContain('схема актуальна')
+  })
+
+  it('размеры БД/WAL печатаются ПЕРВОЙ строкой — логи больше не пустые', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-heal-size-'))
+    tmpDirs.push(dir)
+    const db = path.join(dir, 'hub.db')
+    await fs.copyFile(templateDb, db)
+    const out = await execFileP('node', ['scripts/db-heal.cjs', db, manifestPath], { cwd: ROOT })
+    const firstLine = out.stdout.trim().split('\n')[0]
+    expect(firstLine).toContain('БД:')
+    expect(firstLine).toContain('WAL:')
+    expect(firstLine).toContain('свободно')
+  })
+
+  it('ТАЙМАУТ скана (DB_HEAL_TIMEOUT_MS=1) → код 2, БД не изменена (стирание только по доказанному повреждению)', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-heal-tmo-'))
+    tmpDirs.push(dir)
+    const db = path.join(dir, 'hub.db')
+    await fs.copyFile(templateDb, db)
+    const before = await fs.readFile(db)
+
+    const err: any = await execFileP('node', ['scripts/db-heal.cjs', db, manifestPath], {
+      cwd: ROOT,
+      env: { ...process.env, DB_HEAL_TIMEOUT_MS: '1' },
+    }).catch((e) => e)
+    expect(err.code).toBe(2)
+    // причина таймаута — в stderr, вердикт и код — в stdout
+    expect(String(err.stderr ?? '')).toContain('ТАЙМАУТ')
+    expect(String(err.stdout ?? '')).toContain('чтение sqlite_master не завершилось')
+    expect(String(err.stdout ?? '')).toContain('БД не проверена')
+    expect(String(err.stdout ?? '')).toContain('завершение (код 2)')
+    // файл не изменён (никаких бэкапов/подмен по таймауту)
+    const after = await fs.readFile(db)
+    expect(Buffer.compare(before, after)).toBe(0)
+  })
+})
+
+describe('docker-entrypoint.sh v1.36.0: таймаут db-heal не стирает данные', () => {
+  /** патч entrypoint под временные пути + манифест схемы в шаблонный каталог */
+  async function patchedEntrypoint(dir: string, tmpl: string): Promise<string> {
+    // db-heal читает манифест из каталога шаблона — без него мгновенный fatal (код 1)
+    await fs.copyFile(manifestPath, path.join(tmpl, 'schema-manifest.json'))
+    const ep = await fs.readFile(path.join(ROOT, 'docker-entrypoint.sh'), 'utf8')
+    const patched = ep
+      .replaceAll('/app/data', dir)
+      .replaceAll('/app/db-template', tmpl)
+      .replace('node /app/db-heal.cjs', `node ${path.join(ROOT, 'scripts/db-heal.cjs')}`)
+      .replace('exec "$@"', 'echo EP_DONE')
+    const epPath = path.join(dir, 'entrypoint-test.sh')
+    await fs.writeFile(epPath, patched, { mode: 0o755 })
+    return epPath
+  }
+
+  it('код 2 от db-heal → сервер запускается с существующей БД, бэкапов нет', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ep-tmo-'))
+    const tmpl = await fs.mkdtemp(path.join(os.tmpdir(), 'ep-tmo-tmpl-'))
+    tmpDirs.push(dir, tmpl)
+    await fs.copyFile(templateDb, path.join(tmpl, 'hub.db'))
+    await fs.writeFile(path.join(tmpl, '.schema-version'), 'ep-tmo-ver')
+
+    const db = path.join(dir, 'hub.db')
+    await fs.copyFile(templateDb, db)
+    await fs.writeFile(path.join(dir, '.schema-version'), 'old-marker')
+    const before = await fs.readFile(db)
+
+    const epPath = await patchedEntrypoint(dir, tmpl)
+    // db-heal внутри entrypoint получает DB_HEAL_TIMEOUT_MS=1 → гарантированный код 2
+    const r = await execFileP('sh', [epPath], {
+      cwd: ROOT,
+      env: { ...process.env, DB_HEAL_TIMEOUT_MS: '1' },
+    })
+    // размеры в логах первыми — «пустых логов» больше не бывает
+    expect(r.stdout).toContain('том данных')
+    expect(r.stdout).toContain('hub.db-wal')
+    expect(r.stdout).toContain('ВНИМАНИЕ: db-heal не завершился (код 2')
+    expect(r.stdout).toContain('НЕ считается повреждённой')
+    expect(r.stdout).toContain('EP_DONE')
+    // БД НЕ заменялась, бэкапов нет, маркер схемы не перезаписан
+    expect(Buffer.compare(before, await fs.readFile(db))).toBe(0)
+    const files = await fs.readdir(dir)
+    expect(files.filter((n) => n.startsWith('hub.db.bak-'))).toHaveLength(0)
+    expect(await fs.readFile(path.join(dir, '.schema-version'), 'utf8')).toContain('old-marker')
+  })
+
+  it('здоровая БД: db-heal ok → маркер обновлён, сервер запущен', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ep-ok-'))
+    const tmpl = await fs.mkdtemp(path.join(os.tmpdir(), 'ep-ok-tmpl-'))
+    tmpDirs.push(dir, tmpl)
+    await fs.copyFile(templateDb, path.join(tmpl, 'hub.db'))
+    await fs.writeFile(path.join(tmpl, '.schema-version'), 'ep-ok-ver')
+
+    const db = path.join(dir, 'hub.db')
+    await fs.copyFile(templateDb, db)
+
+    const epPath = await patchedEntrypoint(dir, tmpl)
+    const r = await execFileP('sh', [epPath], { cwd: ROOT })
+    expect(r.stdout).toContain('скан целостности: ok')
+    expect(r.stdout).toContain('EP_DONE')
+    expect(await fs.readFile(path.join(dir, '.schema-version'), 'utf8')).toContain('ep-ok-ver')
   })
 })
 
