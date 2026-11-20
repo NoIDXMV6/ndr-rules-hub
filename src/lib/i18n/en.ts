@@ -24,6 +24,7 @@ export const en: Dictionary = {
     langAria: 'Interface language',
     logout: 'Log out',
     account: 'Account',
+    dnsSourcesOk: 'DNS: {ok}/{enabled} OK',
     editionBadge: '{ed} edition',
   },
 
@@ -41,7 +42,6 @@ export const en: Dictionary = {
     settings: 'Settings',
     logs: 'Logs',
     users: 'Users',
-    account: 'Account',
     help: 'Help',
     about: 'About',
   },
@@ -52,6 +52,9 @@ export const en: Dictionary = {
     dnsLists: 'DNS lists',
     integrations: 'Integrations',
     admin: 'Administration',
+    account: 'Account',
+    accountProfile: 'Profile & 2FA',
+    accountTokens: 'Tokens & access',
     help: 'Help',
   },
 
@@ -119,6 +122,18 @@ export const en: Dictionary = {
     vpnStatusUnavailable: 'Status unavailable: {err}. Set up a profile on the “WireGuard VPN” tab.',
     recentEvents: 'Recent events',
     noEvents: 'No events yet.',
+    // DNS filtering: stat cards (v1.31.0) — same layout as the rules row
+    dnsSources: 'DNS sources',
+    dnsDomains: 'Domains in DB',
+    dnsDomainsSub: 'across all enabled lists',
+    dnsCategories: 'List categories',
+    dnsCategoriesSub: 'domain groups controlling the build content',
+    dnsBuild: 'Domains in DNS build',
+    dnsBuildSubNo: 'the list has not been built yet',
+    dnsLastBuild: 'Latest domain list build',
+    dnsLastBuildDesc: 'Result file for a DNS filter / AdGuard Home / dnsmasq',
+    dnsDownload: 'Download domain list',
+    dnsNoBuild: 'The domain list has not been built yet. Go to "DNS lists → Build & export" or press "Full cycle".',
   },
 
   system: {
@@ -1233,7 +1248,7 @@ PersistentKeepalive = 25
     serveCopied: 'Copied',
     buildLog: 'Build log',
     cronNote: 'The full cycle and cron update DNS sources and rebuild the list (dnsCronEnabled setting).',
-    tokensHint: 'Personal download tokens are issued on the "Build & Export" tab — pick the "domains" or "both" scope.',
+    tokensHint: 'Personal download tokens are issued in "Account → Tokens & access" — pick the "domains" or "both" scope.',
     statsDuplicates: 'Duplicates eliminated: {n}',
     statsAllowed: 'Excluded by the allowlist: {n}',
     statsCategories: 'Excluded by categories: {n}',
@@ -1242,7 +1257,7 @@ PersistentKeepalive = 25
   },
 
   tokens: {
-    title: 'Download tokens (rules and domains)',
+    title: 'Tokens & access (rules and domains)',
     scopeLabel: 'Access (scope)',
     scopeRules: 'Suricata rules',
     scopeDomains: 'domain list (DNS)',

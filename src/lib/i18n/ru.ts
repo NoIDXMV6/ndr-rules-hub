@@ -21,6 +21,7 @@ export const ru = {
     langAria: 'Язык интерфейса',
     logout: 'Выйти',
     account: 'Учётная запись',
+    dnsSourcesOk: 'DNS: {ok}/{enabled} ОК',
     editionBadge: 'редакция {ed}',
   },
 
@@ -38,7 +39,6 @@ export const ru = {
     settings: 'Настройки',
     logs: 'Журнал',
     users: 'Пользователи',
-    account: 'Аккаунт',
     help: 'Помощь',
     about: 'О системе',
   },
@@ -49,6 +49,9 @@ export const ru = {
     dnsLists: 'DNS списки',
     integrations: 'Интеграции',
     admin: 'Администрирование',
+    account: 'Аккаунт',
+    accountProfile: 'Профиль и 2FA',
+    accountTokens: 'Токены и доступ',
     help: 'Справка',
   },
 
@@ -115,6 +118,18 @@ export const ru = {
     vpnStatusUnavailable: 'Статус недоступен: {err}. Настройте профиль на вкладке «WireGuard VPN».',
     recentEvents: 'Последние события',
     noEvents: 'Пока нет событий.',
+    // DNS-фильтрация: карточки показателей (v1.31.0) — аналогично правилам
+    dnsSources: 'DNS источники',
+    dnsDomains: 'Доменов в базе',
+    dnsDomainsSub: 'по всем включённым спискам',
+    dnsCategories: 'Категорий списков',
+    dnsCategoriesSub: 'группы доменов для управления составом сборки',
+    dnsBuild: 'Доменов в сборке DNS',
+    dnsBuildSubNo: 'сборка списка ещё не выполнялась',
+    dnsLastBuild: 'Последняя сборка списка доменов',
+    dnsLastBuildDesc: 'Итоговый файл для DNS-фильтра / AdGuard Home / dnsmasq',
+    dnsDownload: 'Скачать список доменов',
+    dnsNoBuild: 'Список доменов ещё не собирался. Перейдите в «DNS списки → Сборка и экспорт» или нажмите «Полный цикл».',
   },
 
   system: {
@@ -1233,7 +1248,7 @@ PersistentKeepalive = 25
     serveCopied: 'Скопировано',
     buildLog: 'Журнал сборки',
     cronNote: '«Полный цикл» и cron обновляют DNS-источники и пересобирают список (настройка dnsCronEnabled).',
-    tokensHint: 'Персональные токены скачивания выдаются на вкладке «Сборка и экспорт» — выберите scope «домены» или «оба списка».',
+    tokensHint: 'Персональные токены скачивания выдаются в разделе «Аккаунт → Токены и доступ» — выберите scope «домены» или «оба списка».',
     statsDuplicates: 'Дубликатов устранено: {n}',
     statsAllowed: 'Исключено белым списком: {n}',
     statsCategories: 'Исключено категориями: {n}',
@@ -1242,7 +1257,7 @@ PersistentKeepalive = 25
   },
 
   tokens: {
-    title: 'Токены скачивания (правила и домены)',
+    title: 'Токены и доступ (правила и домены)',
     scopeLabel: 'Доступ (scope)',
     scopeRules: 'правила Suricata',
     scopeDomains: 'список доменов (DNS)',

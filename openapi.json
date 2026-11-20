@@ -2179,7 +2179,7 @@
         "tags": [
           "tokens"
         ],
-        "summary": "Токены скачивания: свои (администратор — все, с владельцами; только Enterprise)",
+        "summary": "Токены скачивания (раздел «Аккаунт» → «Токены и доступ»): свои (администратор — все, с владельцами; только Enterprise)",
         "responses": {
           "200": {
             "description": "{tokens: DownloadToken[]}",
@@ -2208,7 +2208,7 @@
         "tags": [
           "tokens"
         ],
-        "summary": "Создать токен {name, ttlDays?}. Полный токен в ответе — показывается один раз; лимит 10 созданий в час с IP",
+        "summary": "Создать токен {name, ttlDays?, scope? rules|domains|both}. Полный токен в ответе — показывается один раз; лимит 10 созданий в час с IP",
         "requestBody": {
           "required": true,
           "content": {

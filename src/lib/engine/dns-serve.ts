@@ -72,7 +72,7 @@ export async function serveDomainList(opts: ServeAuth = {}): Promise<ServeResult
       body: access.reason === 'scope'
         ? 'NDR Rules Hub: доступ запрещён — этот токен выдан только для правил Suricata. Для скачивания списка доменов создайте токен со scope «домены» или «оба списка».'
         : access.reason === 'missing' || access.reason === 'invalid'
-          ? 'NDR Rules Hub: доступ запрещён — неверный ключ отдачи списка доменов. Добавьте к URL ?token=<токен> или передайте его в заголовке Authorization. Токен выдаётся на вкладке «DNS-фильтрация» → «Сборка и экспорт».'
+          ? 'NDR Rules Hub: доступ запрещён — неверный ключ отдачи списка доменов. Добавьте к URL ?token=<токен> или передайте его в заголовке Authorization. Персональный токен со scope «домены» выдаётся в разделе «Аккаунт» → «Токены и доступ», глобальный ключ — в «DNS списки» → «Сборка и экспорт».'
           : 'NDR Rules Hub: доступ запрещён.',
     }
   }

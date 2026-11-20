@@ -406,19 +406,22 @@ sequenceDiagram
 
 ## 10. Web UI
 
-A single-page application (Next.js App Router, client components) with 9 tabs:
+A menu bar with groups: the first level holds groups only, the functionality lives on the
+second level (v1.30.0). Header status badges (administrator): rules in DB, VPN tunnels,
+sources OK/total, domains in DB and DNS sources OK/total (v1.31.0, amber on source errors).
 
-| Tab | Contents |
+| Group → tabs | Contents |
 |---|---|
-| Overview | stat cards (sources, rules, latest build, VPN), recent events |
-| Sources | catalog of 25 sources + custom ones, enable toggles, fetch one/all, add/edit dialogs, snort.org archive analysis |
-| Rules | rule database with search by SID/msg/source and pagination |
-| Build & Export | build, per-source statistics, files in the export directory |
-| WireGuard VPN | environment check, config editor, profiles, active interfaces |
-| Settings | oinkcode, dedup policies, export (mode, URL, token, source), cron |
-| Logs | all engine events |
-| Help | goals/objectives, pipeline, limits, troubleshooting — accordions |
-| About | developer, project, acknowledgements, technologies with logos, logo — accordions |
+| Overview | stat cards (sources, rules in DB/build, duplicates; since v1.31.0 — DNS sources, domains in DB, categories, domains in the DNS build), “latest build” cards for rules and the domain list (with download), system dashboards (admin), VPN, recent events |
+| Rules → Sources | catalog of 45 sources + custom ones, enable toggles, fetch one/all, add/edit dialogs, snort.org archive analysis |
+| Rules → Categories | classtype grouping, build toggles, per-rule off switches |
+| Rules → Rules | rule database with search by SID/msg/source and pagination |
+| Rules → Build & Export | build with progress, per-source statistics, files in the export directory |
+| DNS lists → Sources/Categories/Records/Build & Export | the DNS module mirroring “Rules” (v1.29.0): catalog of 46 lists, SQL dump import, search/duplicates/manual decisions, build and serving of the domain list |
+| Integrations → Notifications & services / Clear NDR Update / OpenSearch Dashboards / MISP / WireGuard VPN | system-level integrations (administrator only) |
+| Administration → Settings / Logs / Users | oinkcode and other secrets, dedup policies, export, cron, disk and auto-cleanup; engine log; verification and 2FA reset (Enterprise) |
+| Account → Profile & 2FA / Tokens & access (Enterprise) | account details and 2FA (Telegram/TOTP); personal download tokens with rules/domains/both scope and ready-made serving Uri (v1.31.0: the tokens card moved here from “Build & Export”) |
+| Help → Help / About | goals/objectives, pipeline, limits, troubleshooting — accordions; about the system |
 
 Components — shadcn/ui (Radix primitives) + Tailwind CSS; icons — Lucide; technology logos —
 inline SVG from simple-icons (`tech-logos.tsx`, CC0).
@@ -479,9 +482,10 @@ both. **Community** (default) — previous behavior: no authentication. **Enterp
 multi-user mode: User/Session/DownloadToken/AuthEvent tables (db-heal migrates the volume DB
 automatically), registration (the first user becomes the bootstrap admin), administrator
 verification (`pending → active`; the cabinet stays closed until verified), roles (the user
-cabinet: Overview, Sources, Categories, Rules, Build & Export, Clear NDR Update, OpenSearch
-Dashboards, Help, About; the administrator additionally gets Users, VPN, Settings, Logs),
-“own sources” (Source.ownerId), personal download tokens.
+cabinet: Overview, Sources, Categories, Rules, Build & Export, Account (Profile & 2FA ·
+Tokens & access), Clear NDR Update, OpenSearch Dashboards, Help, About; the administrator
+additionally gets Users, VPN, Settings, Logs), “own sources” (Source.ownerId), personal
+download tokens (the “Account” section → “Tokens & access”).
 
 The protection layer — `src/lib/security/` (details in [docs/developer.md](docs/developer.md),
 C4 diagrams in [docs/diagrams/](docs/diagrams/)):

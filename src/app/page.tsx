@@ -26,15 +26,16 @@ import { HelpTab } from '@/components/hub/help-tab'
 import { AboutTab } from '@/components/hub/about-tab'
 import { AuthScreen } from '@/components/hub/auth-screen'
 import { AccountTab } from '@/components/hub/account-tab'
+import { AccountTokensTab } from '@/components/hub/account-tokens-tab'
 import { SystemPanel } from '@/components/hub/system-panel'
 import { api, Dashboard, fmtSize, fmtTime, type Me } from '@/components/hub/api'
 import { useI18n, type Dictionary, type Lang } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import {
   Activity, Bell, Blocks, Building2, ChartColumn, Check, ChevronDown, CircleHelp, Database,
-  Download, FolderTree, Globe, Info, Layers, LayoutDashboard, Library,
+  Download, FolderTree, Globe, KeyRound, Info, Layers, LayoutDashboard, Library,
   LifeBuoy, ListChecks, LogOut, Network, Package, RefreshCw, ScrollText, Search, Settings,
-  Share2, Shield, UserRound, Users, Wifi, Wrench,
+  Share2, Shield, UserRound, UserRoundCog, Users, Wifi, Wrench,
 } from 'lucide-react'
 
 type Role = 'admin' | 'user' | 'anon'
@@ -103,6 +104,7 @@ export default function Home() {
       allowed.add('dns-build')
     }
     if (me?.multiUser) allowed.add('account') // кабинет доступен всем вошедшим
+    if (me?.multiUser) allowed.add('account-tokens') // «Токены и доступ» — тоже
     if (admin) {
       allowed.add('update') // «Обновление Clear NDR» (меню «Интеграции»)
       allowed.add('osd') // «Дашборды OpenSearch» (меню «Интеграции»)
@@ -198,6 +200,19 @@ export default function Home() {
                     <Activity className="h-3 w-3 mr-1" />
                     {tr(t.header.sourcesOk, { ok: data.sources.ok, enabled: data.sources.enabled })}
                   </Badge>
+                  {/* DNS-фильтрация: плашки статуса — аналогично правилам (v1.31.0) */}
+                  {data.dns && (
+                    <>
+                      <Badge variant="outline" className="border-input text-foreground">
+                        <Globe className="h-3 w-3 mr-1" />
+                        {tr(t.dns.badgeDomains, { n: data.dns.domains.toLocaleString(loc) })}
+                      </Badge>
+                      <Badge variant="outline" className={data.dns.sources.error > 0 ? 'border-amber-400 text-amber-700' : 'border-input text-muted-foreground'}>
+                        <Activity className="h-3 w-3 mr-1" />
+                        {tr(t.header.dnsSourcesOk, { ok: data.dns.sources.ok, enabled: data.dns.sources.enabled })}
+                      </Badge>
+                    </>
+                  )}
                 </>
               )}
               {data && !isAdmin && (
@@ -248,7 +263,7 @@ export default function Home() {
             <RulesTab data={data} />
           </TabsContent>
           <TabsContent value="build" className="mt-4">
-            <BuildTab data={data} onChange={refresh} role={role} />
+            <BuildTab data={data} onChange={refresh} />
           </TabsContent>
           {isAdmin && (
             <TabsContent value="dns-sources" className="mt-4">
@@ -313,6 +328,11 @@ export default function Home() {
           {me.multiUser && (
             <TabsContent value="account" className="mt-4">
               <AccountTab />
+            </TabsContent>
+          )}
+          {me.multiUser && (
+            <TabsContent value="account-tokens" className="mt-4">
+              <AccountTokensTab role={isAdmin ? 'admin' : 'user'} />
             </TabsContent>
           )}
           <TabsContent value="help" className="mt-4">
@@ -417,9 +437,20 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAcco
     groups.push({ kind: 'dropdown', key: 'admin', grow: 1.35, label: t.menu.admin, icon: ico(Wrench), items: adminItems })
   }
 
-  // Личный кабинет (только Enterprise): настройки 2FA своей учётной записи
+  // «Аккаунт» (Enterprise) — группа второго уровня: профиль/2FA и токены доступа
+  // (v1.31.0: токены скачивания переехали из «Сборки и экспорта» — выдача токена
+  // относится к учётной записи, а не к настройкам сборки)
   if (showAccount) {
-    groups.push({ kind: 'direct', key: 'account', item: { value: 'account', label: t.tabs.account, icon: ico(UserRound) } })
+    groups.push({
+      kind: 'dropdown',
+      key: 'account',
+      label: t.menu.account,
+      icon: ico(UserRound),
+      items: [
+        { value: 'account', label: t.menu.accountProfile, icon: ico(UserRoundCog) },
+        { value: 'account-tokens', label: t.menu.accountTokens, icon: ico(KeyRound) },
+      ],
+    })
   }
 
   groups.push({
@@ -577,6 +608,8 @@ function Overview({ data, onRefresh, role, onSettings }: { data: Dashboard | nul
     )
   }
   const b = data.lastBuild
+  // DNS-фильтрация: сводка приходит только администратору (data.dns != null)
+  const db = data.dns?.lastBuild ?? null
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -585,6 +618,16 @@ function Overview({ data, onRefresh, role, onSettings }: { data: Dashboard | nul
         <StatCard title={t.overview.statRulesBuild} value={b ? b.totalRules.toLocaleString(loc) : '—'} sub={b ? `${b.fileName} · ${fmtSize(b.sizeBytes, lang)}` : t.overview.statRulesBuildSubNo} icon={<Layers className="h-3.5 w-3.5" />} />
         <StatCard title={t.overview.statDups} value={b ? (b.stats.duplicateBySid + b.stats.duplicateByContent).toLocaleString(loc) : '—'} sub={b ? tr(t.overview.statDupsSub, { sid: b.stats.duplicateBySid.toLocaleString(loc), content: b.stats.duplicateByContent.toLocaleString(loc) }) : ''} icon={<Activity className="h-3.5 w-3.5" />} />
       </div>
+
+      {/* DNS-фильтрация: карточки показателей — аналогично правилам (только админ) */}
+      {data.dns && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard title={t.overview.dnsSources} value={`${data.dns.sources.enabled}/${data.dns.sources.total}`} sub={tr(t.overview.statSourcesSub, { n: data.dns.sources.error })} icon={<Globe className="h-3.5 w-3.5" />} />
+          <StatCard title={t.overview.dnsDomains} value={data.dns.domains.toLocaleString(loc)} sub={t.overview.dnsDomainsSub} icon={<Database className="h-3.5 w-3.5" />} />
+          <StatCard title={t.overview.dnsCategories} value={data.dns.categories.toLocaleString(loc)} sub={t.overview.dnsCategoriesSub} icon={<FolderTree className="h-3.5 w-3.5" />} />
+          <StatCard title={t.overview.dnsBuild} value={db ? db.totalDomains.toLocaleString(loc) : '—'} sub={db ? `${db.fileName} · ${fmtSize(db.sizeBytes, lang)}` : t.overview.dnsBuildSubNo} icon={<Shield className="h-3.5 w-3.5" />} />
+        </div>
+      )}
 
       {/* ── Системные дашборды: сервер/диски/контейнеры/сеть/туннель/очистка — только администратору (API /api/system — admin) ── */}
       {role === 'admin' && <SystemPanel onSettings={onSettings} />}
@@ -620,6 +663,41 @@ function Overview({ data, onRefresh, role, onSettings }: { data: Dashboard | nul
             )}
           </CardContent>
         </Card>
+
+        {/* DNS-фильтрация: последняя сборка списка доменов — аналогично карточке правил */}
+        {role === 'admin' && data.dns && (
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-base">{t.overview.dnsLastBuild}</CardTitle>
+              <CardDescription>{t.overview.dnsLastBuildDesc}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {db ? (
+                <div className="space-y-2 text-sm">
+                  <div className="flex flex-wrap gap-x-6 gap-y-1">
+                    <span className="text-muted-foreground">{t.overview.file} <code className="text-emerald-700">{db.fileName}</code></span>
+                    <span className="text-muted-foreground">{t.overview.size} {fmtSize(db.sizeBytes, lang)}</span>
+                    <span className="text-muted-foreground">{t.overview.created} {fmtTime(db.createdAt, lang)}</span>
+                    <span className="text-muted-foreground">{tr(t.dns.badgeDomains, { n: db.totalDomains.toLocaleString(loc) })}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground break-all">SHA-256: <code>{db.sha256}</code></div>
+                  <div className="flex gap-2 pt-1">
+                    <a href="/api/dns/export" download>
+                      <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">
+                        <Download className="h-4 w-4 mr-1.5" /> {t.overview.dnsDownload}
+                      </Button>
+                    </a>
+                    <Button size="sm" variant="outline" className="border-input text-foreground" onClick={onRefresh}>
+                      <RefreshCw className="h-4 w-4 mr-1.5" /> {t.overview.refresh}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">{t.overview.dnsNoBuild}</p>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* VPN-карточка — только администратору */}
         {role === 'admin' && (
