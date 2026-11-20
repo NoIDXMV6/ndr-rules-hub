@@ -209,6 +209,11 @@ export async function ensureSeed(): Promise<{ seeded: boolean; catalogAdded: str
   if (sc === 0) {
     for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) await setSetting(k, v)
     if (DEFAULT_SETTINGS.oinkcode) await log('info', 'system', 'Oinkcode загружен из переменной окружения OINKCODE')
+  } else {
+    // v1.34.0: сущность «глобальный ключ отдачи списка доменов» удалена —
+    // токены управляются только в разделе «Аккаунт»; историческая настройка
+    // (и её значение) вычищаются при старте
+    await db.setting.deleteMany({ where: { key: 'dnsServeToken' } })
   }
   return { seeded: count === 0, catalogAdded: added, catalogUpdated: updated }
 }
@@ -305,6 +310,23 @@ export async function fetchSourceById(sourceId: string, userId?: string | null):
       return {
         ok: false,
         error: 'У источника Open NRD не задан код лицензии — получите бесплатный код (форма stamus-networks.com/stamus-labs/subscribe-to-threat-intel-feed, приходит письмом) и введите его в «Настройки → Токены источников → Open NRD», либо в extra источника {"openNrdCode":"…"}',
+        count: 0,
+      }
+    }
+  }
+  // подстановка API-ключа RST Cloud (api.rstcloud.net) — заголовок X-Api-Key:
+  // ключ общий для фидов Threat Feed и IoC Lookup, задаётся в «Настройки»
+  if (src.authType === 'rstkey') {
+    let extra: Record<string, unknown> = {}
+    try {
+      extra = src.extraJson ? JSON.parse(src.extraJson) : {}
+    } catch { /* ignore */ }
+    if (!extra.rstApiKey && settings.rstApiKey) extra.rstApiKey = settings.rstApiKey
+    cfg.extraJson = JSON.stringify(extra)
+    if (!(extra.rstApiKey ?? '').toString().trim()) {
+      return {
+        ok: false,
+        error: 'У источника RST Cloud не задан API-ключ — получите ключ (rstcloud.com, кнопка Free Trial / личный кабинет) и введите его в «Настройки → Токены источников → RST Cloud», либо в extra источника {"rstApiKey":"…"}',
         count: 0,
       }
     }

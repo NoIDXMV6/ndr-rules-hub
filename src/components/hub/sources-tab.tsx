@@ -204,6 +204,8 @@ export function SourcesTab({ data, onChange, role, selfId }: { data: Dashboard |
     s.kind === 'local' ? t.sources.kinds.local
       : s.category === 'ip-list' ? t.sources.kinds.ipList
       : s.category === 'domain-list' ? t.sources.kinds.domainList
+      : s.category === 'url-list' ? t.sources.kinds.urlList
+      : s.category === 'hash-list' ? t.sources.kinds.hashList
       : s.category === 'zeek-intel' ? t.sources.kinds.zeekIntel
       : s.category === 'misp' ? t.sources.kinds.misp
       : s.kind === 'tarball' ? t.sources.kinds.tarball
@@ -561,6 +563,7 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
                   <SelectItem value="ip-list">{d.catIpList}</SelectItem>
                   <SelectItem value="domain-list">{d.catDomainList}</SelectItem>
                   <SelectItem value="url-list">{d.catUrlList}</SelectItem>
+                  <SelectItem value="hash-list">{d.catHashList}</SelectItem>
                   <SelectItem value="zeek-intel">{d.catZeekIntel}</SelectItem>
                   <SelectItem value="misp">{d.catMisp}</SelectItem>
                 </SelectContent>
@@ -600,6 +603,7 @@ function AddSourceDialog({ onCreated }: { onCreated: () => void }) {
                   <SelectItem value="oinkcode">{d.authOinkcode}</SelectItem>
                   <SelectItem value="authkey">{d.authAuthkey}</SelectItem>
                   <SelectItem value="misp">{d.authMisp}</SelectItem>
+                  <SelectItem value="rstkey">{d.authRstkey}</SelectItem>
                   <SelectItem value="basic">{d.authBasic}</SelectItem>
                 </SelectContent>
               </Select>
@@ -721,6 +725,7 @@ function EditSourceDialog({ source, onSaved }: { source: SourceItem; onSaved: ()
                   <SelectItem value="oinkcode">{d.authOinkcode}</SelectItem>
                   <SelectItem value="authkey">{d.authAuthkeyShort}</SelectItem>
                   <SelectItem value="misp">{d.authMispShort}</SelectItem>
+                  <SelectItem value="rstkey">{d.authRstkeyShort}</SelectItem>
                   <SelectItem value="basic">{d.authBasicShort}</SelectItem>
                 </SelectContent>
               </Select>

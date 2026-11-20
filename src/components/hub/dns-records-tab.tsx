@@ -11,8 +11,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { api, type DomainRecordRow } from '@/components/hub/api'
+import { RstCheckDialog } from '@/components/hub/rst-check-dialog'
 import { useI18n } from '@/lib/i18n'
-import { Ban, Database, RefreshCw, Search, ShieldBan } from 'lucide-react'
+import { Ban, Database, RefreshCw, Search, ShieldBan, ShieldCheck } from 'lucide-react'
 
 export function DnsRecordsTab() {
   const { t, tr, loc } = useI18n()
@@ -23,6 +24,8 @@ export function DnsRecordsTab() {
   const [mode, setMode] = useState<'search' | 'dups'>('search')
   const [busy, setBusy] = useState(false)
   const [searched, setSearched] = useState(false)
+  // проверка домена через RST Cloud (IoC Lookup / Noise Control / Whois)
+  const [rstDomain, setRstDomain] = useState<string | null>(null)
 
   const run = useCallback(async (q: string, dup: boolean) => {
     setBusy(true)
@@ -122,6 +125,9 @@ export function DnsRecordsTab() {
                         <td className="px-3 py-2 text-muted-foreground text-right">{r.sourcePriority}</td>
                         <td className="px-3 py-2">
                           <div className="flex justify-end gap-1">
+                            <Button variant="ghost" size="sm" title={t.dns.rstCheckBtn} onClick={() => setRstDomain(r.domain)} className="text-sky-600 hover:text-sky-700">
+                              <ShieldCheck className="h-4 w-4" />
+                            </Button>
                             {(!r.override || r.override.enabled) && (
                               <Button variant="ghost" size="sm" title={t.dns.overrideOff} onClick={() => void setOverride(r.domain, false, false)} className="text-red-600 hover:text-red-700">
                                 <Ban className="h-4 w-4" />
@@ -149,6 +155,7 @@ export function DnsRecordsTab() {
           {searched && <p className="text-[11px] text-muted-foreground">{t.dns.overrideNeedRebuild}</p>}
         </CardContent>
       </Card>
+      {rstDomain && <RstCheckDialog domain={rstDomain} onClose={() => setRstDomain(null)} />}
     </div>
   )
 }

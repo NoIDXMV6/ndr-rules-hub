@@ -4,7 +4,10 @@
 // Вкладка «DNS списки → Сборка и экспорт» — зеркально «Сборке итогового набора»
 // (build-tab.tsx): кнопка сборки в шапке, настройки файла списка, прогресс с
 // фазой и терминальным журналом, бейджи последней сборки, сетка показателей,
-// таблица по источникам, адрес отдачи и карточка файлов каталога экспорта.
+// таблица по источникам и карточка файлов каталога экспорта.
+// Отдача списка (v1.34.0): только по персональному токену (полный Uri показывается
+// при создании токена в «Аккаунт → Токены и доступ») или из кабинета; поля
+// «ключ отдачи» и адрес отдачи с вкладки сборки убраны — токены в «Аккаунте».
 // ─────────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
@@ -84,16 +87,10 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
   const saveName = async (v: string) => {
     await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dnsFileName: v }) })
   }
-  const saveServeToken = async (v: string) => {
-    await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dnsServeToken: v }) })
-    onChange()
-  }
 
   const settings = data?.settings ?? {}
   // прогресс: сборка, запущенная из этого окна, или фоновая (cron/другое окно)
   const showProg = !!prog && (busy || prog.active)
-  // адрес отдачи собирается из адресной строки браузера (SSR-безопасно)
-  const origin = typeof window !== 'undefined' ? window.location.origin : ''
   const stats = build?.stats ?? {}
 
   return (
@@ -111,8 +108,8 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
           </div>
         </CardHeader>
         <CardContent>
-          {/* итоговый файл: формат / имя / ключ отдачи */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+          {/* итоговый файл: формат / имя (отдача — по токену из «Аккаунта») */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
             <div>
               <Label className="text-foreground">{t.dns.buildFormatLabel}</Label>
               <Select value={settings.dnsBuildFormat ?? 'plain'} onValueChange={(v) => void saveFormat(v)}>
@@ -128,10 +125,6 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
             <div>
               <Label className="text-foreground">{t.dns.fileNameLabel}</Label>
               <Input defaultValue={settings.dnsFileName ?? 'blocked-domains.txt'} onBlur={(e) => void saveName(e.target.value.trim())} className="bg-card border-input mt-1" />
-            </div>
-            <div>
-              <Label className="text-foreground">{t.dns.serveTokenLabel}</Label>
-              <Input type="password" defaultValue={settings.dnsServeToken ?? ''} onBlur={(e) => void saveServeToken(e.target.value.trim())} className="bg-card border-input mt-1" />
             </div>
           </div>
           <p className="text-xs text-muted-foreground -mt-2 mb-4">{t.dns.serveTokenHint}</p>
@@ -206,9 +199,7 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
                 </table>
               </div>
               <div className="pt-3 border-t border-border/60">
-                <p className="text-xs text-muted-foreground mb-1">{t.dns.serveUrlTitle}</p>
-                <code className="block rounded border border-border bg-muted/60 px-2 py-1 text-xs text-foreground break-all">{origin}/api/dns/export</code>
-                <p className="text-[11px] text-muted-foreground mt-1">{t.dns.tokensHint}</p>
+                <p className="text-[11px] text-muted-foreground">{t.dns.tokensHint}</p>
               </div>
             </div>
           ) : (

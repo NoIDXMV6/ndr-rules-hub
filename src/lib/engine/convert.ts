@@ -380,3 +380,37 @@ export function convertUrlList(text: string, opts: ConvertOptions): ConvertedRul
   }
   return rules
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Список хэшей SHA-256 (RST Threat Feed и др.) → правила filesha256.
+// Suricata включает инспекцию файлов HTTP-ответов при наличии file-ключевых
+// слов в наборе: правило с filesha256 срабатывает на скачиваемый файл с этим
+// хэшем (дроппер/малварь по контрольной сумме, md5/sha1 не используем —
+// в Suricata для них те же правила, но sha256 устойчив к коллизиям).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SHA256_RULE_RE = /^[0-9a-f]{64}$/
+
+/** Конвертация списка SHA-256 → правила filesha256 (1 правило = 1 хэш, с предохранителем) */
+export function convertHashList(text: string, opts: ConvertOptions): ConvertedRule[] {
+  const action = opts.action ?? 'alert'
+  const msgPrefix = opts.msgPrefix ?? 'CONVERTED-FILE known malicious file hash'
+  const maxRules = opts.maxRules ?? 10000
+  const classtype = opts.classtype ?? 'trojan-activity'
+  const rules: ConvertedRule[] = []
+  const seen = new Set<string>()
+  let sid = opts.sidStart
+  for (const line of text.split(/\r?\n/)) {
+    if (rules.length >= maxRules) break
+    const t = line.trim().toLowerCase()
+    if (!t || t.startsWith('#') || t.startsWith('//')) continue
+    if (!SHA256_RULE_RE.test(t) || seen.has(t)) continue
+    seen.add(t)
+    const raw =
+      `${action} http ${LOCAL_NET} any -> ${EXTERNAL_NET} any ` +
+      `(msg:"${msgPrefix} ${t.slice(0, 16)}…"; flow:to_server,established; filesha256:"${t}"; classtype:${classtype}; metadata:ruleset converted-feed; sid:${sid}; rev:1;)`
+    rules.push({ sid, rev: 1, raw, suricataOk: true, compatNotes: null })
+    sid++
+  }
+  return rules
+}

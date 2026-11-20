@@ -106,7 +106,7 @@ flowchart TB
 
 | Модель | Назначение | Ключевые поля |
 |---|---|---|
-| `Source` | источник правил | `category` (ruleset / ip-list / domain-list / url-list), `kind` (url / tarball / local), `authType` (none / oinkcode / authkey / basic), `extraJson` (параметры конвертера и авторизации), `priority` (меньше = главнее), `status`, `badge`, `builtin` |
+| `Source` | источник правил | `category` (ruleset / ip-list / domain-list / url-list / hash-list), `kind` (url / tarball / local), `authType` (none / oinkcode / authkey / basic / misp / opennrd / rstkey), `extraJson` (параметры конвертера и авторизации), `priority` (меньше = главнее), `status`, `badge`, `builtin` |
 | `Rule` | правило конкретного источника | `sid`, `rev`, `action`, `proto`, `msg`, `raw`, `contentHash` (канонический SHA-1 без sid/rev/msg/metadata), `suricataOk`, `compatNotes`; уникальность `[sourceId, sid]` |
 | `Build` | результат сборки | `statsJson` (статистика по источникам/дубликатам), `policyJson` (применённые политики), `fileName`, `sha256`, `sizeBytes`, `source` (manual / cron) |
 | `Setting` | настройки (k-v) | oinkcode, стратегии дедупликации (победитель/проигравший), cron, параметры экспорта |
@@ -274,7 +274,7 @@ flowchart TD
 
 ## 6. Загрузка: авторизация и лимиты snort.org
 
-`fetcher.ts` поддерживает `authType`: `none`, `oinkcode`, `authkey` (query-параметр), `basic`
+`fetcher.ts` поддерживает `authType`: `none`, `oinkcode`, `authkey` (query-параметр), `basic`, `misp` (Authorization), `opennrd` (сегмент пути), `rstkey` (RST Cloud — заголовок X-Api-Key)
 (логин/пароль в `extraJson`).
 
 Проверено на практике поведение snort.org:
@@ -320,10 +320,11 @@ flowchart TD
 | `DomainOverride` | ручное решение по домену: исключить из сборки / принудительный блок поверх белого списка |
 | `DomainBuild` | результат сборки: файл списка + sha256 + статистика |
 | Слияние (`dns.ts mergeDomainSources`) | источники по возрастанию `priority`: домен достаётся первому, у остальных — дубликат; белый список применяется в конце; записи ленивые (AsyncIterable из курсора БД — миллионы строк без нагрузки на память) |
+| RST Threat Feed (`rst.ts`) | доменный фид RST Cloud: gzip-CSV → колонка `domain` (фильтры `skipFpAlarm`/`minScore` из extra источника), далее обычный разбор; ключ `rstApiKey` — из «Токенов источников», подстановка в памяти (в БД секрет не пишется). Три NDR-фида (IP/URL/SHA-256) конвертируются как ip/url/hash-списки; проверка индикатора — `POST /api/rst/lookup` (IoC / Noise / Whois), проверка ключа — `POST /api/rst/check` |
 | Импорт дампа (`dns-import.ts`) | потоковый разбор export.sql (MariaDB/HeidiSQL): 502 МБ → ~2,2 млн доменов и 151 категория без загрузки в память (~22 с); счётчики категорий кэшируются в настройке `dnsIfaroCategoryCounts` |
 | Конвертация дампа → NDR | прочие типы resource дампа не теряются: **URL** — хост попадает в DNS-список (с категориями), сам URL — HTTP-правило; **IP/CIDR** — IP-правила чанками по 500 (drop ip, SID 1 200 000+); **Regex** — pcre на `http.uri.raw` (SID 1 400 000+, валидация компиляции и защита от слишком широких шаблонов); **Phrase** — `http.response_body` content (SID 1 500 000+). Правила пишутся в `data/domains/ndr/*.rules` и регистрируются ВЫКЛЮЧЕННЫМИ источниками «Дамп фильтрации: …» (правила загружаются в БД сразу — счётчик честный, в сборку попадают только после включения) |
-| Сборка (`buildDomainList`) | 4 формата файла: plain / hosts (`0.0.0.0 d`) / dnsmasq (`address=/d/`) / adblock (`||d^`); прогресс — отдельный singleton (dns-progress.ts). Вкладка «Сборка и экспорт» зеркальна «Сборке итогового набора» правил: кнопка в шапке, настройки файла, прогресс с фазой и терминальным журналом, бейджи последней сборки, сетка показателей (вход/дубликаты/белый список/категории/вручную/TLD/итог), таблица по источникам, адрес отдачи, файлы каталога `data/exports/domains` (GET /api/dns/build отдаёт сборку и список файлов) |
-| Отдача | `GET /api/dns/export` — по токену скачивания со scope «domains»/«both», глобальному ключу `dnsServeToken`, сессии; без ключей — открыто (как у правил) |
+| Сборка (`buildDomainList`) | 4 формата файла: plain / hosts (`0.0.0.0 d`) / dnsmasq (`address=/d/`) / adblock (`||d^`); прогресс — отдельный singleton (dns-progress.ts). Вкладка «Сборка и экспорт» зеркальна «Сборке итогового набора» правил: кнопка в шапке, настройки файла, прогресс с фазой и терминальным журналом, бейджи последней сборки, сетка показателей (вход/дубликаты/белый список/категории/вручную/TLD/итог), таблица по источникам, файлы каталога `data/exports/domains` (GET /api/dns/build отдаёт сборку и список файлов) |
+| Отдача | `GET /api/dns/export` — БЕЗ ТОКЕНА ЗАПРЕЩЕНА: персональный токен скачивания со scope «domains»/«both» (полный Uri `?token=ndrt_…`) или сессия кабинета; глобальный ключ `dnsServeToken` удалён (v1.34.0), токены управляются только в «Аккаунте» |
 | DNS-цикл (`dnsCycleMode` / `runDnsCycle`) | три режима: `inline` — сразу за основным циклом (`runPipeline`); `deferred` — по отдельному расписанию `dnsCronSchedule` (вторая cron-задача планировщика — разнос пиков: правила утром, домены позже); `off` — выключен `dnsCronEnabled`. Неверное выражение — журнал-предупреждение и откат к `inline` |
 | Уведомление DNS-цикла | при `deferred` цикл шлёт СОБСТВЕННОЕ уведомление Telegram/Gotify (scope `dns`, строка «DNS-списки», переключатель `notifyOnDns` в «Интеграциях»): итоги обновления источников и сборки списка; при `inline` итоги DNS входят в уведомление полного цикла (строка «DNS: …») |
 

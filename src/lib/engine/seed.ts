@@ -7,10 +7,10 @@ import { log } from './service'
 
 export interface SeedSource {
   name: string
-  category: 'ruleset' | 'ip-list' | 'domain-list' | 'url-list' | 'zeek-intel' | 'misp'
+  category: 'ruleset' | 'ip-list' | 'domain-list' | 'url-list' | 'hash-list' | 'zeek-intel' | 'misp'
   kind: 'url' | 'tarball' | 'local'
   url?: string
-  authType?: 'none' | 'oinkcode' | 'authkey' | 'basic' | 'misp' | 'opennrd'
+  authType?: 'none' | 'oinkcode' | 'authkey' | 'basic' | 'misp' | 'opennrd' | 'rstkey'
   extraJson?: string
   enabled?: boolean
   priority?: number
@@ -237,6 +237,48 @@ export const SEED_SOURCES: SeedSource[] = [
     badge: 'recommended',
     notes: 'Suricata-правила по URL распространения малвари из URLhaus (срабатывание на точный URL в HTTP-запросе). Требует тот же бесплатный Auth-Key abuse.ch, что и ThreatFox (настройки → abuse.ch Auth-Key).',
     notesEn: 'Suricata rules for malware distribution URLs from URLhaus (trigger on the exact URL in an HTTP request). Requires the same free abuse.ch Auth-Key as ThreatFox (Settings → abuse.ch Auth-Key).',
+  },
+  {
+    name: 'RST Cloud Threat Feed: IP-адреса',
+    category: 'ip-list',
+    kind: 'url',
+    url: 'https://api.rstcloud.net/v1/ip?type=csv&date=latest',
+    authType: 'rstkey',
+    extraJson: JSON.stringify({ rstFeed: 'ip', action: 'drop', perRule: 500, sidStart: 1_600_000, maxRules: 1000 }),
+    enabled: false,
+    priority: 20,
+    badge: 'paid',
+    adminOnly: true,
+    notes: 'Фид вредоносных IP RST Cloud Threat Feed (~110 тыс. адресов, обновляется ежедневно): C2, панели, распространители малвари — агрегировано из 260+ источников с оценкой достоверности (score). API-ключ задаётся один раз в «Настройки → Токены источников → RST Cloud» (регистрация rstcloud.com → Free Trial); квота фидов — 1000 запросов/день. Правила группируются чанками по 500 адресов (SID 1 600 000+). Дополнительно доступна проверка отдельного индикатора (IoC Lookup) — кнопка в «DNS списки → Записи».',
+    notesEn: 'RST Cloud Threat Feed malicious IP feed (~110K addresses, daily): C2, panels, malware distributors — aggregated from 260+ sources with a trust score. Set the API key once in "Settings → Source tokens → RST Cloud" (register at rstcloud.com → Free Trial); feed quota is 1,000 requests/day. Rules are grouped in chunks of 500 addresses (SID 1,600,000+). Single-indicator verification (IoC Lookup) is also available via the button in "DNS lists → Records".',
+  },
+  {
+    name: 'RST Cloud Threat Feed: URL',
+    category: 'url-list',
+    kind: 'url',
+    url: 'https://api.rstcloud.net/v1/url?type=csv&date=latest',
+    authType: 'rstkey',
+    extraJson: JSON.stringify({ rstFeed: 'url', action: 'drop', sidStart: 1_700_000, maxRules: 20000 }),
+    enabled: false,
+    priority: 20,
+    badge: 'paid',
+    adminOnly: true,
+    notes: 'Фид вредоносных URL RST Cloud Threat Feed (~7 тыс., обновляется ежедневно): точки распространения малвари, фишинговые страницы — с парсингом домена/пути и баллом достоверности. Требует тот же API-ключ RST Cloud («Настройки → Токены источников → RST Cloud»). HTTP-правила по точному host+uri (SID 1 700 000+).',
+    notesEn: 'RST Cloud Threat Feed malicious URL feed (~7K, daily): malware distribution points, phishing pages — with domain/path parsing and a trust score. Requires the same RST Cloud API key ("Settings → Source tokens → RST Cloud"). HTTP rules on the exact host+uri (SID 1,700,000+).',
+  },
+  {
+    name: 'RST Cloud Threat Feed: хэши файлов (SHA-256)',
+    category: 'hash-list',
+    kind: 'url',
+    url: 'https://api.rstcloud.net/v1/hash?type=csv&date=latest',
+    authType: 'rstkey',
+    extraJson: JSON.stringify({ rstFeed: 'hash', action: 'drop', sidStart: 1_800_000, maxRules: 50000 }),
+    enabled: false,
+    priority: 20,
+    badge: 'paid',
+    adminOnly: true,
+    notes: 'Фид хэшей вредоносных файлов RST Cloud Threat Feed (~44 тыс. SHA-256, обновляется ежедневно): дропперы, малварь, инструменты атак. Конвертируется в правила filesha256 — Suricata сверяет контрольную сумму скачиваемых по HTTP файлов (SID 1 800 000+). Требует API-ключ RST Cloud («Настройки → Токены источников → RST Cloud»). Набор большой — включайте осознанно с учётом производительности.',
+    notesEn: 'RST Cloud Threat Feed file-hash feed (~44K SHA-256, daily): droppers, malware, attack tools. Converted to filesha256 rules — Suricata checks the checksum of files downloaded over HTTP (SID 1,800,000+). Requires the RST Cloud API key ("Settings → Source tokens → RST Cloud"). Large ruleset — enable deliberately, mind performance.',
   },
   {
     name: 'Feodo Tracker Botnet C2 (rules)',
@@ -574,6 +616,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   abusechAuthKey: process.env.ABUSECH_AUTH_KEY || '', // Auth-Key abuse.ch (ThreatFox/URLhaus, сегмент пути выгрузки)
   mispAuthKey: process.env.MISP_AUTH_KEY || '', // ключ REST API MISP (заголовок Authorization)
   openNrdLicense: process.env.OPENNRD_LICENSE || '', // код лицензии Open NRD (Stamus Networks) — сегмент пути ti.stamus-networks.io/<КОД>/…
+  rstApiKey: process.env.RST_API_KEY || '', // API-ключ RST Cloud (api.rstcloud.net) — заголовок X-Api-Key: фиды Threat Feed, IoC Lookup, Whois
   dedupSidStrategy: 'highest-rev', // highest-rev | source-priority — только выбор победителя конфликта SID
   dedupSidConflict: 'drop', // drop | reassign — судьба проигравшего при конфликте SID с другим детектом
   dedupContent: 'true',
@@ -688,7 +731,8 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   dnsFileName: 'blocked-domains.txt', // имя итогового файла списка доменов
   dnsCronEnabled: 'true', // полный цикл (cron/«Полный цикл») обновляет DNS-источники и пересобирает список
   dnsCronSchedule: '', // отдельное расписание DNS-цикла (cron): разнести по времени с основным циклом; пусто — сразу за основным
-  dnsServeToken: '', // глобальный ключ отдачи /api/dns/export; пусто — открытая отдача (как и у правил)
+  // dnsServeToken удалён (v1.34.0): отдача списка доменов — только по персональному
+  // токену (scope «домены»/«оба списка», раздел «Аккаунт») или из кабинета; без токена — 403
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -702,7 +746,9 @@ export interface DnsSeedSource {
   name: string
   url?: string
   kind?: 'url' | 'local'
-  format?: 'auto' | 'adguard' | 'hosts' | 'plain'
+  format?: 'auto' | 'adguard' | 'hosts' | 'plain' | 'rst-csv'
+  authType?: 'none' | 'basic' | 'authkey' | 'rstkey'
+  extraJson?: string
   category: string // ключ DomainCategory: ads | tracking | malware | phishing | gambling | piracy | adult | spam | rkn | mixed | allowlist
   purpose?: 'block' | 'allow'
   enabled?: boolean
@@ -713,6 +759,16 @@ export interface DnsSeedSource {
 
 export const DNS_CATALOG: DnsSeedSource[] = [
   // ── Угрозы: threat intelligence, малварь ────────────────────────────────────
+  {
+    name: 'RST Cloud Threat Feed: домены',
+    url: 'https://api.rstcloud.net/v1/domain?type=csv&date=latest',
+    format: 'rst-csv',
+    authType: 'rstkey',
+    extraJson: JSON.stringify({ skipFpAlarm: false, minScore: 0 }),
+    category: 'malware', enabled: false, priority: 20,
+    notes: 'Фид вредоносных доменов RST Cloud Threat Feed (~135 тыс., обновляется ежедневно): фишинг, C2, скам, малварь — агрегировано из 260+ источников с баллом достоверности. API-ключ задаётся один раз в «Настройки → Токены источников → RST Cloud» (регистрация rstcloud.com → Free Trial); квота фидов — 1000 запросов/день. В extra источника: {"skipFpAlarm":true} — пропускать записи с пометкой false-positive (например, домены под сикхоулом исследователей), {"minScore":20} — брать только баллы от 20/100 и выше. Включайте осознанно: фид крупный (+~135 тыс. доменов к списку).',
+    notesEn: 'RST Cloud Threat Feed malicious domain feed (~135K, daily): phishing, C2, scams, malware — aggregated from 260+ sources with a trust score. Set the API key once in "Settings → Source tokens → RST Cloud" (register at rstcloud.com → Free Trial); feed quota is 1,000 requests/day. Source extra options: {"skipFpAlarm":true} skips false-positive-flagged entries (e.g. researcher sinkholes), {"minScore":20} keeps scores 20/100 and above. Enable deliberately: the feed is large (+~135K domains).',
+  },
   {
     name: "HaGeZi's Threat Intelligence Feeds",
     url: 'https://adguardteam.github.io/HostlistsRegistry/assets/filter_44.txt',
@@ -1082,6 +1138,8 @@ export async function ensureDnsSeed(): Promise<{ added: string[] }> {
           url: s.url ?? null,
           kind: s.kind ?? 'url',
           format: s.format ?? 'auto',
+          authType: s.authType ?? 'none',
+          extraJson: s.extraJson ?? null,
           category: s.category,
           purpose: s.purpose ?? 'block',
           enabled: s.enabled ?? true,
@@ -1104,6 +1162,8 @@ export async function ensureDnsSeed(): Promise<{ added: string[] }> {
           url: s.url ?? null,
           kind: s.kind ?? 'url',
           format: s.format ?? 'auto',
+          authType: s.authType ?? 'none',
+          extraJson: s.extraJson ?? null,
           category: s.category,
           purpose: s.purpose ?? 'block',
           enabled: s.enabled ?? true,

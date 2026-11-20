@@ -45,10 +45,12 @@ end
 RT --> SC: 200, Content-Type, Content-Disposition,\nCache-Control: no-store (после сборки файл другой)
 note over SC: scirius не проверяет HTTP-статус и пишет тело в файл —\nпоэтому тексты ошибок здесь внятные и видны сразу
 note over RT,TK
-  Список заблокированных доменов (v1.33.0) — GET /api/dns/export, та же защита:
+  Список заблокированных доменов (v1.34.0) — GET /api/dns/export, защита:
   ratelimit → очередь → dns-serve (токен ndrt_… scope domains/both →
-  dnsServeToken → сессия → открыто). Потребители — ЛЮБЫЕ DNS-серверы
-  (AdGuard Home, Pi-hole, Blocky, dnsmasq…): отдельного поля для токена у них
-  нет, поэтому хаб выдаёт ПОЛНЫЙ Uri с токеном в адресе (?token=ndrt_…).
+  сессия кабинета → 403: БЕЗ ТОКЕНА отдача ЗАПРЕЩЕНА). Потребители — ЛЮБЫЕ
+  DNS-серверы (AdGuard Home, Pi-hole, Blocky, dnsmasq…): отдельного поля
+  для токена у них нет, поэтому хаб выдаёт ПОЛНЫЙ Uri с токеном в адресе
+  (?token=ndrt_…); глобальный ключ dnsServeToken удалён (v1.34.0) —
+  токены выдаются только в разделе «Аккаунт».
 end note
 @enduml

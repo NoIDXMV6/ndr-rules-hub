@@ -89,6 +89,24 @@ export interface VpnState {
   }>
 }
 
+// ── RST Cloud (api.rstcloud.net) ─────────────────────────────────────────────
+export interface RstCheckResult {
+  ok: boolean
+  valid?: boolean
+  entitlements?: string[]
+  quota?: { used?: number; limit?: number; remaining?: number; period?: string }
+  error?: string
+  status?: number
+}
+export interface RstLookupResult {
+  ok: boolean
+  status: number
+  mode: 'ioc' | 'benign' | 'whois'
+  value: string
+  data?: Record<string, unknown>
+  error?: string
+}
+
 export interface BuildStats {
   totalInputRules: number
   uniqueSids: number
@@ -340,6 +358,15 @@ export const api = {
   settings: () => fetch('/api/settings', { cache: 'no-store' }).then((r) => j<{ settings: Record<string, string> }>(r)),
   saveSettings: (data: Record<string, string>) =>
     fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }).then((r) => j<{ settings: Record<string, string> }>(r)),
+  // RST Cloud (api.rstcloud.net): проверка ключа и проверка индикатора
+  rst: {
+    check: (key: string) =>
+      fetch('/api/rst/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) })
+        .then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstCheckResult))),
+    lookup: (value: string, mode: 'ioc' | 'benign' | 'whois' = 'ioc') =>
+      fetch('/api/rst/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, mode }) })
+        .then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstLookupResult))),
+  },
   vpn: () => fetch('/api/vpn', { cache: 'no-store' }).then((r) => j<VpnState>(r)),
   vpnAction: (body: Record<string, unknown>) =>
     fetch('/api/vpn', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => j<Record<string, unknown>>(r)),

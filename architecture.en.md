@@ -107,7 +107,7 @@ Schema — `prisma/schema.prisma`. The client is generated with `binaryTargets =
 
 | Model | Purpose | Key fields |
 |---|---|---|
-| `Source` | rule source | `category` (ruleset / ip-list / domain-list / url-list), `kind` (url / tarball / local), `authType` (none / oinkcode / authkey / basic), `extraJson` (converter/auth parameters), `priority` (lower = more important), `status`, `badge`, `builtin` |
+| `Source` | rule source | `category` (ruleset / ip-list / domain-list / url-list / hash-list), `kind` (url / tarball / local), `authType` (none / oinkcode / authkey / basic / misp / opennrd / rstkey), `extraJson` (converter/auth parameters), `priority` (lower = more important), `status`, `badge`, `builtin` |
 | `Rule` | a rule of a specific source | `sid`, `rev`, `action`, `proto`, `msg`, `raw`, `contentHash` (canonical SHA-1 without sid/rev/msg/metadata), `suricataOk`, `compatNotes`; unique `[sourceId, sid]` |
 | `Build` | build result | `statsJson` (per-source/duplicate statistics), `policyJson` (applied policies), `fileName`, `sha256`, `sizeBytes`, `source` (manual / cron) |
 | `Setting` | settings (k-v) | oinkcode, dedup policies (winner/loser), cron, export parameters |
@@ -274,7 +274,7 @@ What each gate does:
 
 ## 6. Fetching: snort.org authentication and limits
 
-`fetcher.ts` supports `authType`: `none`, `oinkcode`, `authkey` (query parameter), `basic`
+`fetcher.ts` supports `authType`: `none`, `oinkcode`, `authkey` (query parameter), `basic`, `misp` (Authorization), `opennrd` (path segment), `rstkey` (RST Cloud — the X-Api-Key header)
 (login/password in `extraJson`).
 
 snort.org behavior verified in practice:
@@ -320,10 +320,11 @@ Categories / Records (search, duplicates, manual decisions) / Build & Export.
 | `DomainOverride` | a manual per-domain decision: exclude from the build / force block over the allowlist |
 | `DomainBuild` | the build result: list file + sha256 + statistics |
 | Merge (`dns.ts mergeDomainSources`) | sources by ascending `priority`: the first one takes the domain, the rest count duplicates; the allowlist is applied at the end; entries are lazy (AsyncIterable from the DB cursor — millions of rows without memory pressure) |
+| RST Threat Feed (`rst.ts`) | the RST Cloud domain feed: gzip CSV → the `domain` column (`skipFpAlarm`/`minScore` filters from the source extra), then the usual parsing; the `rstApiKey` key comes from "Source tokens", substituted in memory (the secret is not written to the DB). Three NDR feeds (IP/URL/SHA-256) are converted as ip/url/hash lists; indicator check — `POST /api/rst/lookup` (IoC / Noise / Whois), key check — `POST /api/rst/check` |
 | Dump import (`dns-import.ts`) | streaming export.sql parse (MariaDB/HeidiSQL): 502 MB → ~2.2M domains and 151 categories without loading into memory (~22 s); category counters are cached in the `dnsIfaroCategoryCounts` setting |
 | Dump → NDR conversion | the remaining resource types are not lost: **URL** — the host goes into the DNS list (with categories), the URL itself becomes an HTTP rule; **IP/CIDR** — chunked IP rules of 500 (drop ip, SID 1,200,000+); **Regex** — pcre on `http.uri.raw` (SID 1,400,000+, compile validation and too-broad pattern guard); **Phrase** — `http.response_body` content (SID 1,500,000+). Rules are written to `data/domains/ndr/*.rules` and registered as DISABLED “Filtering dump: …” sources (rules load into the DB immediately — the counter is honest; they enter the build only after the source is enabled) |
 | Build (`buildDomainList`) | 4 file formats: plain / hosts (`0.0.0.0 d`) / dnsmasq (`address=/d/`) / adblock (`||d^`); progress — a separate singleton (dns-progress.ts). The “Build & Export” tab mirrors the rules “Final rule set build” tab: header button, file settings, staged progress with a terminal log, latest-build badges, a metric grid (input/duplicates/allowlist/categories/manual/TLD/final), the per-source table, the serve URL, the `data/exports/domains` files (GET /api/dns/build returns the build and the file list) |
-| Serving | `GET /api/dns/export` — with a download token of the "domains"/"both" scope, the global `dnsServeToken` key, a session; without keys — open (same as rules) |
+| Serving | `GET /api/dns/export` — FORBIDDEN WITHOUT A TOKEN: a personal download token of the "domains"/"both" scope (full Uri `?token=ndrt_…`) or a cabinet session; the global `dnsServeToken` key was removed (v1.34.0), tokens are managed in "Account" only |
 | DNS cycle (`dnsCycleMode` / `runDnsCycle`) | three modes: `inline` — right after the main cycle (`runPipeline`); `deferred` — on its own `dnsCronSchedule` schedule (a second scheduler cron job — peak-load staggering: rules first, domains later); `off` — disabled by `dnsCronEnabled`. An invalid expression logs a warning and falls back to `inline` |
 | DNS cycle notification | in the `deferred` mode the cycle sends its OWN Telegram/Gotify notification (scope `dns`, the “Domain lists” line, the `notifyOnDns` switch in “Integrations”): source update and list build results; in the `inline` mode the DNS results are part of the full-cycle notification (the “DNS: …” line) |
 

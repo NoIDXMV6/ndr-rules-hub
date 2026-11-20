@@ -371,6 +371,7 @@ function AddSourceDialog({ open, onOpenChange, onDone }: { open: boolean; onOpen
                 <SelectItem value="adguard">{t.dns.fmtAdguard}</SelectItem>
                 <SelectItem value="hosts">{t.dns.fmtHosts}</SelectItem>
                 <SelectItem value="plain">{t.dns.fmtPlain}</SelectItem>
+                <SelectItem value="rst-csv">{t.dns.fmtRstCsv}</SelectItem>
               </SelectContent>
             </Select>
           </div>

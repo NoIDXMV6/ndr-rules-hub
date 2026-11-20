@@ -6,8 +6,9 @@ import { promisify } from 'util'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { parseRuleText, ParsedRule } from './parser'
-import { convertIpList, convertDomainList, convertUrlList, convertZeekIntel, convertMispJson, ConvertOptions } from './convert'
+import { convertIpList, convertDomainList, convertUrlList, convertHashList, convertZeekIntel, convertMispJson, ConvertOptions } from './convert'
 import { hashRule } from './build'
+import { maybeGunzip, parseRstFeedCsv } from './rst'
 
 const execFileP = promisify(execFile)
 
@@ -21,7 +22,7 @@ export interface FetchSourceCfg {
   category: string // ruleset | ip-list | domain-list | url-list | zeek-intel | misp
   kind: string // url | tarball | local
   url?: string | null
-  authType: string // none | oinkcode | authkey | basic | misp (MISP: ключ в заголовке Authorization)
+  authType: string // none | oinkcode | authkey | basic | misp | rstkey (RST Cloud: ключ в заголовке X-Api-Key)
   extraJson?: string | null
   format: string
 }
@@ -64,6 +65,22 @@ export interface ExtraCfg {
   // Подставляется из настройки «Open NRD» («Токены источников») для источников
   // с авторизацией «opennrd»
   openNrdCode?: string
+  // RST Cloud (api.rstcloud.net): API-ключ в заголовке X-Api-Key.
+  // Подставляется из настройки «RST Cloud» («Токены источников») для источников
+  // с авторизацией «rstkey». Ключ общий для фидов и IoC Lookup.
+  rstApiKey?: string
+  // RST Threat Feed: тип фида (ip | domain | url | hash) — CSV-ответ
+  // разбирается в список индикаторов (колонка фида) до конвертации
+  rstFeed?: string
+  // RST Threat Feed: пропускать записи с fp_alarm=true (например, домены
+  // под сикхоулом исследователей — трафик на них доброкачественный)
+  skipFpAlarm?: boolean
+  // RST Threat Feed: минимальный балл score_total (0..100); 0 — без фильтра
+  minScore?: number
+  // RST Threat Feed: предохранитель по ЧИСЛУ ИНДИКАТОРОВ (строк фида);
+  // 0/нет — без ограничения (для чанкованных IP-фидов ограничение правил —
+  // отдельная опция maxRules конвертера)
+  maxValues?: number
   // резервные URL (зеркала): если основной URL недоступен (сетевая ошибка,
   // HTTP != 200, не-архив), пробуются зеркала по очереди — например, архив
   // GitHub-репозитория, когда официальный сайт источника лежит (PAW Patrules)
@@ -192,6 +209,10 @@ async function httpGet(url: string, extra: ExtraCfg, cfg?: FetchSourceCfg): Prom
       // MISP: ключ REST API передаётся заголовком Authorization (без «Bearer»):
       //   Authorization: <authkey>
       ...(cfg?.authType === 'misp' && extra.mispAuthKey ? { Authorization: extra.mispAuthKey.trim() } : {}),
+      // RST Cloud: ключ передаётся заголовком X-Api-Key (редирект на хранилище
+      // фидов — pre-signed S3 — заголовок не наследует: undici снимает его
+      // при cross-origin редиректе)
+      ...(cfg?.authType === 'rstkey' && extra.rstApiKey ? { 'X-Api-Key': extra.rstApiKey.trim() } : {}),
     },
   })
   const body = Buffer.from(await res.arrayBuffer())
@@ -502,7 +523,13 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
           : `HTTP ${res.status} при загрузке ${cand}${bodyReason(res.body) ? ` — «${bodyReason(res.body)}»` : ''}`)
         continue
       }
-      const text = res.body.toString('utf8')
+      // RST Threat Feed и gzip-фиды: тело может быть gzip-файлом — распаковываем;
+      // CSV-фид RST разбирается в колонку индикаторов до конвертации
+      let text = maybeGunzip(res.body).toString('utf8')
+      if (extra.rstFeed) {
+        const parsed = parseRstFeedCsv(text, extra.rstFeed, { skipFpAlarm: extra.skipFpAlarm, minScore: extra.minScore, maxValues: extra.maxValues ?? 0 })
+        text = parsed.values.join('\n')
+      }
       if (cfg.category === 'ip-list') {
         const conv = convertIpList(text, convOpts(extra, cfg))
         return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
@@ -513,6 +540,10 @@ export async function fetchSource(cfg: FetchSourceCfg, opts: { maxRules?: number
       }
       if (cfg.category === 'url-list') {
         const conv = convertUrlList(text, convOpts(extra, cfg))
+        return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
+      }
+      if (cfg.category === 'hash-list') {
+        const conv = convertHashList(text, convOpts(extra, cfg))
         return { ok: true, rules: conv.map((r) => toParsed(r)), sizeBytes: text.length }
       }
       // Zeek intel (TSV, Intel::ADDR/DOMAIN/URL) — конвертация в правила

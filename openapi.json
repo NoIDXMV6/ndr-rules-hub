@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "NDR Rules Hub API",
-    "version": "1.33.0",
+    "version": "1.34.0",
     "summary": "Управление источниками правил Snort/Suricata и экспорт в Clear NDR",
     "description": "REST API NDR Rules Hub.\n\nРедакции: **Community** (однопользовательский режим, без аутентификации) и **Enterprise** (многопользовательский режим: регистрация, верификация администратором, личный кабинет, персональные токены скачивания).\n\nСхемы безопасности:\n- `sessionCookie` — cookie `ndrh_sid` (HttpOnly, SameSite=Lax, Secure), выдаётся POST /api/auth/login. Enterprise: все эндпоинты кроме `/api`, `/api/health`, `/api/auth/*` и `GET /api/export` требуют сессию; помеченные «только администратор» — роль admin.\n- `downloadToken` — персональный токен `ndrt_…` (?token= или Authorization) или глобальный ключ отдачи serveToken — только для GET /api/export (PULL-схема Clear NDR).\n\nЗащита: rate limit по IP на каждом эндпоинте (429 + Retry-After), анти-брутфорс (вход, ключи отдачи, токены), очередь тяжёлых операций (429 при переполнении), троттлинг канала для отдачи файлов, CSRF-проверка Origin/Sec-Fetch-Site для state-changing запросов браузера, scrypt-пароли, SHA-256 токенов в БД.\n\nВход и регистрация (Enterprise) защищены одноразовой SVG-капчей (`POST /api/auth/captcha`, ответ сгорает после каждой попытки) и двухфакторной аутентификацией: код в Telegram (привязка чата по /start боту) или TOTP (RFC 6238). После пароля выдаётся HMAC-билет в cookie `ndrh_mfa` (5 минут); сессия создаётся только после кода (`/api/auth/login/verify`, `/api/auth/register/verify`). Метод 2FA выбирается при регистрации и меняется в кабинете (`/api/auth/account`).",
     "contact": {
@@ -3031,7 +3031,7 @@
           "dns"
         ],
         "summary": "Отдать список заблокированных доменов (последняя сборка, формат из dnsBuildFormat)",
-        "description": "Аутентификация (любой из способов): персональный токен ndrt_… со scope «domains»/«both» (?token=/Authorization), глобальный ключ dnsServeToken, сессия веб-интерфейса; ключ не задан — отдача открыта. Отдача идёт через очередь загрузок и (при настройке downloadBandwidthKbps) через троттлинг канала. Анти-брутфорс ключей: 10 неудач/5мин с IP → 429 на 15 минут.",
+        "description": "Список заблокированных доменов (последняя сборка). Аутентификация: персональный токен ndrt_… со scope «domains»/«both» (?token=… в полном Uri или заголовок Authorization; выдаётся в разделе «Аккаунт → Токены и доступ») либо сессия веб-интерфейса. БЕЗ ТОКЕНА отдача ЗАПРЕЩЕНА (403): глобальный ключ dnsServeToken удалён (v1.34.0), токены управляются только в «Аккаунте». Перебор ключей: 10 неудач/5 мин с IP → 429 на 15 минут. Отдача идёт через очередь загрузок и (при настройке downloadBandwidthKbps) через троттлинг канала.",
         "security": [
           {
             "downloadToken": []
@@ -3071,6 +3071,137 @@
             "$ref": "#/components/responses/TooManyRequests"
           }
         }
+      }
+    },
+    "/api/rst/check": {
+      "post": {
+        "summary": "Проверка API-ключа RST Cloud",
+        "description": "Вызывает GET https://api.rstcloud.net/v1/auth/check и возвращает валидность ключа, права (entitlements) и квоту запросов (used/limit/remaining/period). Только для администратора; тратит 1 запрос квоты. Ключ сохраняется в настройку rstApiKey.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "API-ключ RST Cloud (пусто — берётся из настроек)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Результат проверки",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "valid": {
+                      "type": "boolean"
+                    },
+                    "entitlements": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "quota": {
+                      "type": "object",
+                      "properties": {
+                        "used": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "remaining": {
+                          "type": "integer"
+                        },
+                        "period": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ключ не задан"
+          },
+          "401": {
+            "description": "Требуется вход"
+          },
+          "403": {
+            "description": "Только администратор"
+          }
+        },
+        "tags": [
+          "RST Cloud"
+        ]
+      }
+    },
+    "/api/rst/lookup": {
+      "post": {
+        "summary": "Проверка индикатора через RST Cloud",
+        "description": "POST https://api.rstcloud.net/v1: mode «ioc» — IoC Lookup (балл, теги/категории, описание, источники, резолвинг), mode «benign» — Noise Control (доброкачественность, контроль false positives), mode «whois» — Whois API (регистрационные данные домена). Только для администратора; каждая проверка тратит 1 запрос квоты ключа.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "домен / IP / URL / SHA-256 (до 400 символов)"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "ioc",
+                      "benign",
+                      "whois"
+                    ],
+                    "default": "ioc"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ответ RST Cloud (data) с режимом и значением"
+          },
+          "400": {
+            "description": "Пустое значение или не домен для whois"
+          },
+          "401": {
+            "description": "Требуется вход"
+          },
+          "403": {
+            "description": "Только администратор"
+          }
+        },
+        "tags": [
+          "RST Cloud"
+        ]
       }
     }
   },

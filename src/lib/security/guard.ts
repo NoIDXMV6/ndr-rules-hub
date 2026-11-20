@@ -69,12 +69,12 @@ export function sameOriginOk(req: Request): boolean {
 /** Ключи настроек, которые нельзя отдавать не-администратору (секреты) */
 export const SECRET_SETTING_KEYS = [
   'serveToken',
-  'dnsServeToken', // ключ отдачи списка доменов (GET /api/dns/export)
   'oinkcode',
   'etProOinkcode', // oinkcode ET Pro (Proofpoint) — отдельно от снортовского
   'abusechAuthKey',
   'mispAuthKey', // ключ REST API MISP
   'openNrdLicense', // код лицензии Open NRD (Stamus Networks)
+  'rstApiKey', // API-ключ RST Cloud (фиды Threat Feed, IoC Lookup, Whois)
   'clearndrExportToken',
   'tgBotToken', // токен Telegram-бота
   'gotifyToken', // app-токен Gotify

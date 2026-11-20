@@ -66,7 +66,7 @@ export function isSourceVisible(
  * у админа — Source.enabled (его состояние и есть системное),
  * у пользователя — SourceState, а без строки — наследуется Source.enabled.
  */
-export function effectiveEnabled(source: { enabled: boolean }, state?: Pick<WorkspaceState, 'enabled'> | null): boolean {
+export function effectiveEnabled(source: { enabled: boolean }, state?: Pick<WorkspaceState, 'enabled'> & { sourceId?: string } | null): boolean {
   return state ? state.enabled : source.enabled
 }
 

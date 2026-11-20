@@ -13,6 +13,7 @@ import {
   parseDomainList, mergeDomainSources, renderDomainFile,
   type DomainExportFormat, type DomainSourceInput,
 } from './dns'
+import { maybeGunzip, parseRstFeedCsv } from './rst'
 import {
   parseDumpFile, dumpCategoryName,
   generateDumpIpRules, generateDumpUrlRules, generateDumpRegexRules, generateDumpPhraseRules,
@@ -32,7 +33,9 @@ export const DNS_SETTING_DEFAULTS: Record<string, string> = {
   dnsFileName: 'blocked-domains.txt',
   dnsCronEnabled: 'true', // полный цикл (cron) обновляет и DNS-источники, и пересобирает список
   dnsCronSchedule: '', // отдельное расписание DNS-цикла: разнос по времени с основным циклом; пусто — сразу за основным
-  dnsServeToken: '', // глобальный ключ отдачи списка доменов (PULL); пусто — открытая отдача
+  // Ключ отдачи dnsServeToken удалён (v1.34.0): отдача списка — только по
+  // персональному токену со scope «домены»/«оба списка» (раздел «Аккаунт»)
+  // или из кабинета (сессия); без токена отдача запрещена.
 }
 
 /** Файл в каталоге экспорта DNS (карточка «Файлы» на вкладке сборки) */
@@ -87,7 +90,7 @@ export interface DomainSourceItem {
   builtin: boolean
 }
 
-async function httpGet(url: string, extra: { userAgent?: string; basicUser?: string; basicPassword?: string; authKey?: string }): Promise<{ status: number; body: Buffer }> {
+async function httpGet(url: string, extra: { userAgent?: string; basicUser?: string; basicPassword?: string; authKey?: string; rstApiKey?: string }): Promise<{ status: number; body: Buffer }> {
   const headers: Record<string, string> = {
     'User-Agent': extra.userAgent || 'clearndr-rules-hub/1.0 (domains updater)',
   }
@@ -96,6 +99,9 @@ async function httpGet(url: string, extra: { userAgent?: string; basicUser?: str
   } else if (extra.authKey) {
     headers.Authorization = extra.authKey.trim()
   }
+  // RST Cloud: ключ API — заголовком X-Api-Key (у редиректа на хранилище фидов
+  // заголовок снимается — pre-signed URL самодостаточен)
+  if (extra.rstApiKey) headers['X-Api-Key'] = extra.rstApiKey.trim()
   const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(180_000), headers })
   const body = Buffer.from(await res.arrayBuffer())
   return { status: res.status, body }
@@ -106,6 +112,11 @@ interface ExtraCfg {
   basicUser?: string
   basicPassword?: string
   authKey?: string
+  rstApiKey?: string
+  // RST Threat Feed: пропускать записи с fp_alarm=true (сикхоул исследователей)
+  skipFpAlarm?: boolean
+  // RST Threat Feed: минимальный балл score_total (0..100); 0 — без фильтра
+  minScore?: number
 }
 
 /** Загрузить и разобрать один доменный источник: { blocked, allowed, tld } + текст */
@@ -114,6 +125,10 @@ async function fetchDomainText(src: { id: string; name: string; kind: string; ur
   try {
     extra = src.extraJson ? (JSON.parse(src.extraJson) as ExtraCfg) : {}
   } catch { /* ignore */ }
+  if (src.authType === 'rstkey' && !extra.rstApiKey) {
+    // глобальный ключ подставляется в fetchDomainSourceById до вызова
+    return { ok: false, error: 'не задан API-ключ RST Cloud (Настройки → Токены источников → RST Cloud)', text: '', sizeBytes: 0 }
+  }
   try {
     if (src.kind === 'local' || src.kind === 'upload') {
       const p = src.url ?? ''
@@ -127,7 +142,13 @@ async function fetchDomainText(src: { id: string; name: string; kind: string; ur
     if (res.status !== 200) {
       return { ok: false, error: `HTTP ${res.status} при загрузке ${src.url}`, text: '', sizeBytes: 0 }
     }
-    const text = res.body.toString('utf8')
+    // RST Threat Feed (и прочие gzip-фиды): тело — gzip-файл, распаковываем;
+    // CSV-фид RST — в колонку доменов до разбора формата
+    let text = maybeGunzip(res.body).toString('utf8')
+    if (src.format === 'rst-csv') {
+      const parsed = parseRstFeedCsv(text, 'domain', { skipFpAlarm: extra.skipFpAlarm, minScore: extra.minScore })
+      text = parsed.values.join('\n')
+    }
     if (/^\s*<(!doctype|html)/i.test(text)) {
       return { ok: false, error: `сервер вернул HTML-страницу вместо списка (${src.url})`, text: '', sizeBytes: res.body.length }
     }
@@ -181,9 +202,28 @@ export async function fetchDomainSourceById(sourceId: string): Promise<{ ok: boo
   if (src.kind === 'upload' && src.format === 'sql') {
     return { ok: false, count: src.domainCount, error: 'SQL-база импортируется через «Импорт базы» — повторная загрузка не требуется' }
   }
+  // подстановка API-ключа RST Cloud (заголовок X-Api-Key) из «Токенов источников»:
+  // ключ добавляется в extra ТОЛЬКО в памяти (в БД секрет не пишется)
+  let srcForFetch = src
+  if (src.authType === 'rstkey') {
+    let extra: Record<string, unknown> = {}
+    try {
+      extra = src.extraJson ? JSON.parse(src.extraJson) : {}
+    } catch { /* ignore */ }
+    if (!extra.rstApiKey && (await getSettings()).rstApiKey) extra.rstApiKey = (await getSettings()).rstApiKey
+    srcForFetch = { ...src, extraJson: JSON.stringify(extra) }
+    if (!(extra.rstApiKey ?? '').toString().trim()) {
+      await db.domainSource.update({
+        where: { id: src.id },
+        data: { status: 'error', lastError: 'не задан API-ключ RST Cloud', lastFetchAt: new Date() },
+      })
+      await log('error', 'fetch', `DNS-источник «${src.name}»: не задан API-ключ RST Cloud — введите его в «Настройки → Токены источников → RST Cloud»`, undefined, `DNS source "${src.name}": RST Cloud API key is not set — enter it under "Settings → Source tokens → RST Cloud"`)
+      return { ok: false, count: 0, error: 'У источника RST Cloud не задан API-ключ — введите его в «Настройки → Токены источников → RST Cloud», либо в extra источника {"rstApiKey":"…"}' }
+    }
+  }
 
   const t0 = Date.now()
-  const res = await fetchDomainText(src)
+  const res = await fetchDomainText(srcForFetch)
   if (!res.ok) {
     await db.domainSource.update({
       where: { id: src.id },

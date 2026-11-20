@@ -101,7 +101,9 @@ describe('каталог: Open NRD и adminOnly-источники', () => {
 
   it('бейдж «новый» удалён из каталога — только суть источника', () => {
     for (const s of SEED_SOURCES) {
-      expect(s.badge === 'new', `бейдж «new» у «${s.name}»`).toBe(false)
+      // 'new' отсутствует в типе бейджа SeedSource — сравнение с ним не типобезопасно,
+      // поэтому проверяем строку-значение (бейджи «new» в каталоге не заданы)
+      expect(String(s.badge) === 'new', `бейдж «new» у «${s.name}»`).toBe(false)
     }
     // словарные ключи новых бейджей используются в каталоге
     expect(SEED_SOURCES.some((s) => s.badge === 'traffic')).toBe(true)

@@ -98,7 +98,7 @@ const { user, role, ip } = g
 
 **Анти-брутфорс входа** (`/api/auth/login`, диаграмма [seq-login-bruteforce](diagrams/seq-login-bruteforce.png)): лимит IP (10/5 мин → блок 15 мин) + лимит email (против распределённой атаки) + блок учётной записи (5 неудач подряд → `lockedUntil` +15 мин). Единый текст ошибки — не раскрываем наличие email.
 
-**Санитизация секретов**: `SECRET_SETTING_KEYS` (serveToken, oinkcode, abusechAuthKey, clearndrExportToken) вырезаются из `/api/dashboard` и `/api/settings` для не-администраторов; VPN-статус тоже отдаётся только админу.
+**Санитизация секретов**: `SECRET_SETTING_KEYS` (serveToken, oinkcode, etProOinkcode, abusechAuthKey, mispAuthKey, openNrdLicense, rstApiKey, clearndrExportToken) вырезаются из `/api/dashboard` и `/api/settings` для не-администраторов; VPN-статус тоже отдаётся только админу. Сущность «глобальный ключ отдачи списка доменов» (dnsServeToken) удалена (v1.34.0): `GET /api/dns/export` работает только по персональному токену со scope «domains»/«both» или из сессии кабинета.
 
 ## 5. Отдача правил по URL (`/api/export`)
 
