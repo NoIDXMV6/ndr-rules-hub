@@ -598,6 +598,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   cronExport: 'true',
   vpnEnabled: 'false', // гнать загрузки через WireGuard
   vpnInterface: 'wg0',
+  wgAutoUp: 'false', // при старте контейнера проверять конфигурацию и автоматически поднимать туннель (вкладка «WireGuard VPN»)
   homeNet: '192.168.0.0/16,10.0.0.0/8',
   // ── Мониторинг диска и автоочистка (вкладка «Настройки» → «Диск и очистка») ──
   diskWarnPct: '85', // порог предупреждения на «Обзоре»

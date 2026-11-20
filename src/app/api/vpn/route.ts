@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { wgFullTest, wgUp, wgDown, parseWgConfig, wgStatus, WgStatus } from '@/lib/engine/vpn'
+import { getSetting } from '@/lib/engine/service'
+import { autoUpVpn } from '@/lib/engine/vpn-autoup'
 import { apiError } from '@/lib/api-error'
 import { guard } from '@/lib/security/guard'
 import { log } from '@/lib/engine/service'
@@ -60,6 +62,8 @@ export async function GET(req: NextRequest) {
       interfaces: res.status.interfaces,
       tools: res.tools,
       profiles: withState,
+      // состояние переключателя «Автоматическое поднятие тунеля» (wgAutoUp)
+      autoUp: (await getSetting('wgAutoUp')) === 'true',
     })
   } catch (e) {
     return apiError(e)
@@ -81,6 +85,14 @@ export async function POST(req: NextRequest) {
     if (action === 'test') {
       const res = await wgFullTest(body.config)
       return NextResponse.json(res)
+    }
+
+    if (action === 'auto-up') {
+      // «Автоматическое поднятие тунеля» — применить сейчас (включение
+      // переключателя в UI или ручной прогон той же проверки конфигурации)
+      const r = await autoUpVpn('manual')
+      if (r.ok) return NextResponse.json({ ok: true, detail: r.detail, notes: r.notes, info: !!r.skipped })
+      return NextResponse.json({ ok: false, error: r.detail, notes: r.notes, info: !!r.skipped })
     }
 
     if (action === 'up') {
@@ -132,7 +144,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: res.error, notes: res.notes }, { status: 400 })
     }
 
-    return NextResponse.json({ error: 'action: up | down | test | test-config' }, { status: 400 })
+    return NextResponse.json({ error: 'action: up | down | test | test-config | auto-up' }, { status: 400 })
   } catch (e) {
     return apiError(e)
   }

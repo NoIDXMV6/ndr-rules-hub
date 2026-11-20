@@ -21,7 +21,7 @@ System_Boundary(hubbox, "NDR Rules Hub (docker-контейнер, порт 3000
   Container(notify, "Уведомления", "TypeScript, notify.ts", "Telegram (прокси http/socks5, свой Bot API Server) и Gotify; события: полный цикл (со строкой DNS), отдельный DNS-цикл, WireGuard, диск; переключатели notifyOn*")
   Container(scripts, "Скрипты хоста", "bash/python3", "clearndr-update.sh, clearndr-repair-stack.sh, OSD-аналитика (SSH/local)")
   ContainerDb(files, "Каталоги данных", "/app/data", "exports/ (сборки и tgz), exports/domains/ (список заблокированных доменов), domains/ndr/ (правила дампа), cache/, archives/, wireguard/, clearndr-update/runs")
-  Container(vpn, "WireGuard", "wireguard-tools", "Туннели для загрузок (админ)")
+  Container(vpn, "WireGuard", "wireguard-tools, instrumentation.ts", "Туннели для загрузок (админ); «Автоматическое поднятие тунеля» (wgAutoUp): при старте контейнера проверка конфигурации (активный профиль, иначе первый сохранённый) и wg-quick up; уже поднятый не трогается")
 }
 
 System_Ext(caddy, "Caddy (reverse proxy)", "TLS, X-Forwarded-For — источник IP для лимитов")
@@ -52,5 +52,5 @@ Rel(notify, gotify, "POST /message", "HTTPS")
 Rel(api, scripts, "прогоны обновления/OSD (лог в реальном времени)")
 Rel(scripts, dockerhost, "SSH/local")
 Rel(api, osd, "импорт дашбордов")
-Rel(admin, vpn, "up/down/статус")
+Rel(admin, vpn, "up/down/статус/автоподъём")
 @enduml

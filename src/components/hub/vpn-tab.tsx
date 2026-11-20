@@ -6,10 +6,11 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api, fmtTime, VpnState } from '@/components/hub/api'
 import { useI18n, type Lang } from '@/lib/i18n'
-import { Play, Power, Save, ShieldOff, Trash2, Wifi, Wrench } from 'lucide-react'
+import { Play, Power, Save, ShieldOff, Trash2, Wifi, Wrench, Zap } from 'lucide-react'
 
 const SAMPLE_CONFIGS: Record<Lang, string> = {
   ru: `# Пример конфигурации wg-quick
@@ -45,6 +46,8 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
   const [config, setConfig] = useState('')
   const [msg, setMsg] = useState<{ ok: boolean; text: string; info?: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
+  // «Автоматическое поднятие тунеля» (wgAutoUp): null — состояние ещё не получено
+  const [autoUp, setAutoUp] = useState<boolean | null>(null)
   // true — последняя попытка загрузки статуса не дошла до API (сервер недоступен,
   // например web UI «завёрнут» в full-tunnel туннель). Карточки при этом НЕ должны
   // показывать «недоступно» — это ложь про окружение; показываем баннер и «нет данных»
@@ -55,6 +58,7 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
     try {
       const v = await api.vpn()
       setVpn(v)
+      setAutoUp(v.autoUp ?? null)
       setConnError(false)
       // при первом открытии вкладки автоматически подставляем активный
       // (или первый) сохранённый профиль в редактор — иначе после
@@ -133,6 +137,33 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
     }
   }
 
+  // Переключатель «Автоматическое поднятие тунеля» (wgAutoUp): сохранение
+  // настройки; при включении — сразу прогон той же проверки и подъёма, что
+  // выполняется при старте контейнера (результат — в сообщении и журнале)
+  const toggleAutoUp = async (v: boolean) => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      await api.saveSettings({ wgAutoUp: v ? 'true' : 'false' })
+      setAutoUp(v)
+      if (!v) {
+        setMsg({ ok: true, text: t.vpn.autoUpOff })
+      } else {
+        setMsg({ ok: true, text: t.vpn.autoUpOn })
+        const r = await api.vpnAction({ action: 'auto-up' })
+        const detail = ((r.detail as string) ?? (r.error as string) ?? '').trim()
+        const notes = (r.notes as string[] | undefined) ?? []
+        setMsg({ ok: r.ok === true, info: r.info === true, text: tr(t.vpn.autoUpResult, { detail }) + (notes.length ? `\n${notes.join('\n')}` : '') })
+      }
+      await load()
+      onChange()
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const tools = vpn?.tools
 
   // Реальное состояние интерфейса в редакторе: имя из комментария
@@ -185,6 +216,27 @@ export function VpnTab({ data, onChange }: { data: unknown; onChange: () => void
             <code className="block text-emerald-700">cap_add: [NET_ADMIN] · devices: [/dev/net/tun] · sysctls: net.ipv4.ip_forward=1</code>
             <p>{t.vpn.composeInfo2}</p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-card border-border">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Zap className="h-4 w-4 text-primary" /> {t.vpn.autoUpTitle}
+            {autoUp !== null && (
+              <Badge variant="outline" className={autoUp ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-input text-muted-foreground'}>
+                {autoUp ? t.vpn.autoUpBadgeOn : t.vpn.autoUpBadgeOff}
+              </Badge>
+            )}
+          </CardTitle>
+          <CardDescription>{t.vpn.autoUpDesc}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex items-center gap-3">
+            <Switch checked={autoUp === true} onCheckedChange={(v) => void toggleAutoUp(v)} disabled={busy} />
+            <Label className="text-foreground cursor-pointer" onClick={() => autoUp !== null && !busy && void toggleAutoUp(!autoUp)}>{t.vpn.autoUpLabel}</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">{t.vpn.autoUpHint}</p>
         </CardContent>
       </Card>
 

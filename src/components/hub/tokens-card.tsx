@@ -2,12 +2,20 @@
 
 // ─────────────────────────────────────────────────────────────────────────────
 // «Токены и доступ» — карточка персональных токенов скачивания (Enterprise),
-// v1.31.0: переехала из «Сборка и экспорт» в раздел «Аккаунт» → «Токены и
-// доступ»: выдача токенов — операция учётной записи (scope правила/домены),
-// а не настройка сборки; карточка сборки становится компактнее.
-// Создание (полный токен показывается один раз, готовые Uri — БЕЗ токена:
-// токен вставляется в поле authkey источника Clear NDR), отзыв, возврат,
-// удаление, статистика скачиваний. У пользователя — только свои, у админа — все.
+// переехала из «Сборка и экспорт» в раздел «Аккаунт» → «Токены и доступ»:
+// выдача токенов — операция учётной записи (scope правила/домены), а не
+// настройка сборки; карточка сборки становится компактнее.
+// Создание (полный токен показывается один раз), отзыв, возврат, удаление,
+// статистика скачиваний. У пользователя — только свои, у админа — все.
+// v1.33.0 — готовые Uri ДО создания зависят от scope, у двух списков РАЗНЫЕ
+// процедуры подключения:
+//  • правила Suricata (scope rules/both) — Uri БЕЗ токена: его вставляет
+//    источник Clear NDR, токен передаётся в поле «Optional authorization key»
+//    (заголовок Authorization);
+//  • список доменов (scope domains/both) — ПОЛНЫЙ Uri С токеном (?token=…):
+//    его забирают любые DNS-серверы с обновлением списков по ссылке
+//    (AdGuard Home, Pi-hole, Blocky, dnsmasq…), отдельного поля для токена
+//    у них нет. При scope both — обе секции, каждая с полной инструкцией.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
@@ -19,6 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { api, DownloadTokenItem, fmtSize, fmtTime } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
 import { copyToClipboard } from '@/lib/utils'
+import { dnsExportUrl, rulesExportUrls } from '@/lib/serve-urls'
 import { Ban, Check, Copy, KeyRound, Plus, RotateCcw, Trash2 } from 'lucide-react'
 
 export function TokensCard({ role }: { role: 'admin' | 'user' }) {
@@ -128,20 +137,30 @@ export function TokensCard({ role }: { role: 'admin' | 'user' }) {
               <code className="flex-1 min-w-0 truncate rounded border border-emerald-300 bg-white px-2 py-1 text-xs font-mono text-emerald-900" title={created}>{created}</code>
               <CopyBtn text={created} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
             </div>
-            {/* Адреса для Clear NDR — БЕЗ токена: токен (выше) вставляется в поле
-                «Optional authorization key» источника. Так пользователь видит ровно
-                то, что нужно вставить в каждое поле формы Clear NDR, без путаницы. */}
-            <p className="text-xs text-emerald-800 font-medium pt-1">{t.tokens.createdUrlsTitle}</p>
+            {/* ── Правила Suricata (scope rules/both) — Uri БЕЗ токена: источник
+                URL в Clear NDR берёт Uri, токен передаёт отдельно в поле
+                «Optional authorization key» (заголовок Authorization) ── */}
             {(createdScope === 'rules' || createdScope === 'both') && (
               <>
-                <ServeRow label={t.tokens.createdUrlFile} url={`${origin}/api/export`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
-                <ServeRow label={t.tokens.createdUrlArchive} url={`${origin}/api/export?archive=1`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+                <p className="text-xs text-emerald-800 font-medium pt-1">
+                  {createdScope === 'both' ? t.tokens.createdUrlsRulesTitle : t.tokens.createdUrlsTitle}
+                </p>
+                <ServeRow label={t.tokens.createdUrlFile} url={rulesExportUrls(origin).file} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+                <ServeRow label={t.tokens.createdUrlArchive} url={rulesExportUrls(origin).archive} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+                <p className="text-[11px] text-emerald-900/80">{t.tokens.authkeyHint}</p>
               </>
             )}
+            {/* ── Список заблокированных доменов (scope domains/both) — ПОЛНЫЙ Uri
+                С токеном: список забирают любые DNS-серверы с обновлением списков
+                по ссылке, отдельного поля для токена у них нет ── */}
             {(createdScope === 'domains' || createdScope === 'both') && (
-              <ServeRow label={t.tokens.createdUrlDomains} url={`${origin}/api/dns/export`} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+              <>
+                <p className="text-xs text-emerald-800 font-medium pt-1">{t.tokens.createdUrlsDnsTitle}</p>
+                <ServeRow label={t.tokens.createdUrlDomains} url={dnsExportUrl(origin, created)} copyLabel={t.build.serveCopy} copiedLabel={t.build.serveCopied} />
+                <p className="text-[11px] text-emerald-900/80">{t.tokens.dnsUrlHint}</p>
+              </>
             )}
-            <p className="text-[11px] text-emerald-900/80">{t.tokens.authkeyHint}</p>
+            {createdScope === 'both' && <p className="text-[11px] text-emerald-900/80">{t.tokens.bothNote}</p>}
             <p className="text-[11px] text-emerald-900/80">{t.tokens.urlOriginNote}</p>
           </div>
         )}
@@ -171,8 +190,9 @@ export function TokensCard({ role }: { role: 'admin' | 'user' }) {
         </div>
         {msg && <p className="text-sm text-red-600">{msg}</p>}
 
-        {/* Подробная инструкция подключения Clear NDR по токену (PULL) —
-            включая включение периодических обновлений в самом Clear NDR */}
+        {/* Подробная инструкция подключения по токену (PULL) — Clear NDR для
+            правил и DNS-серверы для списка доменов, включая периодические
+            обновления на стороне потребителя */}
         <details className="rounded-lg border border-border">
           <summary className="px-3 py-2 text-sm font-medium text-foreground cursor-pointer select-none">{t.tokens.howTitle}</summary>
           <ol className="list-decimal ml-5 px-3 pb-3 space-y-1.5 text-sm text-muted-foreground">
@@ -183,6 +203,8 @@ export function TokensCard({ role }: { role: 'admin' | 'user' }) {
             <li>{t.tokens.howStep5}</li>
             <li>{t.tokens.howStep6}</li>
             <li>{t.tokens.howStep7}</li>
+            <li>{t.tokens.howStep8}</li>
+            <li>{t.tokens.howStep9}</li>
           </ol>
         </details>
 
@@ -251,8 +273,9 @@ export function TokensCard({ role }: { role: 'admin' | 'user' }) {
           </div>
         )}
         {/* Полный токен в БД не хранится (SHA-256) — показывается один раз при создании;
-            для существующих токенов виден только префикс. Адрес источника в Clear NDR
-            от токена не зависит: Uri постоянный, ключ меняется в поле authkey. */}
+            для существующих токенов виден только префикс. Uri правил в Clear NDR
+            постоянный (ключ меняется в поле authkey); полный Uri DNS-списка при смене
+            токена обновляется целиком — токен у DNS-серверов живёт в адресе. */}
         {tokens.length > 0 && <p className="text-xs text-muted-foreground mt-1">{t.tokens.prefixUrlNote}</p>}
       </CardContent>
     </Card>

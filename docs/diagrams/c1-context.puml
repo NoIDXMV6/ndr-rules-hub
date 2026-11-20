@@ -15,7 +15,7 @@ System(hub, "NDR Rules Hub", "Управление источниками пра
 System_Ext(clearndr, "Clear NDR (Scirius)", "PUSH: REST-импорт по токену; PULL: забирает файл/архив URL-источником по ?token=/Authorization (персональный токен или глобальный ключ отдачи)")
 System_Ext(feeds, "Интернет-источники", "правила: ET Open, Talos, abuse.ch, Phishing Army, PT и др. (HTTP(S), зеркала, oinkcode/Auth-Key); DNS-хостлисты: AdGuard HostlistsRegistry и др.")
 System_Ext(osd, "OpenSearch / Clear NDR Analytics", "Дашборды и аналитика (импорт пакетов через скрипты)")
-System_Ext(wg, "WireGuard-инфраструктура", "Загрузка правил через туннель (только администратор)")
+System_Ext(wg, "WireGuard-инфраструктура", "Загрузка правил через туннель (только администратор); автоподнятие туннеля при старте контейнера (wgAutoUp)")
 System_Ext(telegram, "Telegram Bot API", "Уведомления (конвейер/DNS-цикл/VPN/диск) и 2FA; http/https/socks-прокси")
 System_Ext(gotify, "Gotify-сервер", "Push-уведомления (self-hosted, app-токен)")
 

@@ -73,6 +73,8 @@ export interface VpnState {
   interfaces: WgIface[]
   tools: { wgQuick: boolean; wg: boolean; tunDevice: boolean; netAdmin: boolean; sysctl: boolean; srcValidMark: boolean; notes: string[] }
   configOk?: { ok: boolean; error?: string; iface?: string; peers?: number; endpoint?: string }
+  /** «Автоматическое поднятие тунеля» (настройка wgAutoUp) */
+  autoUp?: boolean
   profiles?: Array<{
     id: string
     name: string

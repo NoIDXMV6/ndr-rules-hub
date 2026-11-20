@@ -1045,6 +1045,17 @@ export function schedulerState(): { running: boolean; schedule?: string; dnsRunn
   return { running: !!s, dnsRunning: !!d }
 }
 
+const gsched = globalThis as unknown as { __hubSchedulerStarted?: boolean }
+
+/** Однократный автостарт планировщика на процесс (bootstrap дашборда): после
+ *  рестарта контейнера конвейер (правила + DNS-цикл) восстанавливается по
+ *  сохранённым настройкам без необходимости пересохранять «Настройки». */
+export function maybeStartScheduler(): void {
+  if (gsched.__hubSchedulerStarted) return
+  gsched.__hubSchedulerStarted = true
+  void reinitScheduler().catch(() => undefined)
+}
+
 export { DATA_DIR, CACHE_DIR, EXPORTS_DIR }
 export const repoPath = (p: string) => path.resolve(p)
 export const fsApi = fs
