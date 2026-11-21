@@ -51,6 +51,20 @@
 // WAL, оставшийся от зависших сборок (мог быть больше самой БД).
 // Никогда не стирает данные сам: решение «шаблон вместо БД» принимает
 // только entrypoint и только на коде 1.
+//
+// ИНЦИДЕНТ v1.36.2 (продакшен): БД тома 1.3 GB — quick_check(25) не
+// укладывался в 90с, выход с кодом 2 обрывал скрипт ДО докатки схемы
+// (код 2 означал «не успел, БД не тронута») — сервер стартовал на устаревшей
+// схеме тома, все API падали P2022/P2021, UI вечно показывал «Проверка
+// сессии…». Лечение:
+//   • скан целостности ПРОПУСКАЕТСЯ на БД больше DB_HEAL_CHECK_SKIP_MB
+//     (дефолт 400 MB): на большой БД скан идёт минутами и съедал бюджет
+//     рестарта, а докатка схемы — метаданные (sqlite_master + PRAGMA
+//     table_info), на страницах данных не зависит; полный скан — вручную:
+//     NDR_DB_FULL_CHECK=1 (+ DB_HEAL_TIMEOUT_MS побольше);
+//   • тайм-аут скана больше НЕ обрывает скрипт: повреждённость не доказана
+//     (структурная проверка пройдена) — докатка выполняется, сервер стартует
+//     со СВЕЖЕЙ схемой вместо устаревшей.
 // ============================================================================
 const fs = require('fs')
 const path = require('path')
@@ -67,6 +81,13 @@ const rawTimeoutMs = Number(process.env.DB_HEAL_TIMEOUT_MS)
 const STEP_TIMEOUT_MS = rawTimeoutMs > 0 ? rawTimeoutMs : 90_000
 // полный integrity_check вместо quick_check(25) — только вручную через env
 const FULL_CHECK = process.env.NDR_DB_FULL_CHECK === '1'
+// Порог размера БД (MB), выше которого скан целостности ПРОПУСКАЕТСЯ по
+// умолчанию (инцидент v1.36.2 — см. шапку). 0 — сканировать всегда
+// (поведение до v1.36.2); отрицательное/некорректное — дефолт 400.
+const rawSkipMb = Number(process.env.DB_HEAL_CHECK_SKIP_MB)
+const CHECK_SKIP_MB = Number.isFinite(rawSkipMb) && rawSkipMb >= 0 ? rawSkipMb : 400
+const dbBytes = (() => { try { return fs.statSync(dbArg).size } catch { return 0 } })()
+const scanSkippedBySize = !FULL_CHECK && CHECK_SKIP_MB > 0 && dbBytes > CHECK_SKIP_MB * 1024 * 1024
 
 function fatal(msg) {
   console.error(`${P} FATAL: ${msg}`)
@@ -117,8 +138,13 @@ function freeDisk(dir) {
 function printHeader() {
   const wal = `${dbArg}-wal`
   const shm = `${dbArg}-shm`
+  const mode = FULL_CHECK
+    ? 'integrity_check (полный, NDR_DB_FULL_CHECK=1)'
+    : scanSkippedBySize
+      ? `скан пропускается (БД > ${CHECK_SKIP_MB} MB, DB_HEAL_CHECK_SKIP_MB)`
+      : 'quick_check(25)'
   log(`БД: ${dbArg} — ${sizeOf(dbArg)} MB; WAL: ${sizeOf(wal)} MB; SHM: ${sizeOf(shm)} MB; свободно на томе: ${freeDisk(path.dirname(dbArg))} MB`)
-  log(`манифест: ${Object.keys(manifest.tables).length} таблиц, ${(manifest.indexes || []).length} индексов; режим скана: ${FULL_CHECK ? 'integrity_check (полный, NDR_DB_FULL_CHECK=1)' : 'quick_check(25)'}; таймаут шага: ${STEP_TIMEOUT_MS / 1000}с`)
+  log(`манифест: ${Object.keys(manifest.tables).length} таблиц, ${(manifest.indexes || []).length} индексов; режим скана: ${mode}; таймаут шага: ${STEP_TIMEOUT_MS / 1000}с`)
   if (sizeOf(wal) !== 'нет' && parseFloat(sizeOf(wal)) > parseFloat(sizeOf(dbArg))) {
     log(`ВНИМАНИЕ: WAL больше самой БД — след зависших сборок; после проверки будет выполнен wal_checkpoint(TRUNCATE)`)
   }
@@ -345,20 +371,31 @@ async function main() {
   //    проверка уже не прошла (повреждение мастера и так уведено на шаге 1).
   //    ALTER'ы по повреждённой БД запрещены (инцидент №2: «успешная» докатка
   //    на битых страницах и падение приложения на каждом запросе).
+  //    v1.36.2: на большой БД скан пропускается (DB_HEAL_CHECK_SKIP_MB), а
+  //    тайм-аут скана больше не обрывает скрипт до докатки — докатка схемы
+  //    читает только метаданные (sqlite_master, PRAGMA table_info) и не
+  //    зависит от страниц данных.
   if (masterOk) {
-    log(`скан целостности БД (${FULL_CHECK ? 'integrity_check' : 'quick_check(25)'})…`)
-    const health = await checkIntegrity(dbArg)
-    if (health.timedOut) {
-      finish(2, `скан целостности не завершился — БД НЕ считается повреждённой; запуск продолжается`)
-      return
-    }
-    if (health.ok) {
-      log(`скан целостности: ok`)
+    if (scanSkippedBySize) {
+      log(`скан целостности пропущен: БД ${MB(dbBytes)} MB > порога ${CHECK_SKIP_MB} MB (DB_HEAL_CHECK_SKIP_MB) — на большой БД скан идёт минутами и съедал бюджет рестарта; повреждённость сканом не проверяется, докатка схемы выполняется`)
+      log(`полный скан вручную: NDR_DB_FULL_CHECK=1 (запуск с увеличенным DB_HEAL_TIMEOUT_MS, например 600000)`)
     } else {
-      log(`скан целостности НЕ ПРОЙДЕН: ${health.problems.slice(0, 3).join('; ')}`)
-      const restored = await tryRestore()
-      if (restored === 'timeout') return
-      if (!restored) finishBroken(health.problems.slice(0, 3))
+      log(`скан целостности БД (${FULL_CHECK ? 'integrity_check' : 'quick_check(25)'})…`)
+      const health = await checkIntegrity(dbArg)
+      if (health.timedOut) {
+        // v1.36.2: раньше здесь был finish(2) — докатка не выполнялась, и
+        // сервер стартовал на устаревшей схеме (P2022 на всех API). Теперь:
+        // повреждённость НЕ доказана (структурная проверка пройдена) —
+        // продолжаем с докаткой.
+        log(`скан не завершился (таймаут) — повреждённость НЕ доказана, докатку схемы выполняю`)
+      } else if (health.ok) {
+        log(`скан целостности: ok`)
+      } else {
+        log(`скан целостности НЕ ПРОЙДЕН: ${health.problems.slice(0, 3).join('; ')}`)
+        const restored = await tryRestore()
+        if (restored === 'timeout') return
+        if (!restored) finishBroken(health.problems.slice(0, 3))
+      }
     }
   } else {
     const restored = await tryRestore()

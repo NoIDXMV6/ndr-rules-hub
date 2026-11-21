@@ -77,6 +77,9 @@ server.log
 # манифест схемы (builder) и лечение БД тома (runtime, docker-entrypoint.sh)
 !/scripts/gen-schema-manifest.mjs
 !/scripts/db-heal.cjs
+# устойчивая установка зависимостей (этап deps Dockerfile; в v1.36.1 из-за
+# этого белого списка скрипт не попал в коммит — сборка образа падала на COPY)
+!/scripts/bun-install.sh
 !/scripts/test-clearndr-osd-mock.sh
 !/scripts/test-clearndr-update-mock.sh
 !/scripts/test-clearndr-repair-mock.sh

@@ -279,6 +279,83 @@ describe('db-heal v1.36.0: bounded-сканы, таймауты, коды вых
   })
 })
 
+describe('db-heal v1.36.2: порог скана на больших БД — докатка выполняется (инцидент: БД 1.3 GB, код 2 до докатки, P2022 на всех API)', () => {
+  /** Раздуть БД реальными строками LogEntry до > 1 MB (для порога DB_HEAL_CHECK_SKIP_MB=1) */
+  async function padDb(dbFile: string, rows = 300, msgLen = 4096): Promise<void> {
+    await rawDb(dbFile, `
+      const { PrismaClient } = require('@prisma/client');
+      const p = new PrismaClient();
+      (async () => {
+        const msg = 'x'.repeat(${msgLen});
+        for (let i = 0; i < ${rows}; i++) {
+          await p.logEntry.create({ data: { level: 'info', scope: 'system', message: 'pad-' + i + '-' + msg } });
+        }
+        await p.$disconnect();
+      })().catch(e => { console.error(e.message); process.exit(1); });
+    `)
+  }
+
+  it('БД больше порога (DB_HEAL_CHECK_SKIP_MB=1) — скан пропущен, докатка выполняется, код 0', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-heal-skip-'))
+    tmpDirs.push(dir)
+    const db = path.join(dir, 'hub.db')
+    await fs.copyFile(templateDb, db)
+    await padDb(db)
+    const out = await execFileP('node', ['scripts/db-heal.cjs', db, manifestPath], {
+      cwd: ROOT,
+      env: { ...process.env, DB_HEAL_CHECK_SKIP_MB: '1' },
+    })
+    expect(out.stdout).toContain('скан целостности пропущен')
+    expect(out.stdout).toContain('DB_HEAL_CHECK_SKIP_MB')
+    expect(out.stdout).toContain('схема актуальна')
+    expect(out.stdout).toContain('инициализация БД успешна')
+  })
+
+  it('NDR_DB_FULL_CHECK=1 — скан выполняется несмотря на порог (принудительная проверка)', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-heal-full-'))
+    tmpDirs.push(dir)
+    const db = path.join(dir, 'hub.db')
+    await fs.copyFile(templateDb, db)
+    await padDb(db)
+    const out = await execFileP('node', ['scripts/db-heal.cjs', db, manifestPath], {
+      cwd: ROOT,
+      env: { ...process.env, DB_HEAL_CHECK_SKIP_MB: '1', NDR_DB_FULL_CHECK: '1' },
+    })
+    expect(out.stdout).toContain('integrity_check (полный, NDR_DB_FULL_CHECK=1)')
+    expect(out.stdout).toContain('скан целостности: ok')
+    expect(out.stdout).not.toContain('скан целостности пропущен')
+  })
+
+  it('старая схема на БД выше порога — докатка при пропущенном скане (главный сценарий инцидента)', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-heal-skip-old-'))
+    tmpDirs.push(dir)
+    const db = path.join(dir, 'hub.db')
+    await makeOldSchemaDb(db, [
+      "INSERT INTO Setting (key, value, updatedAt) VALUES ('abusechAuthKey', 'KEEP-ME', CURRENT_TIMESTAMP)",
+    ])
+    await padDb(db)
+    const out = await execFileP('node', ['scripts/db-heal.cjs', db, manifestPath], {
+      cwd: ROOT,
+      env: { ...process.env, DB_HEAL_CHECK_SKIP_MB: '1' },
+    })
+    // скан пропущен, НО докатка состоялась — схема приведена к текущей
+    expect(out.stdout).toContain('скан целостности пропущен')
+    expect(out.stdout).toContain('добавлена колонка Source.deletedAt')
+    expect(out.stdout).toContain('схема докатана')
+    const res = await rawDb(db, `
+      const { PrismaClient } = require('@prisma/client');
+      const p = new PrismaClient();
+      (async () => {
+        const st = await p.setting.findUnique({ where: { key: 'abusechAuthKey' } });
+        const logs = await p.logEntry.count();
+        console.log(JSON.stringify({ authKey: st ? st.value : null, logs }));
+        await p.$disconnect();
+      })().catch(e => { console.error(e.message); process.exit(1); });
+    `)
+    expect(JSON.parse(res.trim())).toEqual({ authKey: 'KEEP-ME', logs: 300 })
+  })
+})
+
 describe('docker-entrypoint.sh v1.36.0: таймаут db-heal не стирает данные', () => {
   /** патч entrypoint под временные пути + манифест схемы в шаблонный каталог */
   async function patchedEntrypoint(dir: string, tmpl: string): Promise<string> {

@@ -1031,6 +1031,7 @@ PersistentKeepalive = 25
 
   auth: {
     splash: 'Проверка сессии…',
+    splashError: 'Проверка сессии не удалась: {error}. Повтор каждые 30 с; если повторяется — см. docker logs и /api/health (самодиагностика).',
     title: 'Вход в NDR Rules Hub',
     subtitle: 'Многопользовательский режим (редакция Enterprise)',
     loginTab: 'Вход',

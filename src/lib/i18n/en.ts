@@ -1035,6 +1035,7 @@ PersistentKeepalive = 25
 
   auth: {
     splash: 'Checking session…',
+    splashError: 'Session check failed: {error}. Retrying every 30 s; if it persists — see docker logs and /api/health (self-diagnostics).',
     title: 'Sign in to NDR Rules Hub',
     subtitle: 'Multi-user mode (Enterprise edition)',
     loginTab: 'Sign in',

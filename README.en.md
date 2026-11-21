@@ -285,15 +285,24 @@ curl -s http://localhost:3080/api/health    # self-diagnostics: DB, schema, file
 ```
 
 `/api/health` answers 200 even with a broken DB and shows the exact error (for example,
-`PrismaClientKnownRequestError P2022` with an outdated schema). The DB schema is healed
-automatically (db-heal at container startup): missing tables/columns/indexes are added WITHOUT
-data loss. Every heavy step is time-bounded (DB_HEAL_TIMEOUT_MS, 90 s per step by default —
-integrity scan, snapshot restore, VACUUM backup, CREATE INDEX; the entrypoint global guard is
-DB_HEAL_TIMEOUT, 300 s), so initialization can no longer hang silently on a huge DB. db-heal
-exit codes: 0 — ok/healed; 1 — proven corruption without healthy snapshots (the entrypoint
+`PrismaClientKnownRequestError P2022` with an outdated schema); since v1.36.2 it also shows
+counts of the tables most likely to bloat (domainRecords/logEntries/authEvents…) and the DB/WAL
+file sizes. The DB schema is healed automatically (db-heal at container startup): missing
+tables/columns/indexes are added WITHOUT data loss. Every heavy step is time-bounded
+(DB_HEAL_TIMEOUT_MS, 90 s per step by default — integrity scan, snapshot restore, VACUUM
+backup, CREATE INDEX; the entrypoint global guard is DB_HEAL_TIMEOUT, 300 s), so initialization
+can no longer hang silently on a huge DB.
+
+Since v1.36.2 the integrity scan is SKIPPED on a large DB (threshold DB_HEAL_CHECK_SKIP_MB,
+default 400 MB): in the incident a 1.3 GB DB did not finish quick_check within 90 s, the code-2
+exit cut db-heal BEFORE the schema heal, and the server started on an outdated schema (P2022 on
+every API, the UI stuck on “Checking session…”). The schema heal now always runs — it reads only
+metadata (sqlite_master, PRAGMA table_info) and does not depend on data pages. A full scan of a
+large DB is manual: `NDR_DB_FULL_CHECK=1` with a raised `DB_HEAL_TIMEOUT_MS` (e.g. 600000).
+db-heal exit codes: 0 — ok/healed; 1 — proven corruption without healthy snapshots (the entrypoint
 backs up to `./data/hub.db.bak-<date>` and creates a DB from the template); 2 — the check did
-NOT FINISH (timeout) — the DB is NOT considered corrupted, the server starts with the existing
-DB and the check repeats on the next restart.
+NOT FINISH (timeout of the structural check/connection) — the DB is NOT considered corrupted,
+the server starts with the existing DB and the check repeats on the next restart.
 
 The first container log lines always show hub.db/-wal/-shm sizes and the free volume space (a
 gigabyte `-wal` is a footprint of stuck builds; after a successful check db-heal trims it via
@@ -329,6 +338,7 @@ bunx vitest run        # engine tests
 | `TZ` | cron timezone | `Europe/Moscow` |
 | `DB_HEAL_TIMEOUT` | global timeout of the DB schema check/heal at container startup (seconds) | `300` |
 | `DB_HEAL_TIMEOUT_MS` | timeout of a single heavy db-heal step (milliseconds) | `90000` |
+| `DB_HEAL_CHECK_SKIP_MB` | integrity scan is skipped for DBs above this size (MB; `0` — always scan; full scan — `NDR_DB_FULL_CHECK=1`) | `400` |
 | `NDR_EDITION` | edition: `community` (no authentication) / `enterprise` (multi-user mode) | `community` |
 
 ## WireGuard in the container

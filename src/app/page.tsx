@@ -44,6 +44,10 @@ export default function Home() {
   const { t, tr, lang, loc } = useI18n()
   const [data, setData] = useState<Dashboard | null>(null)
   const [me, setMe] = useState<Me | null>(null)
+  // Последняя ошибка /api/auth/me — показывается на сплэше «Проверка сессии…».
+  // Инцидент v1.36.2: при сбое сессии UI вечно крутил спиннер БЕЗ текста ошибки
+  // (сбой держал me === null), диагностировать было невозможно.
+  const [meError, setMeError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
@@ -70,8 +74,11 @@ export default function Home() {
   const refreshMe = useCallback(async () => {
     try {
       setMe(await api.me())
-    } catch {
-      setMe((m) => m) // при сбое /api/auth/me держим прежнее состояние
+      setMeError(null)
+    } catch (e) {
+      // при сбое /api/auth/me держим прежнее состояние, но ошибку показываем
+      // на сплэше (вместо вечного безмолвного спиннера)
+      setMeError((e as Error).message)
     }
   }, [])
 
@@ -149,11 +156,21 @@ export default function Home() {
     }
   }
 
-  // Экран входа загружается (короткая вспышка при первом открытии)
+  // Экран входа загружается (короткая вспышка при первом открытии); при сбое
+  // /api/auth/me под спиннером виден текст ошибки — вечный «молчаливый» спиннер
+  // больше невозможен (инцидент v1.36.2: зависшая докатка схемы БД давала
+  // P2022 на /api/auth/me, а UI не показывал ничего, кроме крутилки)
   if (!me) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background text-muted-foreground">
-        <RefreshCw className="h-5 w-5 mr-2 animate-spin" /> {t.auth.splash}
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-muted-foreground px-4 text-center">
+        <div className="flex items-center">
+          <RefreshCw className="h-5 w-5 mr-2 animate-spin" /> {t.auth.splash}
+        </div>
+        {meError && (
+          <div className="mt-4 max-w-2xl text-sm text-destructive break-words">
+            {tr(t.auth.splashError, { error: meError })}
+          </div>
+        )}
       </div>
     )
   }
