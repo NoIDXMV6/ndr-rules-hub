@@ -912,6 +912,20 @@ export const DNS_CATALOG: DnsSeedSource[] = [
     notes: 'Телеметрия Smart-TV (~150): Samsung, LG, Roku, Vizio и др.',
     notesEn: 'Smart-TV telemetry (~150): Samsung, LG, Roku, Vizio, etc.',
   },
+  {
+    name: 'Disconnect Simple Tracking List',
+    url: 'https://s3.amazonaws.com/lists.disconnect.me/simple_tracking.txt',
+    category: 'tracking', enabled: true, priority: 30, format: 'plain',
+    notes: 'Трекер-домены Disconnect (~35 записей). Официальные списки Disconnect заморожены (давно не обновляются), но записи остаются валидной классикой. Мало пересечений с крупными списками каталога.',
+    notesEn: 'Disconnect tracking domains (~35 entries). Official Disconnect lists are frozen (not updated for years), but entries remain valid classics. Little overlap with the large catalog lists.',
+  },
+  {
+    name: 'BlockWindows',
+    url: 'https://raw.githubusercontent.com/WindowsLies/BlockWindows/master/hosts',
+    category: 'tracking', enabled: true, priority: 30, format: 'hosts',
+    notes: 'Телеметрия и навязанные сервисы Windows (~105 доменов): сбор данных, реклама, DiagTrack. Репозиторий не обновляется с 2020 года, но домены Microsoft стабильны. Дополняет WindowsSpyBlocker.',
+    notesEn: 'Windows telemetry and bundled services (~105 domains): data collection, ads, DiagTrack. Repository not updated since 2020, but Microsoft domains are stable. Complements WindowsSpyBlocker.',
+  },
   // ── Тематические списки ─────────────────────────────────────────────────────
   {
     name: "HaGeZi's Gambling Blocklist",
@@ -940,6 +954,27 @@ export const DNS_CATALOG: DnsSeedSource[] = [
     category: 'spam', enabled: true, priority: 45,
     notes: 'Злоупотребляемые TLD (~20 одно-меточных записей: .top, .zip, .click…). Блокировка целых доменных зон — может задевать легитимные сайты.',
     notesEn: 'Most abused TLDs (~20 single-label entries: .top, .zip, .click…). Blocks whole TLD zones — may affect legitimate sites.',
+  },
+  {
+    name: 'add.Spam (FadeMind)',
+    url: 'https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.Spam/hosts',
+    category: 'spam', enabled: true, priority: 45, format: 'hosts',
+    notes: 'Малый список спам-доменов из набора hosts.extras (~60 записей) — практически не даёт нагрузки, добавляет точечные блокировки.',
+    notesEn: 'Small spam-domain list from the hosts.extras set (~60 entries) — negligible load, adds point blockings.',
+  },
+  {
+    name: 'mhhakim Porn Blocklist',
+    url: 'https://raw.githubusercontent.com/mhhakim/pihole-blocklist/master/porn.txt',
+    category: 'adult', enabled: false, priority: 40, format: 'plain',
+    notes: 'Список 18+ (~241 тыс. доменов). Репозиторий не обновляется с марта 2023 (заявлено в заголовке файла) — список застарелый. Выключен по умолчанию: включайте осознанно (+~241 тыс. доменов к сборке).',
+    notesEn: 'Adult list (~241K domains). Repository not updated since March 2023 (stated in the file header) — the list is stale. Disabled by default: enable deliberately (+~241K domains per build).',
+  },
+  {
+    name: "Chad Mayfield's Porn Blocklist (All)",
+    url: 'https://raw.githubusercontent.com/chadmayfield/my-pihole-blocklists/master/lists/pi_blocklist_porn_all.list',
+    category: 'adult', enabled: false, priority: 40, format: 'plain',
+    notes: 'Максимальный список 18+ (~1,9 млн доменов, файл ~50 МБ) — почти все известные adult-домены. Статичный и очень крупный: включайте ВМЕСТО mhhakim Porn Blocklist, а не вместе с ним. Выключен по умолчанию: включение заметно замедлит загрузку источников и сборку.',
+    notesEn: "Maximal adult list (~1.9M domains, ~50MB file) — nearly every known adult domain. Static and very large: enable INSTEAD of mhhakim Porn Blocklist, not alongside. Disabled by default: enabling noticeably slows source fetch and build.",
   },
   // ── Реклама ─────────────────────────────────────────────────────────────────
   {
@@ -1019,6 +1054,55 @@ export const DNS_CATALOG: DnsSeedSource[] = [
     notes: 'Реклама на игровых консолях (~20 записей): PlayStation, Xbox, Nintendo.',
     notesEn: 'Game console ads (~20 entries): PlayStation, Xbox, Nintendo.',
   },
+  {
+    name: 'YouTube Ads 4 Pi-hole',
+    url: 'https://raw.githubusercontent.com/kboghdady/youTube_ads_4_pi-hole/master/youtubelist.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'plain',
+    notes: 'Домены рекламы YouTube (~16 тыс.). Блокировка рекламы YouTube через DNS работает нестабильно: сервисы периодически меняют раздачу. Дата обновления в файле не указана — актуальность зависит от вверхстрима.',
+    notesEn: 'YouTube ad domains (~16K). Blocking YouTube ads via DNS is unreliable: delivery changes over time. No update date in the file — freshness depends on upstream.',
+  },
+  {
+    name: 'YouTube Ads Crowd List',
+    url: 'https://raw.githubusercontent.com/kboghdady/youTube_ads_4_pi-hole/master/crowed_list.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'plain',
+    notes: 'Расширенный «народный» список из того же репозитория (~6 тыс.): поддомены CDN googlevideo.com для блокировки выдачи рекламы. ВНИМАНИЕ: может ломать воспроизведение видео YouTube (пустой экран, ошибки загрузки) — блокируются и сами CDN-узлы видео.',
+    notesEn: 'Extended crowd-sourced list from the same repository (~6K): googlevideo.com CDN subdomains to block ad delivery. WARNING: may break YouTube video playback (blank screen, load errors) — video CDN nodes are blocked too.',
+  },
+  {
+    name: 'Disconnect Simple Ad List',
+    url: 'https://s3.amazonaws.com/lists.disconnect.me/simple_ad.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'plain',
+    notes: 'Рекламные домены Disconnect (~2,7 тыс.). Список заморожен (давно не обновляется), но домены остаются актуальными и почти не пересекаются с крупными списками каталога.',
+    notesEn: 'Disconnect ad domains (~2.7K). The list is frozen (not updated for years), but domains remain relevant with little overlap with the large catalog lists.',
+  },
+  {
+    name: 'Admiral Anti-Adblock (The Firebog)',
+    url: 'https://v.firebog.net/hosts/Admiral.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'plain',
+    notes: 'Домены сети Admiral (~1,7 тыс., обновляется — конвертация фида getadmiral-domains.txt): анти-адблок-детекторы и плашки «отключите блокировщик». Блокировка скрывает плашки и затрудняет детект.',
+    notesEn: 'Admiral network domains (~1.7K, actively maintained — converted from the getadmiral-domains.txt feed): anti-adblock detectors and "disable your blocker" notices. Blocking hides the notices and hampers detection.',
+  },
+  {
+    name: 'Prigent Ads + Cryptojacking (The Firebog)',
+    url: 'https://v.firebog.net/hosts/Prigent-Ads.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'plain',
+    notes: 'Список Prigent из блэклистов Университета Тулузы (~4,3 тыс., обновляется): рекламные и криптоджекинг-домены (скрытый майнинг).',
+    notesEn: 'Prigent list from the Toulouse University blacklists (~4.3K, maintained): ad and cryptojacking domains (hidden mining).',
+  },
+  {
+    name: 'EasyList (hosts, The Firebog)',
+    url: 'https://v.firebog.net/hosts/Easylist.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'plain',
+    notes: 'EasyList в hosts-конвертации The Firebog (~52 тыс. доменов, регулярное обновление): крупнейший классический список рекламы. Дополняет AdGuard DNS filter и 1Hosts.',
+    notesEn: 'EasyList in the Firebog hosts conversion (~52K domains, regularly refreshed): the largest classic ad list. Complements AdGuard DNS filter and 1Hosts.',
+  },
+  {
+    name: 'w3kbl (The Firebog)',
+    url: 'https://v.firebog.net/hosts/static/w3kbl.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'plain',
+    notes: 'Небольшой статичный список WaLLy3K (~350 доменов, ручная проверка записей, обновляется нерегулярно).',
+    notesEn: 'Small static list by WaLLy3K (~350 domains, manually verified entries, updated irregularly).',
+  },
   // ── Смешанные и специальные ──────────────────────────────────────────────────
   {
     name: 'AdGuard DNS filter',
@@ -1062,6 +1146,20 @@ export const DNS_CATALOG: DnsSeedSource[] = [
     notes: 'Максимальный список HaGeZi (агрегат всех его списков). Включайте ВМЕСТО остальных списков HaGeZi, а не вместе с ними — иначе двойная нагрузка без прироста.',
     notesEn: "HaGeZi's ultimate aggregation of all his lists. Enable INSTEAD of the other HaGeZi lists, not alongside them.",
   },
+  {
+    name: 'mhhakim Pihole Blocklist',
+    url: 'https://raw.githubusercontent.com/mhhakim/pihole-blocklist/master/list.txt',
+    category: 'mixed', enabled: false, priority: 60, format: 'plain',
+    notes: 'Агрегированный список мусорных и подозрительных доменов (~1,3 млн, файл 30 МБ). Очень агрессивный: блокирует в том числе легитимные сайты на бесплатных доменах .gq/.ml/.tk/.cf. Репозиторий не обновляется с марта 2023 (заявлено в заголовке файла). Выключен по умолчанию: включение сильно замедлит загрузку и сборку (+1,3 млн доменов).',
+    notesEn: 'Aggregated list of junk and suspicious domains (~1.3M, 30MB file). Very aggressive: also blocks legitimate sites on free .gq/.ml/.tk/.cf domains. Repository not updated since March 2023 (stated in the file header). Disabled by default: enabling slows fetch and build significantly (+1.3M domains).',
+  },
+  {
+    name: 'OISD Hosts Mirror (gensoft.org)',
+    url: 'http://www.gensoft.org/pihole/hosts-oisd-nl.txt',
+    category: 'mixed', enabled: false, priority: 60, format: 'hosts',
+    notes: 'Зеркало hosts-версии OISD от gensoft.org (~1,37 млн записей с поддоменами, файл ~40 МБ). В системе уже есть OISD Blocklist Big (~227 тыс. базовых доменов): включайте этот список ВМЕСТО него, а не вместе с ним — иначе сборка вырастет на ~1,4 млн записей почти без прироста. HTTP без TLS.',
+    notesEn: 'Mirror of the OISD hosts version by gensoft.org (~1.37M entries with subdomains, ~40MB file). The system already has OISD Blocklist Big (~227K base domains): enable this list INSTEAD of it, not alongside — otherwise the build grows by ~1.4M entries with almost no gain. Plain HTTP, no TLS.',
+  },
   // ── Региональные списки ─────────────────────────────────────────────────────
   {
     name: 'POL: Polish filters for Pi-hole',
@@ -1097,6 +1195,27 @@ export const DNS_CATALOG: DnsSeedSource[] = [
     category: 'ads', enabled: true, priority: 50,
     notes: 'Вьетнамский список ABPVN (~19 тыс.): реклама и трекеры вьетнамских сайтов.',
     notesEn: 'Vietnamese ABPVN list (~19K): ads and trackers of Vietnamese sites.',
+  },
+  {
+    name: 'RUS: AdGuard Russian Filter',
+    url: 'https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_1_Russian/filter.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'adguard',
+    notes: 'Официальный русский фильтр AdGuard (FiltersRegistry, активно обновляется): ~2 тыс. DNS-применимых сетевых правил ||домен^ против рекламы и трекеров русскоязычного сегмента (из ~19 тыс. строк фильтра остальное — косметика и URL-правила, DNS-парсер их пропускает, а исключения @@||…^ уходят в белый список).',
+    notesEn: 'Official AdGuard Russian filter (FiltersRegistry, actively maintained): ~2K DNS-applicable network rules ||domain^ against RU-segment ads and trackers (of ~19K filter lines the rest is cosmetic and URL rules, skipped by the DNS parser; @@||…^ exceptions go to the allowlist).',
+  },
+  {
+    name: 'RUS: 4PDA Community Hosts Blacklist (schakal.ru)',
+    url: 'https://schakal.ru/hosts/alive_hosts_ru_com.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'hosts',
+    notes: 'Community-список 4PDA (schakal.ru, вариант «alive» — только живые домены; обновляется ежедневно, акцент на .ru/.com): ~101 тыс. уникальных доменов рекламы, трекеров и мошеннических ресурсов.',
+    notesEn: '4PDA community list (schakal.ru, "alive" variant — live domains only; updated daily, .ru/.com focus): ~101K unique ad, tracker and scam domains.',
+  },
+  {
+    name: 'POL: KADhosts',
+    url: 'https://raw.githubusercontent.com/PolishFiltersTeam/KADhosts/master/KADhosts.txt',
+    category: 'ads', enabled: true, priority: 50, format: 'hosts',
+    notes: 'Польский список KADhosts от PolishFiltersTeam (~52 тыс., активно обновляется): реклама, трекеры, малварь. С недавних пор не содержит «спорных» сайтов — отдельный вариант without_controversies упразднён вверхстримом (осталась заглушка-перенаправление).',
+    notesEn: 'Polish KADhosts list by PolishFiltersTeam (~52K, actively maintained): ads, trackers, malware. No longer contains "controversial" sites — the separate without_controversies variant was retired upstream (only a redirect stub remains).',
   },
   // ── Белые списки (allow) ────────────────────────────────────────────────────
   {
