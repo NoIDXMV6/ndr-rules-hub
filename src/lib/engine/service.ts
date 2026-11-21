@@ -984,6 +984,14 @@ export async function runDnsCycle(origin = 'cron'): Promise<{ ok: boolean; detai
   const dnsSvc = await import('./dns-service')
   const fetched = await dnsSvc.fetchAllDomainSources(origin)
   const built = await dnsSvc.buildDomainList(origin)
+  // живость: если фильтр неделегированных доменов включён — фоновый скан свежих
+  // вердиктов (DomainAlive). Не ждём: скан идёт часами на миллионах доменов.
+  try {
+    const { maybeStartAliveScan } = await import('./dns-alive')
+    if (await maybeStartAliveScan(origin)) {
+      await log('info', 'dns', 'Живость доменов: скан запущен фоном после DNS-цикла', undefined, 'Domain liveness scan started in background after DNS cycle')
+    }
+  } catch { /* скан не обязателен */ }
   try {
     const title = built.ok
       ? `DNS-цикл (${origin}): список доменов собран — ${(built.total ?? 0).toLocaleString('ru-RU')} доменов`
@@ -1023,6 +1031,11 @@ export async function runPipeline(origin = 'cron'): Promise<{ ok: boolean; detai
       const fetched = await dnsSvc.fetchAllDomainSources(origin)
       const built = await dnsSvc.buildDomainList(origin)
       dns = { ...fetched, build: { ok: built.ok, total: built.total, error: built.error } }
+      // живость: авто-скан после inline-DNS-цикла (если включён фильтр в сборке)
+      const { maybeStartAliveScan } = await import('./dns-alive')
+      if (await maybeStartAliveScan(origin)) {
+        await log('info', 'scheduler', 'Живость доменов: скан запущен фоном после DNS-цикла', undefined, 'Domain liveness scan started in background after DNS cycle')
+      }
     } catch (e) {
       await log('warn', 'scheduler', `DNS-цикл не выполнен: ${(e as Error).message}`, undefined, `DNS cycle failed: ${(e as Error).message}`)
     }

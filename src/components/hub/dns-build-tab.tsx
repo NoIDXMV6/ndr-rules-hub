@@ -17,9 +17,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { api, Dashboard, DnsBuildProgressInfo, DomainBuildItem, DnsExportFile, fmtSize, fmtTime } from '@/components/hub/api'
+import { Switch } from '@/components/ui/switch'
+import { api, Dashboard, DnsBuildProgressInfo, DomainAliveState, DomainBuildItem, DnsExportFile, fmtSize, fmtTime } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
-import { Building2, Database, Download, FileArchive } from 'lucide-react'
+import { Activity, Building2, Database, Download, FileArchive } from 'lucide-react'
 
 export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChange: () => void }) {
   const { t, tr, lang, loc } = useI18n()
@@ -30,6 +31,9 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
   // прогресс DNS-сборки: POST /api/dns/build запускает сборку фоном и сразу
   // возвращается, статус опрашивается из GET /api/dns/build/progress
   const [prog, setProg] = useState<DnsBuildProgressInfo | null>(null)
+  // живость доменов (dns-alive.ts): настройки, прогресс скана, счётчики вердиктов
+  const [alive, setAlive] = useState<DomainAliveState | null>(null)
+  const aliveLogRef = useRef<HTMLPreElement>(null)
   const logRef = useRef<HTMLPreElement>(null)
 
   const loadAll = useCallback(async () => {
@@ -45,6 +49,8 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
 
   useEffect(() => {
     void loadAll()
+    // стартовое состояние живости
+    api.dns.alive().then(setAlive).catch(() => undefined)
   }, [loadAll])
 
   // если DNS-сборка уже идёт (запущена другим окном или по cron) — сразу показываем прогресс
@@ -54,11 +60,24 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
     }).catch(() => undefined)
   }, [])
 
-  // автопрокрутка журнала сборки
+  // автопрокрутка журнала сборки и журнала живости
   useEffect(() => {
     const el = logRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [prog?.log.length])
+  useEffect(() => {
+    const el = aliveLogRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [alive?.progress?.log.length])
+
+  // опрос живости, пока скан активен (запущен здесь, cron или другим окном)
+  useEffect(() => {
+    if (!alive?.progress?.active) return
+    const timer = setInterval(() => {
+      api.dns.alive().then(setAlive).catch(() => undefined)
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [alive?.progress?.active])
 
   const startBuild = async () => {
     setBusy(true)
@@ -87,6 +106,26 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
   const saveName = async (v: string) => {
     await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dnsFileName: v }) })
   }
+
+  // ── живость доменов ──
+  const saveAliveSetting = async (key: string, value: string) => {
+    await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [key]: value }) })
+    onChange()
+    api.dns.alive().then(setAlive).catch(() => undefined)
+  }
+  const aliveAction = async (action: 'start' | 'cancel') => {
+    setMsg(null)
+    try {
+      const r = await api.dns.aliveAction(action)
+      if (!r.ok) setMsg({ text: tr(t.dns.aliveStartErr, { err: r.error ?? '—' }), ok: false })
+      const st = await api.dns.alive()
+      setAlive(st)
+    } catch (e) {
+      setMsg({ text: tr(t.dns.aliveStartErr, { err: (e as Error).message }), ok: false })
+    }
+  }
+  const aliveProgress = alive?.progress ?? null
+  const aliveActive = !!aliveProgress?.active
 
   const settings = data?.settings ?? {}
   // прогресс: сборка, запущенная из этого окна, или фоновая (cron/другое окно)
@@ -161,12 +200,13 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
                   </Button>
                 </a>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-8 gap-3">
                 <MiniStat label={t.dns.statInput} value={stats.totalInput?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.dns.statDup} value={stats.duplicateByDomain?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.dns.statAllow} value={stats.allowedRemoved?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.dns.statCat} value={stats.categoryRemoved?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.dns.statOverride} value={stats.overrideRemoved?.toLocaleString(loc) ?? '—'} />
+                <MiniStat label={t.dns.statDead} value={stats.deadRemoved?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.dns.statTld} value={stats.tldCount?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.dns.statFinal} value={build.totalDomains.toLocaleString(loc)} />
               </div>
@@ -181,6 +221,7 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
                       <th className="px-3 py-2 font-medium">{t.dns.thAllowed}</th>
                       <th className="px-3 py-2 font-medium">{t.dns.thCat}</th>
                       <th className="px-3 py-2 font-medium">{t.dns.thOverride}</th>
+                      <th className="px-3 py-2 font-medium">{t.dns.thAlive}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -193,6 +234,7 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
                         <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedAllowed.toLocaleString(loc)}</td>
                         <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedCategory.toLocaleString(loc)}</td>
                         <td className="px-3 py-1.5 tabular-nums text-red-600">{st.droppedOverride.toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedDead.toLocaleString(loc)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -206,6 +248,80 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
             <p className="text-sm text-muted-foreground">
               {t.dns.noBuildFull}
             </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="bg-card border-border">
+        <CardHeader className="pb-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="mr-auto">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Activity className="h-4 w-4 text-primary" /> {t.dns.aliveTitle}
+              </CardTitle>
+              <CardDescription>{t.dns.aliveDesc}</CardDescription>
+            </div>
+            {aliveActive ? (
+              <Button variant="outline" className="border-input text-foreground" onClick={() => void aliveAction('cancel')}>
+                {t.dns.aliveCancelBtn}
+              </Button>
+            ) : (
+              <Button onClick={() => void aliveAction('start')} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+                <Activity className={`h-4 w-4 mr-1.5 ${aliveActive ? 'animate-pulse' : ''}`} /> {t.dns.aliveStartBtn}
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <SwitchRow
+              label={t.dns.aliveFilterLabel}
+              checked={(alive?.settings.dnsAliveCheckEnabled ?? settings.dnsAliveCheckEnabled ?? 'false') === 'true'}
+              onChange={(v) => void saveAliveSetting('dnsAliveCheckEnabled', String(v))}
+            />
+            <div>
+              <Label className="text-foreground">{t.dns.aliveTtlLabel}</Label>
+              <Input
+                type="number"
+                min={1}
+                max={365}
+                defaultValue={alive?.settings.dnsAliveTtlDays ?? settings.dnsAliveTtlDays ?? '14'}
+                onBlur={(e) => void saveAliveSetting('dnsAliveTtlDays', e.target.value.trim())}
+                className="bg-card border-input mt-1"
+                key={alive?.settings.dnsAliveTtlDays ?? 'ttl'}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground -mt-2">{t.dns.aliveAutoNote}</p>
+          {aliveProgress && aliveActive && (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-medium text-foreground">{tr(t.dns.aliveRunning, { percent: String(aliveProgress.percent) })}</span>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {tr(t.dns.aliveProgProcessed, { n: aliveProgress.processed.toLocaleString(loc) })}
+                  {' · '}
+                  {tr(t.dns.aliveProgSkipped, { n: aliveProgress.skippedFresh.toLocaleString(loc) })}
+                </span>
+              </div>
+              <Progress value={aliveProgress.percent} />
+              <pre
+                ref={aliveLogRef}
+                className="rounded-lg border border-border bg-zinc-950 text-zinc-100 p-3 text-xs font-mono max-h-40 overflow-auto whitespace-pre-wrap"
+              >
+                {aliveProgress.log.map((l) => `${l.ts.slice(11, 19)} ${l.msg}`).join('\n') || '…'}
+              </pre>
+            </div>
+          )}
+          {alive && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">{t.dns.aliveCountsTitle}</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <MiniStat label={t.dns.aliveStatChecked} value={alive.counts.checked.toLocaleString(loc)} />
+                <MiniStat label={t.dns.aliveStatAlive} value={alive.counts.alive.toLocaleString(loc)} />
+                <MiniStat label={t.dns.aliveStatDead} value={alive.counts.dead.toLocaleString(loc)} />
+                <MiniStat label={t.dns.aliveStatError} value={alive.counts.error.toLocaleString(loc)} />
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -249,6 +365,15 @@ function MiniStat({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg border border-border bg-card/50 p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="text-lg font-semibold tabular-nums text-foreground">{value}</p>
+    </div>
+  )
+}
+
+function SwitchRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center gap-3">
+      <Switch checked={checked} onCheckedChange={onChange} />
+      <span className="text-sm text-foreground">{label}</span>
     </div>
   )
 }

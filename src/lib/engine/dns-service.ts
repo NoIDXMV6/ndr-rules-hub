@@ -24,6 +24,7 @@ import {
   startDnsBuildProgress, setDnsBuildStage, addDnsBuildLog, touchDnsBuild,
   finishDnsBuildProgress, failDnsBuildProgress, isDnsBuildActive, getDnsBuildProgress,
 } from './dns-progress'
+import { convertHostlistOthers, type HostlistConversionResult } from './dns-convert'
 import { yieldToLoop } from './loop'
 import { domainRecordsCountCached, invalidateCounts } from './count-cache'
 
@@ -36,6 +37,7 @@ export const DNS_SETTING_DEFAULTS: Record<string, string> = {
   dnsFileName: 'blocked-domains.txt',
   dnsCronEnabled: 'true', // полный цикл (cron) обновляет и DNS-источники, и пересобирает список
   dnsCronSchedule: '', // отдельное расписание DNS-цикла: разнос по времени с основным циклом; пусто — сразу за основным
+  // настройки живости — в DNS_ALIVE_DEFAULTS (dns-alive.ts), реальные дефолты в DEFAULT_SETTINGS (seed.ts)
   // Ключ отдачи dnsServeToken удалён (v1.34.0): отдача списка — только по
   // персональному токену со scope «домены»/«оба списка» (раздел «Аккаунт»)
   // или из кабинета (сессия); без токена отдача запрещена.
@@ -240,13 +242,21 @@ export async function fetchDomainSourceById(sourceId: string): Promise<{ ok: boo
     await log('error', 'fetch', `Ошибка загрузки DNS-источника «${src.name}»: ${res.error}`, undefined, `Failed to fetch DNS source "${src.name}": ${res.error}`)
     return { ok: false, count: 0, error: res.error }
   }
-  const parsed = parseDomainList(res.text, src.format as never)
+  // collectOthers: строки-не-домены (IP/CIDR/URL/regex) собираются и конвертируются
+  // в правила Suricata (до v1.37.0 они просто терялись в «skipped»)
+  const parsed = parseDomainList(res.text, src.format as never, { collectOthers: true })
   const records: Array<{ domain: string; mode: 'block' | 'allow' }> = [
     ...parsed.blocked.map((d) => ({ domain: d, mode: 'block' as const })),
     ...parsed.allowed.map((d) => ({ domain: d, mode: 'allow' as const })),
     ...parsed.tld.map((d) => ({ domain: d, mode: 'block' as const })),
   ]
   const diff = await replaceDomainRecords(src.id, records)
+  let conv: HostlistConversionResult | null = null
+  try {
+    conv = await convertHostlistOthers({ id: src.id, name: src.name }, parsed.others)
+  } catch (e) {
+    await log('warn', 'fetch', `DNS-источник «${src.name}»: конвертация не-доменных строк не удалась: ${(e as Error).message}`, undefined, `DNS source "${src.name}": non-domain conversion failed: ${(e as Error).message}`)
+  }
   const dt = ((Date.now() - t0) / 1000).toFixed(1)
   await db.domainSource.update({
     where: { id: src.id },
@@ -259,6 +269,14 @@ export async function fetchDomainSourceById(sourceId: string): Promise<{ ok: boo
   await log('ok', 'fetch', `DNS-источник «${src.name}»: ${diff.total.toLocaleString('ru-RU')} доменов (+${diff.added.toLocaleString('ru-RU')} / −${diff.removed.toLocaleString('ru-RU')}, формат ${parsed.format}, пропущено ${parsed.skipped}), ${dt} с`,
     undefined,
     `DNS source "${src.name}": ${diff.total} domains (+${diff.added} / −${diff.removed}, format ${parsed.format}, skipped ${parsed.skipped}), ${dt} s`)
+  if (conv) {
+    const partsRu = [conv.counts.ip ? `IP ${conv.counts.ip.toLocaleString('ru-RU')}` : '', conv.counts.cidr ? `CIDR ${conv.counts.cidr.toLocaleString('ru-RU')}` : '', conv.counts.url ? `URL ${conv.counts.url.toLocaleString('ru-RU')}` : '', conv.counts.regex ? `regex ${conv.counts.regex.toLocaleString('ru-RU')}` : ''].filter(Boolean).join(', ')
+    const partsEn = [conv.counts.ip ? `IP ${conv.counts.ip}` : '', conv.counts.cidr ? `CIDR ${conv.counts.cidr}` : '', conv.counts.url ? `URL ${conv.counts.url}` : '', conv.counts.regex ? `regex ${conv.counts.regex}` : ''].filter(Boolean).join(', ')
+    await log('info', 'fetch',
+      `DNS-источник «${src.name}»: строки-не-домены (${partsRu}) конвертированы в ${conv.rules.toLocaleString('ru-RU')} правил Suricata (SID ${conv.sidStart.toLocaleString('ru-RU')}+, источник «${conv.sourceName}» выключен${conv.truncated ? '; ЛИМИТ ПРАВИЛ — ЧАСТЬ УСЕЧЕНА' : ''})`,
+      undefined,
+      `DNS source "${src.name}": non-domain lines (${partsEn}) converted to ${conv.rules} Suricata rules (SID ${conv.sidStart}+, source "${conv.sourceName}" disabled${conv.truncated ? '; RULE LIMIT — PART TRUNCATED' : ''})`)
+  }
   return { ok: true, count: diff.total, diff: { added: diff.added, removed: diff.removed } }
 }
 
@@ -604,7 +622,11 @@ async function writeDomainFileStreaming(
  *    не позволит «вечной» сборке заблокировать очередь;
  *  • файл пишется стримингово (без гигантской строки), sha256 на лету;
  *  • timings каждой фазы — в журнал сборки и stdout (диагностика «куда
- *    уходит время» без доступа к БД).
+ *    уходит время» без доступа к БД);
+ *  • по-источниковый ход слияния в журнале: «Слияние 3/46: «источник»…» +
+ *    итоги по каждому (v1.37.0 — ранее слияние показывало одну строку);
+ *  • живость: dnsAliveCheckEnabled — неделигированные (dead) домены
+ *    не попадают в сборку (фильтр по вердиктам DomainAlive с TTL).
  */
 export async function buildDomainList(origin = 'manual'): Promise<DomainBuildResult> {
   if (isDnsBuildActive()) return { ok: false, error: 'DNS-сборка уже выполняется' }
@@ -636,6 +658,17 @@ export async function buildDomainList(origin = 'manual'): Promise<DomainBuildRes
     const disabledDomains = new Set(overrides.filter((o) => !o.enabled).map((o) => o.domain))
     const forcedDomains = new Set(overrides.filter((o) => o.enabled && o.note === 'force').map((o) => o.domain))
 
+    // живость (dnsAliveCheckEnabled): неделигированные домены (DomainAlive.status='dead',
+    // вердикт свежий по TTL dnsAliveTtlDays) не попадают в сборку
+    let deadDomains: Set<string> | undefined
+    if (settings.dnsAliveCheckEnabled === 'true') {
+      const ttlDays = Math.max(1, parseInt(settings.dnsAliveTtlDays || '14', 10) || 14)
+      const freshAfter = new Date(Date.now() - ttlDays * 86_400_000)
+      const dead = await dbHeavy.domainAlive.findMany({ where: { status: 'dead', checkedAt: { gt: freshAfter } }, select: { domain: true } })
+      deadDomains = new Set(dead.map((d) => d.domain))
+      addDnsBuildLog(`Живость: фильтр неделегированных доменов включён — мёртвых вердиктов ${deadDomains.size.toLocaleString('ru-RU')} (TTL ${ttlDays} дн.)`)
+    }
+
     setDnsBuildStage('db-read', 5)
     addDnsBuildLog(`Источников: ${sources.length}, категорий: ${cats.length}${disabledCategories.size ? ` (выключено ${disabledCategories.size})` : ''}`)
 
@@ -653,30 +686,50 @@ export async function buildDomainList(origin = 'manual'): Promise<DomainBuildRes
     }))
 
     setDnsBuildStage('merge', 20)
-    addDnsBuildLog('Слияние источников (приоритет → дубликаты → белый список)…')
+    addDnsBuildLog(`Слияние источников (приоритет → дубликаты → белый список${settings.dnsAliveCheckEnabled === 'true' ? ' → живость' : ''})…`)
     const tMerge = Date.now()
+    // ход слияния по источникам: строка на начало и на конец каждого —
+    // ранее слияние «висело» на одной строке без понимания, чем оно занято
+    const expectedByName = new Map(sources.map((s) => [s.name, s.domainCount]))
+    let lastMilestone = 0
     const { domains, tld, stats } = await mergeDomainSources(inputs, {
       disabledCategories,
       disabledDomains,
       forcedDomains,
+      deadDomains,
       // признак жизни + живой процент по мере обработки записей
       onHeartbeat: (processed) => {
         touchDnsBuild()
         const pct = 20 + Math.min(40, Math.round((40 * processed) / estimated))
         if (statePercent() < pct) setDnsBuildStage('merge', pct)
+        // веха: каждые 1 млн записей — строка со скоростью (видно движение на больших источниках)
+        if (processed - lastMilestone >= 1_000_000) {
+          const rate = Math.round(processed / Math.max(0.001, (Date.now() - tMerge) / 1000) / 1000)
+          addDnsBuildLog(`Слияние: обработано ${processed.toLocaleString('ru-RU')} записей (~${rate} тыс./с)…`)
+          lastMilestone = processed
+        }
+      },
+      onSourceStart: ({ index, total, name }) => {
+        touchDnsBuild()
+        const exp = expectedByName.get(name)
+        addDnsBuildLog(`Слияние ${index}/${total}: «${name}»${exp ? ` (~${exp.toLocaleString('ru-RU')} записей)` : ''}…`)
+      },
+      onSourceEnd: ({ name, elapsedMs, total, kept, droppedDuplicate, droppedAllowed, droppedCategory, droppedOverride, droppedDead }) => {
+        touchDnsBuild()
+        const parts = [`${(elapsedMs / 1000).toFixed(1)} с`, `в сборке ${kept.toLocaleString('ru-RU')}`]
+        if (droppedDuplicate) parts.push(`дубликатов ${droppedDuplicate.toLocaleString('ru-RU')}`)
+        if (droppedAllowed) parts.push(`белым списком ${droppedAllowed.toLocaleString('ru-RU')}`)
+        if (droppedCategory) parts.push(`категориями ${droppedCategory.toLocaleString('ru-RU')}`)
+        if (droppedOverride) parts.push(`вручную ${droppedOverride.toLocaleString('ru-RU')}`)
+        if (droppedDead) parts.push(`мёртвых ${droppedDead.toLocaleString('ru-RU')}`)
+        addDnsBuildLog(`«${name}»: ${total.toLocaleString('ru-RU')} записей — ${parts.join(', ')}`)
       },
     })
     const mergeSec = ((Date.now() - tMerge) / 1000).toFixed(1)
-
-    // по-источниковая сводка в журнал
-    for (const s of sources) {
-      const per = stats.perSource[s.name]
-      if (!per) continue
-      addDnsBuildLog(`«${s.name}»: всего ${per.total.toLocaleString('ru-RU')}, в сборке ${per.kept.toLocaleString('ru-RU')}, дубликатов ${per.droppedDuplicate.toLocaleString('ru-RU')}, белым списком ${per.droppedAllowed.toLocaleString('ru-RU')}`)
-    }
+    const mergeRate = stats.totalInput > 0 ? Math.round(stats.totalInput / Math.max(0.001, (Date.now() - tMerge) / 1000) / 1000) : 0
 
     setDnsBuildStage('render', 70)
-    addDnsBuildLog(`Итог: ${domains.length.toLocaleString('ru-RU')} доменов + ${tld.length} TLD; дубликатов ${stats.duplicateByDomain.toLocaleString('ru-RU')}, исключено белым списком ${stats.allowedRemoved.toLocaleString('ru-RU')}, категориями ${stats.categoryRemoved.toLocaleString('ru-RU')}, вручную ${stats.overrideRemoved.toLocaleString('ru-RU')}; слияние ${mergeSec} с`)
+    addDnsBuildLog(`Итог: ${domains.length.toLocaleString('ru-RU')} доменов + ${tld.length} TLD; дубликатов ${stats.duplicateByDomain.toLocaleString('ru-RU')}, исключено белым списком ${stats.allowedRemoved.toLocaleString('ru-RU')}, категориями ${stats.categoryRemoved.toLocaleString('ru-RU')}, вручную ${stats.overrideRemoved.toLocaleString('ru-RU')}${stats.deadRemoved ? `, живостью ${stats.deadRemoved.toLocaleString('ru-RU')}` : ''}; слияние ${mergeSec} с (~${mergeRate} тыс./с)`)
     await fs.mkdir(DNS_EXPORT_DIR, { recursive: true })
     const filePath = path.join(DNS_EXPORT_DIR, fileName)
     const tWrite = Date.now()
@@ -707,9 +760,9 @@ export async function buildDomainList(origin = 'manual'): Promise<DomainBuildRes
     addDnsBuildLog(`Файл сохранён: ${fileName} (${(sizeBytes / 1024 / 1024).toFixed(1)} МБ, sha256 ${sha256.slice(0, 12)}…), формат ${format}, запись ${writeSec} с`)
     addDnsBuildLog(`Всего: ${((Date.now() - t0) / 1000).toFixed(1)} с`)
     await log('success', 'build',
-      `Сборка списка доменов: ${domains.length.toLocaleString('ru-RU')} доменов, дубликатов ${stats.duplicateByDomain.toLocaleString('ru-RU')}, файл ${fileName} (${(sizeBytes / 1024 / 1024).toFixed(1)} МБ)`,
+      `Сборка списка доменов: ${domains.length.toLocaleString('ru-RU')} доменов, дубликатов ${stats.duplicateByDomain.toLocaleString('ru-RU')}${stats.deadRemoved ? `, живостью исключено ${stats.deadRemoved.toLocaleString('ru-RU')}` : ''}, файл ${fileName} (${(sizeBytes / 1024 / 1024).toFixed(1)} МБ)`,
       undefined,
-      `Domain list build: ${domains.length} domains, ${stats.duplicateByDomain} duplicates, file ${fileName} (${sizeBytes} bytes)`)
+      `Domain list build: ${domains.length} domains, ${stats.duplicateByDomain} duplicates${stats.deadRemoved ? `, ${stats.deadRemoved} dead-filtered` : ''}, file ${fileName} (${sizeBytes} bytes)`)
     finishDnsBuildProgress({ ok: true, total: domains.length + tld.length, fileName })
     return { ok: true, total: domains.length + tld.length, fileName }
   } catch (e) {
@@ -727,25 +780,26 @@ function statePercent(): number {
 }
 
 /**
- * Асинхронный поток записей источника из БД (батчи по 10000, категории дампа
- * фильтруются на лету). v1.35.0: чтение через dbHeavy (отдельная коннекция —
- * UI не мешается), touchDnsBuild на каждом батче — сборка миллионов записей
- * не «зависает» по watchdog, event loop разряжается между батчами.
+ * Асинхронный поток записей источника из БД.
+ * v1.37.0: батчи по 25 000 идут через raw SQL по unique-индексу (sourceId, domain)
+ * (WHERE sourceId = ? AND domain > ? ORDER BY domain) — прямой скан индекса БЕЗ
+ * временной сортировки. Прежний план (orderBy id + cursor id) на каждый батч
+ * строил TEMP B-TREE по всем строкам источника: 2,2 млн строк — десятки секунд
+ * на КАЖДЫЙ из ~220 батчей (замер: 56 с на источник против 3 с; EXPLAIN:
+ * «USE TEMP B-TREE FOR ORDER BY»). Категории дампа фильтруются на лету;
+ * touchDnsBuild на каждом батче — watchdog видит жизнь сборки.
  */
+interface DomainRowRaw { domain: string; mode: string; categories: string }
 async function * domainEntries(sourceId: string, disabledDumpIds: Set<number>): AsyncIterable<[string, 'block' | 'allow']> {
-  const BATCH = 10_000
-  let cursor: number | undefined = undefined
+  const BATCH = 25_000
+  let cursor = ''
   for (;;) {
     touchDnsBuild()
-    const rows = await dbHeavy.domainRecord.findMany({
-      where: { sourceId },
-      select: { id: true, domain: true, mode: true, categories: true },
-      orderBy: { id: 'asc' },
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      take: BATCH,
-    })
+    const rows = await dbHeavy.$queryRawUnsafe<DomainRowRaw[]>(
+      'SELECT domain, mode, categories FROM DomainRecord WHERE sourceId = ? AND domain > ? ORDER BY domain LIMIT ?',
+      sourceId, cursor, BATCH)
     if (rows.length === 0) break
-    cursor = rows[rows.length - 1].id
+    cursor = rows[rows.length - 1].domain
     await yieldToLoop()
     for (const r of rows) {
       if (r.mode === 'allow') { yield [r.domain, 'allow' as const]; continue }

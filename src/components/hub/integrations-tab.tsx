@@ -20,7 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { api, Dashboard } from '@/components/hub/api'
+import { api, Dashboard, RstCheckResult, RstStatus } from '@/components/hub/api'
 import { RstCheckDialog } from '@/components/hub/rst-check-dialog'
 import { useI18n } from '@/lib/i18n'
 import { Save, Send, Rocket, Trash2, Eye, EyeOff, SearchCheck } from 'lucide-react'
@@ -167,6 +167,35 @@ function NotificationsCard({
 
   // RST Cloud: диалог проверки индикаторов (IoC Lookup / Noise Control / Whois)
   const [rstDialogVisible, setRstDialogVisible] = useState(false)
+  // статус интеграции: задан ли ключ, четыре фида Threat Feed (GET /api/rst/status)
+  const [rstStatus, setRstStatus] = useState<RstStatus | null>(null)
+  const [rstKeyChecking, setRstKeyChecking] = useState(false)
+  const [rstKeyResult, setRstKeyResult] = useState<RstCheckResult | null>(null)
+    const loadRstStatus = useCallback(async () => {
+    try {
+      setRstStatus(await api.rstStatus())
+    } catch {
+      setRstStatus(null) // админ-роут: не-администратор получает ошибку — карточка работает без статуса
+    }
+  }, [])
+  useEffect(() => {
+    void loadRstStatus()
+  }, [loadRstStatus])
+  const checkRstKey = async () => {
+    setRstKeyChecking(true)
+    setRstKeyResult(null)
+    try {
+      // сохраняем текущее значение поля (если ключ вводят здесь) и проверяем сохранённый
+      await api.saveSettings(s)
+      const r = await api.rst.check('')
+      setRstKeyResult(r)
+      await loadRstStatus()
+    } catch (e) {
+      setRstKeyResult({ ok: false, error: (e as Error).message })
+    } finally {
+      setRstKeyChecking(false)
+    }
+  }
   const tgOn = (s.notifyTgEnabled ?? 'false') === 'true'
   const goOn = (s.notifyGotifyEnabled ?? 'false') === 'true'
 
@@ -174,9 +203,17 @@ function NotificationsCard({
     <>
     <Card className="bg-card border-border mb-5">
       <CardHeader className="pb-2">
-        <CardTitle className="text-base flex items-center gap-2">
-          <SearchCheck className="h-4 w-4 text-primary" /> {t.settings.rstCardTitle}
-        </CardTitle>
+        <div className="flex flex-wrap items-center gap-3">
+          <CardTitle className="text-base flex items-center gap-2 mr-auto">
+            <SearchCheck className="h-4 w-4 text-primary" /> {t.settings.rstCardTitle}
+          </CardTitle>
+          {/* статус ключа: задан/не задан — без похода во внешний API */}
+          {rstStatus && (
+            <span className={`text-xs rounded-full border px-2 py-0.5 ${rstStatus.keySet ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
+              {rstStatus.keySet ? t.settings.rstKeySet : t.settings.rstKeyMissing}
+            </span>
+          )}
+        </div>
         <CardDescription>{t.settings.rstCardDesc}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -184,7 +221,35 @@ function NotificationsCard({
           <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => setRstDialogVisible(true)}>
             <SearchCheck className="h-4 w-4 mr-1.5" /> {t.settings.rstCardBtn}
           </Button>
+          <Button size="sm" variant="outline" className="border-input text-foreground" disabled={rstKeyChecking} onClick={() => void checkRstKey()}>
+            {rstKeyChecking ? '…' : t.settings.rstKeyBtn}
+          </Button>
+          {rstKeyResult && (
+            <span className={`text-xs whitespace-pre-line ${rstKeyResult.ok && rstKeyResult.valid ? 'text-emerald-700' : 'text-red-600'}`}>
+              {rstKeyResult.ok && rstKeyResult.valid
+                ? t.settings.rstKeyValid + (rstKeyResult.quota?.limit
+                    ? ` — ${tr(t.settings.rstKeyQuota, { used: rstKeyResult.quota.used ?? 0, limit: rstKeyResult.quota.limit ?? 0, remaining: rstKeyResult.quota.remaining ?? 0 })}`
+                    : '')
+                : `${t.settings.rstKeyInvalid}${rstKeyResult.error ? `: ${rstKeyResult.error}` : ''}`}
+            </span>
+          )}
         </div>
+        {/* фиды Threat Feed: видно, где они живут и включены ли */}
+        {rstStatus && (rstStatus.ruleSources.length > 0 || rstStatus.dnsSources.length > 0) ? (
+          <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
+            <p className="text-xs text-muted-foreground">{t.settings.rstFeedsTitle}</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+              {rstStatus.ruleSources.map((src) => (
+                <FeedRow key={src.id} name={src.name} on={src.enabled} ok={src.status === 'ok'} count={src.ruleCount} kind={t.settings.rstFeedsRules} onLabel={t.settings.rstFeedOn} offLabel={t.settings.rstFeedOff} />
+              ))}
+              {rstStatus.dnsSources.map((src) => (
+                <FeedRow key={src.id} name={src.name} on={src.enabled} ok={src.status === 'ok'} count={src.domainCount} kind={t.settings.rstFeedsDomains} onLabel={t.settings.rstFeedOn} offLabel={t.settings.rstFeedOff} />
+              ))}
+            </div>
+          </div>
+        ) : rstStatus ? (
+          <p className="text-xs text-amber-700">{t.settings.rstFeedsNone}</p>
+        ) : null}
         <p className="text-xs text-muted-foreground whitespace-pre-line">{t.settings.rstCardHint}</p>
       </CardContent>
       {rstDialogVisible && <RstCheckDialog onClose={() => setRstDialogVisible(false)} />}
@@ -385,6 +450,30 @@ function Badge2({ ok, on, off }: { ok: boolean; on: string; off: string }) {
     <span className={`text-xs rounded-full border px-2 py-0.5 ${ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-input text-muted-foreground'}`}>
       {ok ? on : off}
     </span>
+  )
+}
+
+/** Строка фида Threat Feed: имя, где живёт (Правила/DNS), вкл/выкл, число записей */
+function FeedRow({ name, on, ok, count, kind, onLabel, offLabel }: {
+  name: string
+  on: boolean
+  ok: boolean
+  count: number
+  kind: string
+  onLabel: string
+  offLabel: string
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <span className={`text-xs rounded-full border px-2 py-0.5 ${on ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-input text-muted-foreground'}`}>
+        {on ? onLabel : offLabel}
+      </span>
+      <span className="text-foreground max-w-72 truncate" title={name}>{name}</span>
+      <span className="text-xs text-muted-foreground">{kind}</span>
+      <span className={`ml-auto text-xs tabular-nums ${ok ? 'text-muted-foreground' : 'text-amber-700'}`}>
+        {count.toLocaleString('ru-RU')}
+      </span>
+    </div>
   )
 }
 

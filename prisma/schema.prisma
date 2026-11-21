@@ -346,3 +346,14 @@ model DomainBuild {
   sizeBytes    Int
   source       String   @default("manual") // manual | cron
 }
+
+// Вердикт проверки «живости» домена (dns-alive.ts): делегирован ли домен.
+// alive — NS/адрес/CNAME отвечают; dead — все запросы NXDOMAIN (домен неделегирован,
+// в сборку не попадает при включённой dnsAliveCheckEnabled); error — SERVFAIL/таймаут,
+// вердикта нет. checkedAt — для TTL (dnsAliveTtlDays): устаревшие записи перепроверяются.
+model DomainAlive {
+  domain    String   @id
+  status    String   // alive | dead | error
+  checkedAt DateTime
+  ns        Int      @default(0) // число NS-записей (делегирование)
+}

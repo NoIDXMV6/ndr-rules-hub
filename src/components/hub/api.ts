@@ -491,7 +491,15 @@ export const api = {
       if (name) fd.append('name', name)
       return fetch('/api/dns/import', { method: 'POST', body: fd }).then((r) => j<ImportDumpResponse>(r))
     },
+    /** Живость доменов: настройки + прогресс скана + счётчики вердиктов */
+    alive: () => fetch('/api/dns/alive', { cache: 'no-store' }).then((r) => j<DomainAliveState>(r)),
+    /** Запуск/отмена проверки живости (только админ) */
+    aliveAction: (action: 'start' | 'cancel') =>
+      fetch('/api/dns/alive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }).then((r) => j<{ ok: boolean; error?: string }>(r)),
   },
+
+  // ── RST Cloud: статус интеграции (карточка «Интеграций») ─────────────────
+  rstStatus: () => fetch('/api/rst/status', { cache: 'no-store' }).then((r) => j<RstStatus>(r)),
 }
 
 // ── Раздел «Обновление Clear NDR» ────────────────────────────────────────────
@@ -876,8 +884,9 @@ export interface DomainBuildItem {
     allowedRemoved?: number
     categoryRemoved?: number
     overrideRemoved?: number
+    deadRemoved?: number
     tldCount?: number
-    perSource?: Record<string, { total: number; kept: number; droppedDuplicate: number; droppedAllowed: number; droppedCategory: number; droppedOverride: number }>
+    perSource?: Record<string, { total: number; kept: number; droppedDuplicate: number; droppedAllowed: number; droppedCategory: number; droppedOverride: number; droppedDead: number }>
     duplicateDomains?: Array<{ domain: string; count: number }>
   }
 }
@@ -893,6 +902,35 @@ export interface DnsBuildProgressInfo {
   error: string | null
   log: Array<{ ts: string; msg: string }>
   result: { ok: boolean; error?: string; total?: number; fileName?: string } | null
+}
+
+/** Живость доменов: GET /api/dns/alive */
+export interface DomainAliveState {
+  settings: { dnsAliveCheckEnabled: string; dnsAliveTtlDays: string; dnsAliveConcurrency: string; dnsAliveTimeoutMs: string }
+  progress: {
+    active: boolean
+    origin: string
+    stage: string
+    percent: number
+    processed: number
+    total: number
+    alive: number
+    dead: number
+    errors: number
+    skippedFresh: number
+    startedAt: string | null
+    finishedAt: string | null
+    error: string | null
+    log: Array<{ ts: string; msg: string }>
+  } | null
+  counts: { alive: number; dead: number; error: number; checked: number }
+}
+
+/** Статус интеграции RST Cloud: GET /api/rst/status */
+export interface RstStatus {
+  keySet: boolean
+  ruleSources: Array<{ id: string; name: string; enabled: boolean; status: string; lastError: string | null; ruleCount: number; category: string }>
+  dnsSources: Array<{ id: string; name: string; enabled: boolean; status: string; lastError: string | null; domainCount: number }>
 }
 
 export interface ImportDumpResponse {

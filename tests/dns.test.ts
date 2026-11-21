@@ -323,3 +323,85 @@ describe('tokens: scope', () => {
     expect(normalizeTokenScope('hack')).toBe('rules')
   })
 })
+
+describe('dns: mergeDomainSources — живость и по-источниковые колбэки', () => {
+  const src = (name: string, priority: number, entries: Array<[string, 'block' | 'allow']>) => ({
+    id: name, name, purpose: 'block' as const, priority, category: 'mixed', enabled: true,
+    entries,
+  })
+
+  it('deadDomains: неделегированные домены не попадают в сборку (deadRemoved/droppedDead)', async () => {
+    const r = await mergeDomainSources([
+      src('A', 10, [['dead1.example', 'block'], ['live1.example', 'block']]),
+      src('B', 20, [['dead1.example', 'block'], ['live2.example', 'block']]),
+    ], { deadDomains: new Set(['dead1.example']) })
+    expect(r.domains.sort()).toEqual(['live1.example', 'live2.example'])
+    // dead-домен встречается в обоих источниках: каждый учёл свой drop (dead-проверка
+    // идёт до дедупликации — как у категорий/override)
+    expect(r.stats.deadRemoved).toBe(2)
+    expect(r.stats.perSource['A'].droppedDead).toBe(1)
+    expect(r.stats.perSource['B'].droppedDead).toBe(1)
+  })
+
+  it('onSourceStart/onSourceEnd: ход слияния по источникам с временем и долями', async () => {
+    const starts: Array<{ index: number; total: number; name: string }> = []
+    const ends: Array<{ name: string; total: number; kept: number; droppedDuplicate: number; elapsedMs: number }> = []
+    const r = await mergeDomainSources([
+      src('A', 10, [['x.example', 'block'], ['dup.example', 'block']]),
+      src('B', 20, [['dup.example', 'block'], ['y.example', 'block']]),
+    ], {
+      onSourceStart: (info) => starts.push({ ...info }),
+      onSourceEnd: (info) => ends.push({ name: info.name, total: info.total, kept: info.kept, droppedDuplicate: info.droppedDuplicate, elapsedMs: info.elapsedMs }),
+    })
+    expect(starts.map((s) => s.name)).toEqual(['A', 'B'])
+    expect(starts[0]).toMatchObject({ index: 1, total: 2 })
+    expect(ends.map((e) => e.name)).toEqual(['A', 'B'])
+    expect(ends[0]).toMatchObject({ total: 2, kept: 2, droppedDuplicate: 0 })
+    expect(ends[1]).toMatchObject({ total: 2, kept: 1, droppedDuplicate: 1 })
+    expect(r.stats.duplicateByDomain).toBe(1)
+  })
+
+  it('heartbeat: обновляется каждые 65 536 записей (гранулярный процент)', async () => {
+    // 70 000 записей — должен случиться минимум один heartbeat (65 536)
+    const many = Array.from({ length: 70_000 }, (_, i) => [`d${i}.example`, 'block'] as [string, 'block' | 'allow'])
+    let heartbeats = 0
+    await mergeDomainSources([src('A', 10, many)], { onHeartbeat: () => heartbeats++ })
+    expect(heartbeats).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('dns: parseDomainList — collectOthers (строки-не-домены)', () => {
+  it('собирает IP/URL/regex строки в others, счётчики честные', () => {
+    const text = [
+      '# comment',
+      'ads.example.com',
+      '93.184.216.34',
+      'http://bad.example.com/x',
+      '^https?://[a-z]+\\.phish\\.example',
+      'не домен и не ip',
+    ].join('\n')
+    const r = parseDomainList(text, 'plain', { collectOthers: true })
+    expect(r.blocked).toEqual(['ads.example.com'])
+    expect(r.skipped).toBe(4)
+    expect(r.othersTotal).toBe(4)
+    expect(r.others).toEqual(['93.184.216.34', 'http://bad.example.com/x', '^https?://[a-z]+\\.phish\\.example', 'не домен и не ip'])
+  })
+  it('без collectOthers — others пустые (совместимость), счётчик skipped прежний', () => {
+    const r = parseDomainList('93.184.216.34\nads.example.com\n', 'plain')
+    expect(r.others).toEqual([])
+    expect(r.othersTotal).toBe(0)
+    expect(r.skipped).toBe(1)
+  })
+  it('maxOthers: cap памяти — лишние строки только считаются', () => {
+    const text = ['93.184.216.34', '93.184.216.35', '93.184.216.36'].join('\n')
+    const r = parseDomainList(text, 'plain', { collectOthers: true, maxOthers: 2 })
+    expect(r.others.length).toBe(2)
+    expect(r.othersTotal).toBe(3)
+  })
+  it('hosts-формат: «0.0.0.0 домен» не попадает в others (IP-часть — не индикатор)', () => {
+    const r = parseDomainList('0.0.0.0 ads.example.com\n127.0.0.1 tracker.example.com\n', 'hosts', { collectOthers: true })
+    expect(r.blocked).toEqual(['ads.example.com', 'tracker.example.com'])
+    expect(r.skipped).toBe(0)
+    expect(r.others).toEqual([])
+  })
+})

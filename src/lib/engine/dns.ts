@@ -26,6 +26,17 @@ export interface ParsedDomainList {
   format: Exclude<DomainListFormat, 'auto'>
   /** строк всего (без комментариев/пустых) */
   total: number
+  /** строки-не-домены (IP/CIDR/URL/regex) — при opts.collectOthers (конвертация в правила NDR) */
+  others: string[]
+  /** всего строк-не-доменов (включая те, что не поместились в others из-за cap) */
+  othersTotal: number
+}
+
+export interface ParseDomainListOptions {
+  /** собирать строки-не-домены (IP/CIDR/URL/regex) в result.others — для конвертации в правила Suricata */
+  collectOthers?: boolean
+  /** предохранитель памяти: максимум собранных строк (остальные только считаются) */
+  maxOthers?: number
 }
 
 const DOMAIN_LINE = /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?)*\.[a-z]{2,24}$/
@@ -60,15 +71,26 @@ export function isDomainLike(d: string): boolean {
  *  • plain   — домен в строке (остальное — пропуск с счётчиком skipped).
  * auto: adguard, если есть ||…^; hosts, если есть 0.0.0.0/127.0.0.1; иначе plain.
  */
-export function parseDomainList(text: string, format: DomainListFormat = 'auto'): ParsedDomainList {
+export function parseDomainList(text: string, format: DomainListFormat = 'auto', opts: ParseDomainListOptions = {}): ParsedDomainList {
   const blocked: string[] = []
   const allowed: string[] = []
   const tld: string[] = []
   const seen = new Set<string>()
+  const others: string[] = []
+  const maxOthers = opts.maxOthers ?? 100_000
+  let othersTotal = 0
   let skipped = 0
   let total = 0
   let agHits = 0
   let hostsHits = 0
+  /** строка не похожа на домен — в others (конвертация) или в skipped */
+  const notDomain = (raw: string): void => {
+    skipped++
+    if (opts.collectOthers) {
+      othersTotal++
+      if (others.length < maxOthers) others.push(raw)
+    }
+  }
 
   for (const rawLine of text.split(/\r?\n/)) {
     let line = rawLine.trim()
@@ -97,7 +119,7 @@ export function parseDomainList(text: string, format: DomainListFormat = 'auto')
         }
         continue
       }
-      if (format === 'adguard') { skipped++; continue }
+      if (format === 'adguard') { notDomain(line); continue }
     }
 
     if (format === 'auto' || format === 'hosts') {
@@ -108,7 +130,7 @@ export function parseDomainList(text: string, format: DomainListFormat = 'auto')
         if (isDomainLike(d) && !seen.has(d)) { seen.add(d); blocked.push(d) }
         continue
       }
-      if (format === 'hosts') { skipped++; continue }
+      if (format === 'hosts') { notDomain(line); continue }
     }
 
     // plain: домен в строке (первое слово; хвосты вида «,5» и порты уже срезаны)
@@ -119,13 +141,14 @@ export function parseDomainList(text: string, format: DomainListFormat = 'auto')
       if (d.includes('.')) blocked.push(d)
       else tld.push(d)
     } else {
-      skipped++
+      // в others идёт ВСЯ строка (regex/URL могут содержать пробелы), не только первое слово
+      notDomain(line)
     }
   }
 
   const fmt: Exclude<DomainListFormat, 'auto'> =
     format !== 'auto' ? format : agHits >= hostsHits && agHits > 0 ? 'adguard' : hostsHits > 0 ? 'hosts' : 'plain'
-  return { blocked, allowed, tld, skipped, format: fmt, total }
+  return { blocked, allowed, tld, skipped, format: fmt, total, others, othersTotal }
 }
 
 // ── Слияние источников ───────────────────────────────────────────────────────
@@ -153,9 +176,11 @@ export interface DomainMergeStats {
   allowedRemoved: number
   categoryRemoved: number
   overrideRemoved: number
+  /** исключено проверкой живости (неделегированные домены, dnsAliveCheckEnabled) */
+  deadRemoved: number
   forcedBlock: number
   tldCount: number
-  perSource: Record<string, { total: number; kept: number; droppedDuplicate: number; droppedAllowed: number; droppedCategory: number; droppedOverride: number }>
+  perSource: Record<string, { total: number; kept: number; droppedDuplicate: number; droppedAllowed: number; droppedCategory: number; droppedOverride: number; droppedDead: number }>
   /** топ дублирующихся доменов (ограничен duplicateAuditCap; полный разбор — поиск по записям в UI) */
   duplicateDomains: Array<{ domain: string; count: number }>
 }
@@ -174,6 +199,25 @@ export interface DomainMergeOptions {
    * по мере обработки записей — сборка из миллионов доменов не считается зависшей
    */
   onHeartbeat?: (processed: number) => void
+  /**
+   * мёртвые (неделегированные) домены из проверки живости (DomainAlive.status='dead'):
+   * блок-запись такого домена не попадает в сборку (учёт — deadRemoved/droppedDead)
+   */
+  deadDomains?: Set<string>
+  /** начало обработки источника (лог сборки: «Слияние 3/46: «источник»…») */
+  onSourceStart?: (info: { index: number; total: number; name: string; expected?: number }) => void
+  /** конец обработки источника — по-источниковая строка журнала с временем и долями */
+  onSourceEnd?: (info: {
+    name: string
+    elapsedMs: number
+    total: number
+    kept: number
+    droppedDuplicate: number
+    droppedAllowed: number
+    droppedCategory: number
+    droppedOverride: number
+    droppedDead: number
+  }) => void
 }
 
 /**
@@ -198,13 +242,14 @@ export async function mergeDomainSources(sources: DomainSourceInput[], opts: Dom
     allowedRemoved: 0,
     categoryRemoved: 0,
     overrideRemoved: 0,
+    deadRemoved: 0,
     forcedBlock: 0,
     tldCount: 0,
     perSource: {},
     duplicateDomains: [],
   }
   for (const s of sources) {
-    stats.perSource[s.name] = { total: 0, kept: 0, droppedDuplicate: 0, droppedAllowed: 0, droppedCategory: 0, droppedOverride: 0 }
+    stats.perSource[s.name] = { total: 0, kept: 0, droppedDuplicate: 0, droppedAllowed: 0, droppedCategory: 0, droppedOverride: 0, droppedDead: 0 }
   }
 
   const allowSet = new Set<string>()
@@ -219,9 +264,12 @@ export async function mergeDomainSources(sources: DomainSourceInput[], opts: Dom
     .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name))
 
   let processedSinceYield = 0
+  let sourceIndex = 0
   for (const s of ordered) {
     const per = stats.perSource[s.name]
     const disabledSrc = s.purpose === 'block' && (opts.disabledCategories?.has(s.category) ?? false)
+    opts.onSourceStart?.({ index: ++sourceIndex, total: ordered.length, name: s.name })
+    const tSource = Date.now()
     for await (const [d, mode] of s.entries) {
       per.total++
       stats.totalInput++
@@ -232,7 +280,9 @@ export async function mergeDomainSources(sources: DomainSourceInput[], opts: Dom
         processedSinceYield = 0
         await yieldToLoop()
       }
-      if ((stats.totalInput & 0x3ffff) === 0) opts.onHeartbeat?.(stats.totalInput)
+      // каждые 65 536 записей — обновление процента (крупный шаг 262 144
+      // на медленном чтении выглядел «висящим» прогрессом на 20%)
+      if ((stats.totalInput & 0xffff) === 0) opts.onHeartbeat?.(stats.totalInput)
       if (mode === 'allow' || s.purpose === 'allow') {
         allowSet.add(d)
         continue
@@ -240,6 +290,7 @@ export async function mergeDomainSources(sources: DomainSourceInput[], opts: Dom
       if (allowSet.has(d) && !opts.forcedDomains?.has(d)) { per.droppedAllowed++; stats.allowedRemoved++; continue }
       if (disabledSrc) { per.droppedCategory++; stats.categoryRemoved++; continue }
       if (opts.disabledDomains?.has(d)) { per.droppedOverride++; stats.overrideRemoved++; continue }
+      if (opts.deadDomains?.has(d)) { per.droppedDead++; stats.deadRemoved++; continue }
       if (d.includes('.')) {
         if (taken.has(d)) {
           per.droppedDuplicate++
@@ -256,6 +307,17 @@ export async function mergeDomainSources(sources: DomainSourceInput[], opts: Dom
       }
       per.kept++
     }
+    opts.onSourceEnd?.({
+      name: s.name,
+      elapsedMs: Date.now() - tSource,
+      total: per.total,
+      kept: per.kept,
+      droppedDuplicate: per.droppedDuplicate,
+      droppedAllowed: per.droppedAllowed,
+      droppedCategory: per.droppedCategory,
+      droppedOverride: per.droppedOverride,
+      droppedDead: per.droppedDead,
+    })
   }
 
   // финальный проход: белый список + принудительные блоки
