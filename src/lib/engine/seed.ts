@@ -633,7 +633,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   clearndrExportUrl: '', // clearndr: базовый URL (например https://clearndr.local); http: полный адрес POST-эндпоинта
   clearndrExportToken: '', // API-токен Scirius (Clear NDR → меню пользователя → Edit Token)
   clearndrExportAuth: 'token', // token | bearer | none — формат заголовка Authorization
-  clearndrExportSource: 'NDR Rules Hub', // имя локального источника в Clear NDR (режим clearndr)
+  clearndrExportSource: 'NDR&DNS Rules HUB', // имя локального источника в Clear NDR (режим clearndr)
   clearndrExportApply: 'true', // вызывать update_push_all после загрузки (режим clearndr)
   clearndrExportLocalPath: '',
   cronEnabled: 'false',

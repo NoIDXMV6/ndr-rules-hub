@@ -261,7 +261,7 @@ def monitor(name, desc, query, threshold, severity, interval=5):
         "name": name,
         "monitor_type": "per_index",
         "enabled": True,
-        "description": desc + " · создано NDR Rules Hub",
+        "description": desc + " · создано NDR&DNS Rules HUB",
         "schedule": {"period": {"interval": interval, "unit": "MINUTES"}},
         "inputs": [{
             "search": {
@@ -336,7 +336,7 @@ etype = f("event_type", "event_type")
 def det(name, desc, features, category=None):
     d = {
         "name": name,
-        "description": desc + " · создано NDR Rules Hub",
+        "description": desc + " · создано NDR&DNS Rules HUB",
         "time_field": ts,
         "indices": ["logstash-*"],
         "feature_attributes": features,

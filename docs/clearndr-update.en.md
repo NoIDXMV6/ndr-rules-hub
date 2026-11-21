@@ -226,7 +226,7 @@ contain potentially secret configuration values).
 ## 5. Post-update verification (manual checklist)
 
 1. ☐ Web UI opens, login works.
-2. ☐ **Sources** — the “NDR Rules Hub” source is there with a fresh last-update date;
+2. ☐ **Sources** — the “NDR&DNS Rules HUB” source is there with a fresh last-update date;
    **Rulesets** — `rules_count` matches expectations.
 3. ☐ **Suricata → Update** — rebuild/apply completes without errors.
 4. ☐ If the Hub is configured (PULL/PUSH, see [clearndr-integration.en.md](clearndr-integration.en.md))
@@ -367,7 +367,7 @@ stamusctl compose up -d                            # opensearch will create fres
 
 ---
 
-## 10. Updating from the NDR Rules Hub web UI
+## 10. Updating from the NDR&DNS Rules HUB web UI
 
 The **“Clear NDR Update”** tab wraps this script in the hub UI: version → release → options →
 run → live log → result checks. The update itself is still performed by `clearndr-update.sh` —

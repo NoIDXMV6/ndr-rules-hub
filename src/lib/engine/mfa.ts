@@ -149,7 +149,7 @@ export function generateTotpSecret(): string {
 
 /** otpauth:// URI для приложения-аутентификатора */
 export function otpauthUri(secretBase32: string, account: string): string {
-  const issuer = 'NDR Rules Hub'
+  const issuer = 'NDR&DNS Rules HUB'
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(account)}?secret=${secretBase32}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`
 }
 

@@ -252,7 +252,7 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
           </div>
           <div>
             <Label className="text-foreground">{t.settings.exportSource}</Label>
-            <Input value={s.clearndrExportSource ?? ''} onChange={(e) => set('clearndrExportSource', e.target.value)} className="bg-card border-input" placeholder="NDR Rules Hub" />
+            <Input value={s.clearndrExportSource ?? ''} onChange={(e) => set('clearndrExportSource', e.target.value)} className="bg-card border-input" placeholder="NDR&DNS Rules HUB" />
           </div>
           <div className="flex items-end pb-1">
             <SwitchRow label={t.settings.exportApply} checked={(s.clearndrExportApply ?? 'true') === 'true'} onChange={(v) => set('clearndrExportApply', String(v))} />

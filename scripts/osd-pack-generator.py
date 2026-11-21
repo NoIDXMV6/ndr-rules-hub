@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ─────────────────────────────────────────────────────────────────────────────
 # osd-pack-generator.py — генератор каталога дашбордов OpenSearch Dashboards
-# для clearNDR (проект NDR Rules Hub).
+# для clearNDR (проект NDR&DNS Rules HUB).
 #
 # Создаёт файлы scripts/osd-packs/<key>.json — наборы saved-объектов
 # (dashboard + visualization) в классическом формате Kibana 7, совместимом с
@@ -109,7 +109,7 @@ def vis(vid, title, vtype, aggs, params=None, filter_field=None, filter_value=No
             "visState": json.dumps({"title": title, "type": vtype, "params": p, "aggs": aggs},
                                    ensure_ascii=False),
             "uiStateJSON": "{}",
-            "description": "Создано NDR Rules Hub (pack)",
+            "description": "Создано NDR&DNS Rules HUB (pack)",
             "kibanaSavedObjectMeta": {
                 "searchSourceJSON": json.dumps(search_src(filter_field, filter_value),
                                                ensure_ascii=False)

@@ -1,11 +1,11 @@
 ' ─────────────────────────────────────────────────────────────────────────────
-' NDR Rules Hub — C4 Component (уровень C3): слой безопасности.
+' NDR&DNS Rules HUB — C4 Component (уровень C3): слой безопасности.
 ' Каждый API-роут проходит шлюз guard(): rate limit → CSRF (origin) → сессия →
 ' роль; тяжёлые операции — через очередь; отдача файлов — через ведёрко канала.
 ' ─────────────────────────────────────────────────────────────────────────────
 @startuml c3-security
 !include <C4/C4_Component>
-title NDR Rules Hub — C3. Компоненты слоя безопасности (src/lib/security)
+title NDR&DNS Rules HUB — C3. Компоненты слоя безопасности (src/lib/security)
 
 Container(api, "API-роуты Next.js", "Route Handlers")
 ContainerDb(db, "SQLite (Prisma)", "Session / DownloadToken / AuthEvent / User / Setting")

@@ -18,7 +18,7 @@ let work: string
 let serve: typeof import('@/lib/engine/serve')
 let db: import('@prisma/client').PrismaClient
 
-const FINAL_RULES = `# NDR Rules Hub test build
+const FINAL_RULES = `# NDR&DNS Rules HUB test build
 alert tcp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"test rule t1"; sid:1000001; rev:1;)
 alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"test rule t2"; sid:1000002; rev:1;)
 `

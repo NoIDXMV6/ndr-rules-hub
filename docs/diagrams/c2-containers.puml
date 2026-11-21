@@ -1,5 +1,5 @@
 ' ─────────────────────────────────────────────────────────────────────────────
-' NDR Rules Hub — C4 Containers (уровень C2): контейнеры внутри системы.
+' NDR&DNS Rules HUB — C4 Containers (уровень C2): контейнеры внутри системы.
 ' Docker-контейнер: Next.js (UI + API), слой безопасности, движок (fetch/build/
 ' export/scheduler + DNS-модуль доменных списков), SQLite (Prisma, WAL),
 ' скрипты обновления Clear NDR/OSD, WireGuard; уведомления Telegram/Gotify;
@@ -7,11 +7,11 @@
 ' ─────────────────────────────────────────────────────────────────────────────
 @startuml c2-containers
 !include <C4/C4_Container>
-title NDR Rules Hub — C2. Контейнеры (один Docker-образ, редакция Enterprise)
+title NDR&DNS Rules HUB — C2. Контейнеры (один Docker-образ, редакция Enterprise)
 
 Person(admin, "Администратор")
 Person(user, "Пользователь")
-System_Boundary(hubbox, "NDR Rules Hub (docker-контейнер, порт 3000)") {
+System_Boundary(hubbox, "NDR&DNS Rules HUB (docker-контейнер, порт 3000)") {
   Container(ui, "Web UI", "Next.js / React / shadcn", "Вкладки по роли: админ — все (вкл. «Пользователи», «DNS списки»), пользователь — Обзор, Источники, Категории, Правила, Сборка и экспорт, Обновление, OSD, Помощь, О системе")
   Container(api, "API-роуты Next.js", "Next.js Route Handlers", "/api/export, /api/build, /api/sources, /api/dns/* (sources/categories/records/build/export), /api/auth/*, /api/tokens/* и др.; guard на каждом: rate limit → CSRF → сессия/роль")
   Container(seclib, "Слой безопасности", "TypeScript, src/lib/security", "guard, ratelimit (скользящее окно), queue (очередь запросов), throttle (ведёрко канала), session, password (scrypt), download-token (scope rules/domains/both), audit (AuthEvent)")

@@ -1,6 +1,6 @@
 # Delivering and auto-updating rules to Clear NDR
 
-Exact instructions for automatic delivery of the final ruleset from **NDR Rules Hub** to **Clear NDR** (Stamus Networks): where to get the API token, which commands to run on the Clear NDR side, how to enable auto-update, and how to verify everything without a production server.
+Exact instructions for automatic delivery of the final ruleset from **NDR&DNS Rules HUB** to **Clear NDR** (Stamus Networks): where to get the API token, which commands to run on the Clear NDR side, how to enable auto-update, and how to verify everything without a production server.
 
 > The reference was verified against the sources of the Clear NDR rules engine — [Scirius](https://github.com/StamusNetworks/scirius) (`rules/rest_api.py`, `suricata/rest_api.py`) and the Stamus Networks documentation (REST API, “Sources & Rulesets”).
 
@@ -21,7 +21,7 @@ Both schemes on one map (solid arrows — file delivery, dashed — schedule tri
 
 ```mermaid
 flowchart TB
-    subgraph HUB["NDR Rules Hub — Next.js :3080"]
+    subgraph HUB["NDR&DNS Rules HUB — Next.js :3080"]
         direction TB
         BLD["Build<br/>clearndr-import.rules + sha256"]
         CRON["Hub cron — Settings → Schedule<br/>fetch → build → export"]
@@ -34,7 +34,7 @@ flowchart TB
 
     subgraph CNDR["Clear NDR (Scirius)"]
         direction TB
-        SRC["Source “NDR Rules Hub”<br/>PUSH: method local · PULL: method http"]
+        SRC["Source “NDR&DNS Rules HUB”<br/>PUSH: method local · PULL: method http"]
         RS["Ruleset + enabled category"]
         UPALL["update_push_all<br/>update → generate → push"]
         SUR["Suricata 7 — ruleset in production"]
@@ -104,7 +104,7 @@ The data flow during a scheduled update:
 sequenceDiagram
     autonumber
     participant C as Clear NDR — celery scheduler<br/>Suricata → Update → Recurrence
-    participant S as Source “NDR Rules Hub”<br/>method http · uri /api/export
+    participant S as Source “NDR&DNS Rules HUB”<br/>method http · uri /api/export
     participant H as Hub — GET /api/export
     participant X as Suricata
 
@@ -152,7 +152,7 @@ HUB_URL=http://<hub-host>:3080/api/export \
 ./clearndr-setup-pull.sh
 ```
 
-The script: verifies the file is reachable on the Hub → creates the “NDR Rules Hub” source (method=`http`, datatype=`sig`) → creates the “NDR Rules Hub” ruleset and attaches the source → enables the source’s category in the ruleset → calls `update_push_all` (rebuild + apply + Suricata restart).
+The script: verifies the file is reachable on the Hub → creates the “NDR&DNS Rules HUB” source (method=`http`, datatype=`sig`) → creates the “NDR&DNS Rules HUB” ruleset and attaches the source → enables the source’s category in the ruleset → calls `update_push_all` (rebuild + apply + Suricata restart).
 
 ### Manual setup (the same steps as curl commands)
 
@@ -162,35 +162,35 @@ export TOK="Authorization: Token <token>"
 
 # 1. Create a URL source pointing at the Hub file
 curl -sk -X POST "$BASE/rest/rules/source/" -H "$TOK" -H 'Content-Type: application/json' -d '{
-  "name": "NDR Rules Hub",
+  "name": "NDR&DNS Rules HUB",
   "method": "http",
   "datatype": "sig",
   "uri": "http://<hub-host>:3080/api/export",
   "authkey": "<serving key, if set — scirius sends it as the Authorization header>",
   "use_sys_proxy": false,
-  "comment": "NDR Rules Hub final ruleset"
+  "comment": "NDR&DNS Rules HUB final ruleset"
 }'
 # → 201 {"pk": 7, ...}   remember the source pk
 
 # 2. Create the ruleset and attach the source (or PATCH an existing one)
 curl -sk -X POST "$BASE/rest/rules/ruleset/" -H "$TOK" -H 'Content-Type: application/json' -d '{
-  "name": "NDR Rules Hub",
-  "descr": "Ruleset from NDR Rules Hub",
+  "name": "NDR&DNS Rules HUB",
+  "descr": "Ruleset from NDR&DNS Rules HUB",
   "sources": [7]
 }'
 # → 201 {"pk": 3, ...}   remember the ruleset pk
 
 # 3. Find the source category (it appears after the first download)
 curl -sk "$BASE/rest/rules/category/?source=7" -H "$TOK"
-# → {"results":[{"pk": 12, "name": "NDR Rules Hub Sigs", ...}]}
+# → {"results":[{"pk": 12, "name": "NDR&DNS Rules HUB Sigs", ...}]}
 
 # 4. Enable the category in the ruleset
 curl -sk -X POST "$BASE/rest/rules/category/12/enable/" -H "$TOK" \
-     -H 'Content-Type: application/json' -d '{"ruleset": 3, "comment": "NDR Rules Hub"}'
+     -H 'Content-Type: application/json' -d '{"ruleset": 3, "comment": "NDR&DNS Rules HUB"}'
 
 # 5. Apply: rebuild the ruleset, push to Suricata, restart the engine
 curl -sk -X POST "$BASE/rest/suricata/update_push_all/" -H "$TOK" \
-     -H 'Content-Type: application/json' -d '{"comment": "NDR Rules Hub"}'
+     -H 'Content-Type: application/json' -d '{"comment": "NDR&DNS Rules HUB"}'
 # → 200 {"update_push_all": "ok"}
 ```
 
@@ -219,7 +219,7 @@ Hub “Settings” → **Schedule (cron)**: enable the scheduler (`0 4 * * *` �
 ### How to verify auto-update works
 
 1. Change the ruleset in the Hub (add/remove a source), press “Full cycle” or wait for the cron.
-2. In Clear NDR: **Sources → NDR Rules Hub** — the date/version is updated; **History** (`/rest/rules/history/`) — `update_source`/`update_push_all` entries from the token user.
+2. In Clear NDR: **Sources → NDR&DNS Rules HUB** — the date/version is updated; **History** (`/rest/rules/history/`) — `update_source`/`update_push_all` entries from the token user.
 3. In Suricata: check the ruleset statistics in the UI (Rulesets → rules_count increased).
 
 ---
@@ -238,13 +238,13 @@ The **“Settings” → Export to Clear NDR** tab:
 | Clear NDR base URL | `https://clearndr.local` (root only, **no** `/rest`, no `/api`) |
 | Authorization type | **Token** (native Clear NDR / Scirius) |
 | API token | the token from section 2 |
-| Source name in Clear NDR | `NDR Rules Hub` (created automatically if missing) |
+| Source name in Clear NDR | `NDR&DNS Rules HUB` (created automatically if missing) |
 | Apply ruleset after upload | enabled → `update_push_all` is called after every upload |
 
 What the Hub does on export (the “Export to Clear NDR” button, the end of “Full cycle”, or the cron step):
 
 ```
-GET  /rest/rules/source/?name=NDR Rules Hub   → find the source (create if missing)
+GET  /rest/rules/source/?name=NDR&DNS Rules HUB   → find the source (create if missing)
 POST /rest/rules/source/<pk>/upload/          → multipart upload of clearndr-import.rules
 POST /rest/suricata/update_push_all/          → rebuild the ruleset and apply it to Suricata
 ```
@@ -258,7 +258,7 @@ sequenceDiagram
     participant A as Clear NDR — Scirius REST API<br/>/rest/… · Authorization: Token
     participant X as Suricata
 
-    H->>A: GET /rest/rules/source/?name=NDR Rules Hub
+    H->>A: GET /rest/rules/source/?name=NDR&DNS Rules HUB
     alt source found
         A-->>H: results → source pk
     else source missing
@@ -279,7 +279,7 @@ sequenceDiagram
     H-->>H: log (scope export) — chain steps
 ```
 
-Every step is visible in the Hub’s “Logs” (scope `export`): `source “NDR Rules Hub” found (pk=7); file clearndr-import.rules uploaded and imported (6.2 MB); ruleset applied to Suricata (update_push_all: ok)`.
+Every step is visible in the Hub’s “Logs” (scope `export`): `source “NDR&DNS Rules HUB” found (pk=7); file clearndr-import.rules uploaded and imported (6.2 MB); ruleset applied to Suricata (update_push_all: ok)`.
 
 ### Auto-update with the push scheme
 
@@ -369,7 +369,7 @@ Base: `https://<clearndr>/rest/` · Auth: `Authorization: Token <token>` · List
 2. ☐ Scheme chosen: PULL (§3) or PUSH (§4).
 3. ☐ PULL: `clearndr-setup-pull.sh` finished 5/5, the source and ruleset exist, the category is enabled.
    PUSH: the Hub is set to “Clear NDR REST” with URL/token, and “Export to Clear NDR” reports “update_push_all: ok”.
-4. ☐ Trial run: a build in the Hub → the file appears in Clear NDR (Sources → NDR Rules Hub → rules_count).
+4. ☐ Trial run: a build in the Hub → the file appears in Clear NDR (Sources → NDR&DNS Rules HUB → rules_count).
 5. ☐ Auto-update enabled: recurrence in Clear NDR (a) and/or a cron `update_push_all` (b) and/or the Hub cron (c).
 6. ☐ After a day: the Hub log (`export`) and Clear NDR History show update records.
 7. ☐ The token is passed via environment variables/settings and never appears in logs or git.

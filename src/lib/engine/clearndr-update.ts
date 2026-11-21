@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Обновление Clear NDR из web-интерфейса NDR Rules Hub.
+// Обновление Clear NDR из web-интерфейса NDR&DNS Rules HUB.
 //
 // Оркестрация разработанного скрипта scripts/clearndr-update.sh (см.
 // docs/clearndr-update.md): определить текущую версию стека, найти последний
@@ -252,7 +252,7 @@ export function buildRunnerScript(cfg: {
 }): string {
   const lines = [
     '#!/bin/sh',
-    `# Раннер обновления Clear NDR, сгенерирован NDR Rules Hub (${new Date().toISOString()})`,
+    `# Раннер обновления Clear NDR, сгенерирован NDR&DNS Rules HUB (${new Date().toISOString()})`,
     // свой PGID: при setsid $$ = лидер группы процессов — по нему выполняется отмена
     `echo $$ > '${cfg.runDir}/pid'`,
     `cd '${cfg.instanceDir}' || exit 90`,

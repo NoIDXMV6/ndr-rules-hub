@@ -22,7 +22,7 @@ export interface NotifySettings {
   // Gotify
   notifyGotifyEnabled: boolean
   gotifyUrl: string
-  gotifyToken: string // app token (приложение «NDR Rules Hub»)
+  gotifyToken: string // app token (приложение «NDR&DNS Rules HUB»)
   gotifyPriority: number // 0..10
   // какие события слать
   notifyOnPipeline: boolean
@@ -192,7 +192,7 @@ export async function notifyEvent(scope: NotifyScope, level: 'success' | 'error'
   const text = `${LEVEL_ICON[level] ?? ''} ${scopeRu}: ${title}\n${message}`.trim()
   const out: SendResult[] = []
   if (s.notifyTgEnabled) out.push(await sendTelegram(text))
-  if (s.notifyGotifyEnabled) out.push(await sendGotify(`NDR Rules Hub — ${scopeRu}`, text))
+  if (s.notifyGotifyEnabled) out.push(await sendGotify(`NDR&DNS Rules HUB — ${scopeRu}`, text))
   return out.filter((r) => !r.ok) // возвращаем только неудачи — для журнала
 }
 
@@ -213,6 +213,6 @@ export type TestChannelCfg = {
 /** Проверка канала кнопкой «Тест» в настройках (cfg перекрывает значения из БД) */
 export async function sendTest(channel: 'telegram' | 'gotify', cfg?: TestChannelCfg): Promise<SendResult> {
   const now = new Date().toLocaleString('ru-RU')
-  const text = `Тест уведомления NDR Rules Hub (${now})\nЕсли вы видите это сообщение — канал настроен верно.`
-  return channel === 'telegram' ? sendTelegram(text, cfg) : sendGotify('NDR Rules Hub — тест', text, cfg)
+  const text = `Тест уведомления NDR&DNS Rules HUB (${now})\nЕсли вы видите это сообщение — канал настроен верно.`
+  return channel === 'telegram' ? sendTelegram(text, cfg) : sendGotify('NDR&DNS Rules HUB — тест', text, cfg)
 }

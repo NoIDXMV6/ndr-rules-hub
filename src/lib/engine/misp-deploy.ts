@@ -131,7 +131,7 @@ export interface MispEnvOpts {
 
 export function mispEnvFile(o: MispEnvOpts): string {
   return [
-    '# Окружение MISP — сгенерировано NDR Rules Hub автоматически.',
+    '# Окружение MISP — сгенерировано NDR&DNS Rules HUB автоматически.',
     '# Измените и перезапустите стек: docker compose -f docker-compose.misp.yml -p ndr-misp --env-file .env up -d',
     '# ВНИМАНИЕ: ADMIN_KEY применяетcя при ПЕРВОЙ инициализации БД — после этого',
     '# ключ хранится в самой MISP и правится только в её web-интерфейсе.',
@@ -142,7 +142,7 @@ export function mispEnvFile(o: MispEnvOpts): string {
     `ADMIN_EMAIL=${o.adminEmail}`,
     `ADMIN_PASSWORD=${o.adminPassword}`,
     `ADMIN_KEY=${o.adminKey}`,
-    `ADMIN_ORG=NDR Rules Hub`,
+    `ADMIN_ORG=NDR&DNS Rules HUB`,
     '',
     `MYSQL_USER=misp`,
     `MYSQL_PASSWORD=${o.dbPassword}`,
@@ -162,7 +162,7 @@ export function mispEnvFile(o: MispEnvOpts): string {
  *  /app/data/misp/... на хосте не существует. Именованные тома управляются
  *  демоном и переживают пересоздание. */
 export function mispComposeFile(o: MispEnvOpts): string {
-  return `# MISP — threat intelligence platform для NDR Rules Hub (сгенерировано автоматически)
+  return `# MISP — threat intelligence platform для NDR&DNS Rules HUB (сгенерировано автоматически)
 # Запуск: docker compose -f docker-compose.misp.yml -p ndr-misp --env-file .env up -d
 # Документация: https://github.com/MISP/misp-docker · https://www.misp-project.org
 services:
@@ -308,7 +308,7 @@ ${url ? `Адрес из контейнера хаба: ${url}\n` : ''}
 - Web UI: \`http://<адрес-сервера>:${o.port}\` (BASE_URL=${o.baseUrl} — при другом адресе
   поправьте \`.env\` и перезапустите стек).
 - Логин: **${o.adminEmail}** / пароль: \`см. .env → ADMIN_PASSWORD\` (сгенерирован, смените после входа).
-- API-ключ администратора (ADMIN_KEY) уже сохранён в NDR Rules Hub
+- API-ключ администратора (ADMIN_KEY) уже сохранён в NDR&DNS Rules HUB
   («Интеграции → MISP»), отдельного копирования не требуется.
 
 ## 2. Требования
@@ -321,7 +321,7 @@ ${url ? `Адрес из контейнера хаба: ${url}\n` : ''}
 - Полное удаление С данными: \`docker compose -f docker-compose.misp.yml -p ndr-misp --env-file .env down -v\`
 - Удаление контейнеров с сохранением данных: то же без \`-v\` (тома mysql_data и др. остаются).
 
-## 4. Использование с NDR Rules Hub
+## 4. Использование с NDR&DNS Rules HUB
 - **Источники-фиды**: каталог уже содержит источник «MISP Feed — Events»
   (restSearch JSON) — включите его, ключ берётся тот же (Настройки → Токены источников → MISP API Key).
 - **Коннекторы событий**: «Интеграции → MISP» — Clear NDR/Wazuh/Zabbix/MikroTik/webhook

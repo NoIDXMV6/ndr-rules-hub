@@ -19,7 +19,7 @@ let db: import('@prisma/client').PrismaClient
 let dl: typeof import('@/lib/security/download-token')
 let rate: typeof import('@/lib/security/ratelimit')
 
-const FINAL_RULES = `# NDR Rules Hub test build
+const FINAL_RULES = `# NDR&DNS Rules HUB test build
 alert tcp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"test rule t1"; sid:1000001; rev:1;)
 `
 

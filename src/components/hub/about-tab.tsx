@@ -60,7 +60,7 @@ function sections(lang: Lang, techNote: string): AboutSection[] {
         <div className="space-y-3 text-sm leading-relaxed">
           <div className="font-medium text-foreground">{ru ? 'Кожеватов Павел Русланович' : 'Pavel R. Kozhevatov'}</div>
           <ul className="space-y-1">
-            <Li>{ru ? 'автор и разработчик NDR Rules Hub;' : 'author and developer of NDR Rules Hub;'}</Li>
+            <Li>{ru ? 'автор и разработчик NDR&DNS Rules HUB;' : 'author and developer of NDR&DNS Rules HUB;'}</Li>
             <Li>
               {ru
                 ? <>старший преподаватель кафедры математического обеспечения и стандартизации информационных технологий (МОСИТ) <strong>РТУ МИРЭА</strong>; ведёт дисциплины «Сети ЭВМ и ТК» и «Информационная безопасность сетей»; научно-педагогический стаж — 15 лет, по образованию — математик;</>
@@ -112,8 +112,8 @@ function sections(lang: Lang, techNote: string): AboutSection[] {
             <div className="font-medium text-foreground flex items-center gap-1.5"><Heart className="h-4 w-4 text-red-500" /> Clear NDR — Stamus Networks</div>
             <p className="text-muted-foreground">
               {ru
-                ? 'NDR Rules Hub создан как вспомогательный инструмент для Clear NDR — открытой платформы сетевого обнаружения и реагирования (NDR) на базе Suricata от Stamus Networks. Спасибо команде за открытый код, документацию и сообщество.'
-                : 'NDR Rules Hub was created as a companion tool for Clear NDR — an open Suricata-based network detection and response (NDR) platform by Stamus Networks. Many thanks to the team for the open code, documentation and community.'}
+                ? 'NDR&DNS Rules HUB создан как вспомогательный инструмент для Clear NDR — открытой платформы сетевого обнаружения и реагирования (NDR) на базе Suricata от Stamus Networks. Спасибо команде за открытый код, документацию и сообщество.'
+                : 'NDR&DNS Rules HUB was created as a companion tool for Clear NDR — an open Suricata-based network detection and response (NDR) platform by Stamus Networks. Many thanks to the team for the open code, documentation and community.'}
             </p>
             <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
               <A href="https://www.stamus-networks.com">stamus-networks.com</A>
@@ -156,7 +156,7 @@ function sections(lang: Lang, techNote: string): AboutSection[] {
       body: (
         <div className="space-y-3 text-sm leading-relaxed">
           <div className="flex items-center gap-5 flex-wrap">
-            <img src="/logo.svg" alt="NDR Rules Hub logo" className="h-28 w-28 rounded-2xl border border-border" />
+            <img src="/logo.svg" alt="NDR&DNS Rules HUB logo" className="h-28 w-28 rounded-2xl border border-border" />
             <div className="max-w-lg">
               <p>
                 <Rich
@@ -186,9 +186,9 @@ export function AboutTab() {
       <Card className="bg-card border-border">
         <CardHeader className="pb-2">
           <div className="flex items-center gap-4">
-            <img src="/logo.svg" alt="NDR Rules Hub logo" className="h-16 w-16 rounded-xl border border-border" />
+            <img src="/logo.svg" alt="NDR&DNS Rules HUB logo" className="h-16 w-16 rounded-xl border border-border" />
             <div>
-              <CardTitle className="text-lg">NDR Rules Hub</CardTitle>
+              <CardTitle className="text-lg">NDR&DNS Rules HUB</CardTitle>
               <CardDescription className="mt-0.5">
                 {lang === 'ru'
                   ? 'Полный цикл работы с правилами Snort/Suricata: источники, категории, сборка и доставка наборов в Clear NDR'

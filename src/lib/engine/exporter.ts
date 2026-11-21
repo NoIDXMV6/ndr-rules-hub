@@ -112,7 +112,7 @@ async function pushToClearndrRest(
   cfg: ClearndrExportCfg
 ): Promise<ExportResult> {
   const base = (cfg.url ?? '').replace(/\/+$/, '')
-  const sourceName = cfg.sourceName?.trim() || 'NDR Rules Hub'
+  const sourceName = cfg.sourceName?.trim() || 'NDR&DNS Rules HUB'
   const headers = { ...authHeaders(cfg), 'Content-Type': 'application/json', Accept: 'application/json' }
   const steps: string[] = []
 
@@ -148,7 +148,7 @@ async function pushToClearndrRest(
         method: 'local',
         datatype: 'sig',
         use_sys_proxy: false,
-        comment: 'создан автоматически NDR Rules Hub',
+        comment: 'создан автоматически NDR&DNS Rules HUB',
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     })
@@ -163,7 +163,7 @@ async function pushToClearndrRest(
   // ── Шаг 2: multipart-загрузка файла (upload импортирует правила сразу) ────
   const form = new FormData()
   form.append('file', new Blob([new Uint8Array(buf)]), path.basename(filePath))
-  form.append('comment', `NDR Rules Hub: ${path.basename(filePath)}`)
+  form.append('comment', `NDR&DNS Rules HUB: ${path.basename(filePath)}`)
   const uploadRes = await fetch(`${base}/rest/rules/source/${srcId}/upload/`, {
     method: 'POST',
     headers: authHeaders(cfg), // multipart — без Content-Type: application/json
@@ -184,7 +184,7 @@ async function pushToClearndrRest(
     const applyRes = await fetch(`${base}/rest/suricata/update_push_all/`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ comment: 'NDR Rules Hub: применить обновлённый набор' }),
+      body: JSON.stringify({ comment: 'NDR&DNS Rules HUB: применить обновлённый набор' }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     })
     if (!applyRes.ok) {

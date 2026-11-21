@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 # clearndr-osd-dashboard-import.sh — импорт каталога дополнительных дашбордов
-# NDR Rules Hub в OpenSearch Dashboards (.kibana) стеков clearNDR.
+# NDR&DNS Rules HUB в OpenSearch Dashboards (.kibana) стеков clearNDR.
 #
 # Пакеты (scripts/osd-packs/*.json, генератор — osd-pack-generator.py):
 #   traffic | http | dns | tls | alerts | files

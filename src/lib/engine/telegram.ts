@@ -95,7 +95,7 @@ export async function bindAndDeliver(from?: { id?: number | string; username?: s
   if (!uname) return 'В вашем Telegram нет username — задайте его в настройках Telegram и отправьте /start ещё раз.'
   const user = await db.user.findFirst({ where: { telegramUsername: uname } })
   if (!user) {
-    return `@${uname} не привязан ни к одной учётной записи NDR Rules Hub. Укажите этот username при регистрации или в личном кабинете («Аккаунт»), затем отправьте /start ещё раз.`
+    return `@${uname} не привязан ни к одной учётной записи NDR&DNS Rules HUB. Укажите этот username при регистрации или в личном кабинете («Аккаунт»), затем отправьте /start ещё раз.`
   }
   if (user.telegramChatId !== chatStr) {
     await db.user.update({ where: { id: user.id }, data: { telegramChatId: chatStr } })
@@ -104,10 +104,10 @@ export async function bindAndDeliver(from?: { id?: number | string; username?: s
   // отложенный код верификации/входа: если пользователь получил код до привязки чата
   if (user.verificationCode && user.verificationExpiresAt && user.verificationExpiresAt.getTime() > Date.now()) {
     const s = await tgSettings()
-    if (s) await tgMethod(s, 'sendMessage', { chat_id: chatStr, text: `Код подтверждения NDR Rules Hub: ${user.verificationCode}\n(действует 5 минут)` })
+    if (s) await tgMethod(s, 'sendMessage', { chat_id: chatStr, text: `Код подтверждения NDR&DNS Rules HUB: ${user.verificationCode}\n(действует 5 минут)` })
     return 'Чат привязан — код подтверждения отправлен выше.'
   }
-  return 'Чат привязан к NDR Rules Hub. Коды подтверждения будут приходить сюда.'
+  return 'Чат привязан к NDR&DNS Rules HUB. Коды подтверждения будут приходить сюда.'
 }
 
 // ── Поллер ───────────────────────────────────────────────────────────────────
@@ -210,7 +210,7 @@ export async function checkReleaseBroadcast(force = false): Promise<{ sent: bool
   if (!s) return { sent: false, delivered: 0, failed: 0, skipped: 'no-bot-token' }
   const notes = (await db.setting.findUnique({ where: { key: 'releaseNotes' } }).catch(() => null))?.value ?? ''
   const text = [
-    `NDR Rules Hub обновлён до версии ${APP_VERSION}.`,
+    `NDR&DNS Rules HUB обновлён до версии ${APP_VERSION}.`,
     notes ? `\nЧто нового:\n${notes}` : '',
     `\nИзменения и релизы: ${RELEASES_URL}`,
   ].filter(Boolean).join('\n')

@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="public/logo.svg" width="80" alt="NDR Rules Hub logo">
+  <img src="public/logo.svg" width="80" alt="NDR&DNS Rules HUB logo">
 </p>
 
-# NDR Rules Hub Architecture
+# NDR&DNS Rules HUB Architecture
 
 **Русская версия → [architecture.md](architecture.md)** · README: [README.md](README.md) · [README.en.md](README.en.md)
 
@@ -14,7 +14,7 @@ integration, the VPN layer, the UI and localization.
 
 ## 1. Overview and purpose
 
-**NDR Rules Hub** is a companion service for the **Clear NDR** NDR platform (Stamus Networks,
+**NDR&DNS Rules HUB** is a companion service for the **Clear NDR** NDR platform (Stamus Networks,
 Suricata-based). Its mission: automate the full cycle of working with Snort/Suricata rulesets —
 from sources to a final file ready for import into Clear NDR.
 
@@ -566,7 +566,7 @@ shared directory. The step-by-step guide with commands, the token and a deployme
 
 ```mermaid
 flowchart TB
-    subgraph HUB["NDR Rules Hub — Next.js :3080"]
+    subgraph HUB["NDR&DNS Rules HUB — Next.js :3080"]
         direction TB
         BLD["Build<br/>clearndr-import.rules + sha256"]
         CRON["Hub cron — Settings → Schedule<br/>fetch → build → export"]
@@ -579,7 +579,7 @@ flowchart TB
 
     subgraph CNDR["Clear NDR (Scirius)"]
         direction TB
-        SRC["Source “NDR Rules Hub”<br/>PUSH: method local · PULL: method http"]
+        SRC["Source “NDR&DNS Rules HUB”<br/>PUSH: method local · PULL: method http"]
         RS["Ruleset + enabled category"]
         UPALL["update_push_all<br/>update → generate → push"]
         SUR["Suricata 7 — ruleset in production"]
@@ -622,7 +622,7 @@ sequenceDiagram
     participant A as Clear NDR — Scirius REST API<br/>/rest/… · Authorization: Token
     participant X as Suricata
 
-    H->>A: GET /rest/rules/source/?name=NDR Rules Hub
+    H->>A: GET /rest/rules/source/?name=NDR&DNS Rules HUB
     alt source found
         A-->>H: results → source pk
     else source missing
@@ -645,7 +645,7 @@ sequenceDiagram
 
 Settings — the “Settings → Export to Clear NDR” tab: base URL (root only, no `/rest` — it is
 appended automatically), authorization type, token (a password field), source name
-(“NDR Rules Hub” by default), the “Apply ruleset after upload” flag. Errors come with hints:
+(“NDR&DNS Rules HUB” by default), the “Apply ruleset after upload” flag. Errors come with hints:
 401/403 — “token rejected… Edit Token → Regenerate”; “conflicting SID” — “enable deduplication
 in the build settings”. Every chain step is visible in the Logs (scope `export`).
 
@@ -661,7 +661,7 @@ create the source → ruleset → enable the category → `update_push_all`.
 sequenceDiagram
     autonumber
     participant C as Clear NDR — celery scheduler<br/>Suricata → Update → Recurrence
-    participant S as Source “NDR Rules Hub”<br/>method http · uri /api/export
+    participant S as Source “NDR&DNS Rules HUB”<br/>method http · uri /api/export
     participant H as Hub — GET /api/export
     participant X as Suricata
 

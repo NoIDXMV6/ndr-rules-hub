@@ -196,9 +196,9 @@ export default function Home() {
         <header className="border-b border-border bg-card/95 backdrop-blur">
           <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2.5">
-              <img src="/logo.svg" alt="NDR Rules Hub logo" className="h-9 w-9 rounded-lg border border-primary/30" />
+              <img src="/logo.svg" alt="NDR&DNS Rules HUB logo" className="h-9 w-9 rounded-lg border border-primary/30" />
               <div>
-                <h1 className="text-lg font-bold leading-tight">NDR Rules Hub</h1>
+                <h1 className="text-lg font-bold leading-tight">NDR&DNS Rules HUB</h1>
                 <p className="text-xs text-muted-foreground leading-tight">{t.header.subtitle}</p>
               </div>
               {/* редакция приходит от API (/api/auth/me): клиентский process.env.NDR_EDITION не виден в браузере */}

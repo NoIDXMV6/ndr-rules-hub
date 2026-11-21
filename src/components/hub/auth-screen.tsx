@@ -26,9 +26,9 @@ export function AuthScreen({ me, onAuthed }: { me: Me; onAuthed: () => void }) {
     <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground px-4">
       <div className="w-full max-w-md space-y-4">
         <div className="flex items-center gap-2.5 justify-center">
-          <img src="/logo.svg" alt="NDR Rules Hub logo" className="h-10 w-10 rounded-lg border border-primary/30" />
+          <img src="/logo.svg" alt="NDR&DNS Rules HUB logo" className="h-10 w-10 rounded-lg border border-primary/30" />
           <div>
-            <h1 className="text-lg font-bold leading-tight">NDR Rules Hub</h1>
+            <h1 className="text-lg font-bold leading-tight">NDR&DNS Rules HUB</h1>
             <p className="text-xs text-muted-foreground leading-tight">{t.auth.subtitle}</p>
           </div>
         </div>

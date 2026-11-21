@@ -1,4 +1,4 @@
-# NDR Rules Hub — документация разработчика
+# NDR&DNS Rules HUB — документация разработчика
 
 > Сборка, архитектура, модель безопасности, редакции, тесты и релизный процесс.
 > Для интеграции с Clear NDR см. [clearndr-integration.md](clearndr-integration.md);

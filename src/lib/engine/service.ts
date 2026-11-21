@@ -876,7 +876,7 @@ async function buildPerSourceArchive(
       files.push({ name: f.name, rules: f.rules, sha256: createHash('sha256').update(f.content).digest('hex') })
     }
     const readme = [
-      '# NDR Rules Hub — итоговый набор, разбитый по источникам',
+      '# NDR&DNS Rules HUB — итоговый набор, разбитый по источникам',
       `# Сгенерировано: ${new Date().toISOString()}`,
       `# Всего правил: ${rules.length}; файлов: ${perSource.length}`,
       `# Импорт в Clear NDR: Sources → ваш источник (datatype "sigs") → Upload → этот архив;`,

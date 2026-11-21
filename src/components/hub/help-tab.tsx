@@ -57,7 +57,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
     {
       trigger: 'Назначение: цели и задачи',
       paragraphs: [
-        '**NDR Rules Hub** — вспомогательный сервис для системы **Clear NDR** (Stamus Networks): он автоматизирует полный цикл работы с наборами правил Snort/Suricata, которые питают сетевое обнаружение.',
+        '**NDR&DNS Rules HUB** — вспомогательный сервис для системы **Clear NDR** (Stamus Networks): он автоматизирует полный цикл работы с наборами правил Snort/Suricata, которые питают сетевое обнаружение.',
       ],
       items: [
         'собрать в одном месте проверенные источники правил — в каталоге уже 45 преднастроенных наборов, от официальных правил Talos до открытых фидов и Zeek intel/MISP-интеграций (включая Open NRD от Stamus Networks), плюс свои источники по URL/архиву/локальному файлу;',
@@ -145,7 +145,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       steps: [
         {
           title: '1. PUSH — настройка в Hub (5 полей)',
-          text: 'Вкладка «Настройки» → «Экспорт в Clear NDR»: режим **Clear NDR REST**, базовый URL (только корень вида `https://clearndr.local`, без `/rest` — допишется сам), тип авторизации **Token**, API-токен, имя источника («NDR Rules Hub»), флаг **«Применять набор после загрузки»**. Нажмите «Экспортировать в Clear NDR». Со стороны Clear NDR не нужно ничего — источник создаётся автоматически при первой отправке.',
+          text: 'Вкладка «Настройки» → «Экспорт в Clear NDR»: режим **Clear NDR REST**, базовый URL (только корень вида `https://clearndr.local`, без `/rest` — допишется сам), тип авторизации **Token**, API-токен, имя источника («NDR&DNS Rules HUB»), флаг **«Применять набор после загрузки»**. Нажмите «Экспортировать в Clear NDR». Со стороны Clear NDR не нужно ничего — источник создаётся автоматически при первой отправке.',
         },
         {
           title: '2. PUSH — автообновление',
@@ -153,7 +153,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         },
         {
           title: '3. PULL — настройка в Clear NDR (скрипт)',
-          text: 'Идемпотентный скрипт `scripts/clearndr-setup-pull.sh` (переменные `CLEAR_NDR_URL`, `CLEAR_NDR_TOKEN`, `HUB_URL=http://<hub>:3080/api/export`, `HUB_TOKEN` — ключ отдачи, если задан) создаст источник-URL, набор «NDR Rules Hub», включит категорию и применит набор — 5 шагов с проверками. Готовые URL и генерация ключа — на вкладке «Сборка» → «Отдача по URL». Те же шаги вручную: Sources → Add source (Source type: URL, Data type: «Individual Signatures file» для файла или «Signatures archive» для `?archive=1`) → Rulesets → Add ruleset → отметить категорию → Suricata → Update.',
+          text: 'Идемпотентный скрипт `scripts/clearndr-setup-pull.sh` (переменные `CLEAR_NDR_URL`, `CLEAR_NDR_TOKEN`, `HUB_URL=http://<hub>:3080/api/export`, `HUB_TOKEN` — ключ отдачи, если задан) создаст источник-URL, набор «NDR&DNS Rules HUB», включит категорию и применит набор — 5 шагов с проверками. Готовые URL и генерация ключа — на вкладке «Сборка» → «Отдача по URL». Те же шаги вручную: Sources → Add source (Source type: URL, Data type: «Individual Signatures file» для файла или «Signatures archive» для `?archive=1`) → Rulesets → Add ruleset → отметить категорию → Suricata → Update.',
         },
         {
           title: '4. PULL — автообновление',
@@ -390,7 +390,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
     {
       trigger: 'Purpose: goals and objectives',
       paragraphs: [
-        '**NDR Rules Hub** is a companion service for the **Clear NDR** system (Stamus Networks): it automates the full cycle of working with Snort/Suricata rulesets that feed network detection.',
+        '**NDR&DNS Rules HUB** is a companion service for the **Clear NDR** system (Stamus Networks): it automates the full cycle of working with Snort/Suricata rulesets that feed network detection.',
       ],
       items: [
         'bring proven rule sources together in one place — the catalog already ships 45 preconfigured sets, from official Talos rules to open feeds and Zeek intel/MISP integrations (including Open NRD by Stamus Networks), plus your own sources by URL/archive/local file;',
@@ -478,7 +478,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
       steps: [
         {
           title: '1. PUSH — configure the Hub (5 fields)',
-          text: 'The “Settings” tab → “Export to Clear NDR”: mode **Clear NDR REST**, base URL (the root only, e.g. `https://clearndr.local`, without `/rest` — it is appended automatically), auth type **Token**, the API token, the source name (“NDR Rules Hub”), and the **“Apply ruleset after upload”** flag. Click “Export to Clear NDR”. Nothing is needed on the Clear NDR side — the source is created automatically on the first push.',
+          text: 'The “Settings” tab → “Export to Clear NDR”: mode **Clear NDR REST**, base URL (the root only, e.g. `https://clearndr.local`, without `/rest` — it is appended automatically), auth type **Token**, the API token, the source name (“NDR&DNS Rules HUB”), and the **“Apply ruleset after upload”** flag. Click “Export to Clear NDR”. Nothing is needed on the Clear NDR side — the source is created automatically on the first push.',
         },
         {
           title: '2. PUSH — auto-update',
@@ -486,7 +486,7 @@ const HELP_SECTIONS: Record<Lang, HelpSection[]> = {
         },
         {
           title: '3. PULL — configure Clear NDR (script)',
-          text: 'The idempotent `scripts/clearndr-setup-pull.sh` (variables `CLEAR_NDR_URL`, `CLEAR_NDR_TOKEN`, `HUB_URL=http://<hub>:3080/api/export`) creates the URL source, the “NDR Rules Hub” ruleset, enables the category and applies the ruleset — 5 checked steps. The same manually: Sources → Add source (Source type: URL, Data type: “Individual Signatures file”) → Rulesets → Add ruleset → tick the category → Suricata → Update.',
+          text: 'The idempotent `scripts/clearndr-setup-pull.sh` (variables `CLEAR_NDR_URL`, `CLEAR_NDR_TOKEN`, `HUB_URL=http://<hub>:3080/api/export`) creates the URL source, the “NDR&DNS Rules HUB” ruleset, enables the category and applies the ruleset — 5 checked steps. The same manually: Sources → Add source (Source type: URL, Data type: “Individual Signatures file”) → Rulesets → Add ruleset → tick the category → Suricata → Update.',
         },
         {
           title: '4. PULL — auto-update',

@@ -129,7 +129,7 @@ describe('telegram: привязка чата по /start', () => {
     expect(reply).toContain('Чат привязан')
     const u = await db.user.findUnique({ where: { id: user.id } })
     expect(u!.telegramChatId).toBe('777')
-    expect(tgCalls.find((c) => String(c.body.text ?? '').includes('Код подтверждения NDR Rules Hub'))).toBeUndefined()
+    expect(tgCalls.find((c) => String(c.body.text ?? '').includes('Код подтверждения NDR&DNS Rules HUB'))).toBeUndefined()
   })
 })
 
@@ -148,7 +148,7 @@ describe('telegram: force-рассылка после привязки', () => {
     const r = await tg.checkReleaseBroadcast(true)
     expect(r.delivered).toBe(1)
     const sent = tgCalls.find((c) => c.url.includes('/sendMessage'))
-    expect(String(sent!.body.text)).toContain('NDR Rules Hub обновлён до версии')
+    expect(String(sent!.body.text)).toContain('NDR&DNS Rules HUB обновлён до версии')
     expect(String(sent!.body.text)).toContain('ТГ')
   })
 })

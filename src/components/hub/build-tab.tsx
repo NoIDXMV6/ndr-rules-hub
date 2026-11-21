@@ -192,11 +192,11 @@ export function BuildTab({ data, onChange }: { data: Dashboard | null; onChange:
                     {Object.entries(b.stats.perSource ?? {}).map(([name, st]) => (
                       <tr key={name} className="border-t border-border/60 text-foreground">
                         <td className="px-3 py-1.5 max-w-72 truncate">{name}</td>
-                        <td className="px-3 py-1.5 tabular-nums">{st.total.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-emerald-700">{st.kept.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedSid.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedContent.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-red-600">{st.droppedCompat.toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums">{(st.total ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-emerald-700">{(st.kept ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{(st.droppedSid ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{(st.droppedContent ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-red-600">{(st.droppedCompat ?? 0).toLocaleString(loc)}</td>
                       </tr>
                     ))}
                   </tbody>

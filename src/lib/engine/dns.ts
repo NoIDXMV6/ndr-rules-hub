@@ -459,7 +459,7 @@ export function domainExportHeaderLines(format: DomainExportFormat, meta: Domain
   const lines: string[] = []
   lines.push('# ─────────────────────────────────────────────────────────────')
   const title = format === 'hosts' ? 'Blocked domains (hosts format)' : format === 'dnsmasq' ? 'Blocked domains (dnsmasq format)' : format === 'adblock' ? 'Blocked domains (AdGuard syntax)' : 'Blocked domains'
-  lines.push(`# ${title} — NDR Rules Hub / DNS filtering`)
+  lines.push(`# ${title} — NDR&DNS Rules HUB / DNS filtering`)
   lines.push(`# Сгенерировано: ${gen} / Generated: ${gen}`)
   if (meta.sources?.length) lines.push(`# Источники: ${meta.sources.join(', ')}`)
   if (meta.stats) {

@@ -189,7 +189,7 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
             <div className="space-y-3">
               <div className="flex flex-wrap gap-2 text-sm">
                 <Badge variant="outline" className="border-input text-foreground">{fmtTime(build.createdAt, lang)}</Badge>
-                <Badge variant="outline" className="border-input text-foreground"><Database className="h-3 w-3 mr-1 inline" />{tr(t.dns.badgeBuildDomains, { n: build.totalDomains.toLocaleString(loc) })}</Badge>
+                <Badge variant="outline" className="border-input text-foreground"><Database className="h-3 w-3 mr-1 inline" />{tr(t.dns.badgeBuildDomains, { n: (build.totalDomains ?? 0).toLocaleString(loc) })}</Badge>
                 <Badge variant="outline" className="border-input text-foreground">{fmtSize(build.sizeBytes, lang)}</Badge>
                 <Badge variant="outline" className="border-input text-foreground">{build.fileName}</Badge>
                 <Badge variant="outline" className="border-input text-muted-foreground font-mono" title={build.sha256}>{build.sha256.slice(0, 12)}…</Badge>
@@ -208,7 +208,7 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
                 <MiniStat label={t.dns.statOverride} value={stats.overrideRemoved?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.dns.statDead} value={stats.deadRemoved?.toLocaleString(loc) ?? '—'} />
                 <MiniStat label={t.dns.statTld} value={stats.tldCount?.toLocaleString(loc) ?? '—'} />
-                <MiniStat label={t.dns.statFinal} value={build.totalDomains.toLocaleString(loc)} />
+                <MiniStat label={t.dns.statFinal} value={(build.totalDomains ?? 0).toLocaleString(loc)} />
               </div>
               <div className="rounded-lg border border-border overflow-x-auto max-h-80 overflow-y-auto">
                 <table className="w-full text-sm">
@@ -228,13 +228,13 @@ export function DnsBuildTab({ data, onChange }: { data: Dashboard | null; onChan
                     {Object.entries(stats.perSource ?? {}).map(([name, st]) => (
                       <tr key={name} className="border-t border-border/60 text-foreground">
                         <td className="px-3 py-1.5 max-w-72 truncate">{name}</td>
-                        <td className="px-3 py-1.5 tabular-nums">{st.total.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-emerald-700">{st.kept.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedDuplicate.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedAllowed.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedCategory.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-red-600">{st.droppedOverride.toLocaleString(loc)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{st.droppedDead.toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums">{(st.total ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-emerald-700">{(st.kept ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{(st.droppedDuplicate ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{(st.droppedAllowed ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{(st.droppedCategory ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-red-600">{(st.droppedOverride ?? 0).toLocaleString(loc)}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-amber-700">{(st.droppedDead ?? 0).toLocaleString(loc)}</td>
                       </tr>
                     ))}
                   </tbody>

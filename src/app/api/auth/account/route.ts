@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
         const bot = await getBotUsername().catch(() => null)
         return NextResponse.json({ ok: true, sent: false, telegramBound: false, botLink: botDeepLink(bot), message: 'Код выпущен. Откройте бота и отправьте /start — он придёт в чат автоматически' })
       }
-      const sent = await sendTelegramText(user.telegramChatId, `Код подтверждения NDR Rules Hub: ${code}\n(действует 5 минут)`)
+      const sent = await sendTelegramText(user.telegramChatId, `Код подтверждения NDR&DNS Rules HUB: ${code}\n(действует 5 минут)`)
       return sent.ok
         ? NextResponse.json({ ok: true, sent: true, telegramBound: true, message: 'Код отправлен в Telegram' })
         : NextResponse.json({ ok: false, error: `Бот не смог доставить сообщение: ${sent.error}` }, { status: 502 })
@@ -191,7 +191,7 @@ export async function POST(req: NextRequest) {
 
     case 'send-test': {
       if (!user.telegramChatId) return jsonError(400, 'Чат не привязан — отправьте боту /start')
-      const sent = await sendTelegramText(user.telegramChatId, 'Тестовое сообщение NDR Rules Hub — канал 2FA работает.')
+      const sent = await sendTelegramText(user.telegramChatId, 'Тестовое сообщение NDR&DNS Rules HUB — канал 2FA работает.')
       return sent.ok
         ? NextResponse.json({ ok: true, message: 'Тестовое сообщение отправлено — проверьте Telegram' })
         : NextResponse.json({ ok: false, error: sent.error }, { status: 502 })

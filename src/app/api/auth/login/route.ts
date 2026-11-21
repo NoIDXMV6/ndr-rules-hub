@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
       where: { id: user.id },
       data: { verificationCode: code, verificationExpiresAt: new Date(Date.now() + 5 * 60_000), verificationAttempts: 0 },
     })
-    const sent = await sendTelegramText(user.telegramChatId, `Код входа NDR Rules Hub: ${code}\n(действует 5 минут; вы входите с адреса ${ip})`)
+    const sent = await sendTelegramText(user.telegramChatId, `Код входа NDR&DNS Rules HUB: ${code}\n(действует 5 минут; вы входите с адреса ${ip})`)
     void audit('login_2fa', { email, userId: user.id, ip, detail: sent.ok ? 'код входа отправлен в Telegram' : `ошибка доставки: ${sent.error}` })
     const ticket = await issueMfaTicket('login', user.id)
     const res = NextResponse.json(

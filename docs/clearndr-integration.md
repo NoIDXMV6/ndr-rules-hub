@@ -1,6 +1,6 @@
 # Доставка и автообновление правил в Clear NDR
 
-Точная инструкция по автоматической отправке итогового набора правил из **NDR Rules Hub** в **Clear NDR** (Stamus Networks): где взять API-токен, какие команды выполнить на стороне Clear NDR, как настроить автообновление и как всё это проверить без боевого сервера.
+Точная инструкция по автоматической отправке итогового набора правил из **NDR&DNS Rules HUB** в **Clear NDR** (Stamus Networks): где взять API-токен, какие команды выполнить на стороне Clear NDR, как настроить автообновление и как всё это проверить без боевого сервера.
 
 > Справочник проверен по исходникам движка правил Clear NDR — [Scirius](https://github.com/StamusNetworks/scirius) (`rules/rest_api.py`, `suricata/rest_api.py`) и документации Stamus Networks (REST API, раздел «Sources & Rulesets»).
 
@@ -21,7 +21,7 @@
 
 ```mermaid
 flowchart TB
-    subgraph HUB["NDR Rules Hub — Next.js :3080"]
+    subgraph HUB["NDR&DNS Rules HUB — Next.js :3080"]
         direction TB
         BLD["Сборка<br/>clearndr-import.rules + sha256"]
         CRON["cron Hub — Настройки → Расписание<br/>обновление → сборка → экспорт"]
@@ -34,7 +34,7 @@ flowchart TB
 
     subgraph CNDR["Clear NDR (Scirius)"]
         direction TB
-        SRC["Source «NDR Rules Hub»<br/>PUSH: method local · PULL: method http"]
+        SRC["Source «NDR&DNS Rules HUB»<br/>PUSH: method local · PULL: method http"]
         RS["Ruleset + включённая категория"]
         UPALL["update_push_all<br/>update → generate → push"]
         SUR["Suricata 7 — набор в работе"]
@@ -104,7 +104,7 @@ curl -sk https://clearndr.local/rest/rules/source/?name=__probe__ \
 sequenceDiagram
     autonumber
     participant C as Clear NDR — планировщик celery<br/>Suricata → Update → Recurrence
-    participant S as Source «NDR Rules Hub»<br/>method http · uri /api/export
+    participant S as Source «NDR&DNS Rules HUB»<br/>method http · uri /api/export
     participant H as Hub — GET /api/export
     participant X as Suricata
 
@@ -156,7 +156,7 @@ HUB_URL=http://<hub-host>:3080/api/export \
 ./clearndr-setup-pull.sh
 ```
 
-Скрипт: проверит доступность файла на Hub → создаст источник «NDR Rules Hub» (method=`http`, datatype=`sig`) → создаст набор «NDR Rules Hub» и привяжет источник → включит категорию источника в наборе → вызовет `update_push_all` (пересборка + применение + перезапуск Suricata).
+Скрипт: проверит доступность файла на Hub → создаст источник «NDR&DNS Rules HUB» (method=`http`, datatype=`sig`) → создаст набор «NDR&DNS Rules HUB» и привяжет источник → включит категорию источника в наборе → вызовет `update_push_all` (пересборка + применение + перезапуск Suricata).
 
 ### Ручная настройка (те же действия curl-командами)
 
@@ -166,35 +166,35 @@ export TOK="Authorization: Token <токен>"
 
 # 1. Создать источник-URL на файл Hub
 curl -sk -X POST "$BASE/rest/rules/source/" -H "$TOK" -H 'Content-Type: application/json' -d '{
-  "name": "NDR Rules Hub",
+  "name": "NDR&DNS Rules HUB",
   "method": "http",
   "datatype": "sig",
   "uri": "http://<hub-host>:3080/api/export",
   "authkey": "<ключ отдачи, если задан — scirius отправит его в Authorization>",
   "use_sys_proxy": false,
-  "comment": "итоговый набор правил NDR Rules Hub"
+  "comment": "итоговый набор правил NDR&DNS Rules HUB"
 }'
 # → 201 {"pk": 7, ...}   запомните pk источника
 
 # 2. Создать набор и сразу привязать источник (или PATCH существующего)
 curl -sk -X POST "$BASE/rest/rules/ruleset/" -H "$TOK" -H 'Content-Type: application/json' -d '{
-  "name": "NDR Rules Hub",
-  "descr": "Набор из NDR Rules Hub",
+  "name": "NDR&DNS Rules HUB",
+  "descr": "Набор из NDR&DNS Rules HUB",
   "sources": [7]
 }'
 # → 201 {"pk": 3, ...}   запомните pk набора
 
 # 3. Найти категорию источника (категория появится после первой загрузки)
 curl -sk "$BASE/rest/rules/category/?source=7" -H "$TOK"
-# → {"results":[{"pk": 12, "name": "NDR Rules Hub Sigs", ...}]}
+# → {"results":[{"pk": 12, "name": "NDR&DNS Rules HUB Sigs", ...}]}
 
 # 4. Включить категорию в наборе
 curl -sk -X POST "$BASE/rest/rules/category/12/enable/" -H "$TOK" \
-     -H 'Content-Type: application/json' -d '{"ruleset": 3, "comment": "NDR Rules Hub"}'
+     -H 'Content-Type: application/json' -d '{"ruleset": 3, "comment": "NDR&DNS Rules HUB"}'
 
 # 5. Применить: пересобрать набор, выложить в Suricata, перезапустить движок
 curl -sk -X POST "$BASE/rest/suricata/update_push_all/" -H "$TOK" \
-     -H 'Content-Type: application/json' -d '{"comment": "NDR Rules Hub"}'
+     -H 'Content-Type: application/json' -d '{"comment": "NDR&DNS Rules HUB"}'
 # → 200 {"update_push_all": "ok"}
 ```
 
@@ -223,7 +223,7 @@ curl -sk -X POST "$BASE/rest/suricata/update_push_all/" -H "$TOK" \
 ### Как проверить, что автообновление работает
 
 1. В Hub измените набор (добавьте/уберите источник), нажмите «Полный цикл» или дождитесь cron.
-2. В Clear NDR: **Sources → NDR Rules Hub** — дата/версия обновилась; **History** (`/rest/rules/history/`) — записи `update_source`/`update_push_all` от имени токен-пользователя.
+2. В Clear NDR: **Sources → NDR&DNS Rules HUB** — дата/версия обновилась; **History** (`/rest/rules/history/`) — записи `update_source`/`update_push_all` от имени токен-пользователя.
 3. В Suricata: `suricata --dump-config | grep default-rule-path` / статистика набора в UI (Rulesets → rules_count вырос).
 
 ---
@@ -242,13 +242,13 @@ curl -sk -X POST "$BASE/rest/suricata/update_push_all/" -H "$TOK" \
 | Базовый URL Clear NDR | `https://clearndr.local` (корень, **без** `/rest` и без `/api`) |
 | Тип авторизации | **Token** (штатный Clear NDR / Scirius) |
 | API-токен | токен из раздела 2 |
-| Имя источника в Clear NDR | `NDR Rules Hub` (создаётся автоматически, если нет) |
+| Имя источника в Clear NDR | `NDR&DNS Rules HUB` (создаётся автоматически, если нет) |
 | Применять набор после загрузки | включено → после каждой загрузки вызывается `update_push_all` |
 
 Что делает Hub при экспорте (кнопка «Экспортировать в Clear NDR», финал «Полного цикла» или шаг cron):
 
 ```
-GET  /rest/rules/source/?name=NDR Rules Hub   → найти источник (создать при отсутствии)
+GET  /rest/rules/source/?name=NDR&DNS Rules HUB   → найти источник (создать при отсутствии)
 POST /rest/rules/source/<pk>/upload/          → multipart-загрузка clearndr-import.rules
 POST /rest/suricata/update_push_all/          → пересобрать набор и применить к Suricata
 ```
@@ -262,7 +262,7 @@ sequenceDiagram
     participant A as Clear NDR — REST API Scirius<br/>/rest/… · Authorization: Token
     participant X as Suricata
 
-    H->>A: GET /rest/rules/source/?name=NDR Rules Hub
+    H->>A: GET /rest/rules/source/?name=NDR&DNS Rules HUB
     alt источник найден
         A-->>H: results → pk источника
     else источника нет
@@ -283,7 +283,7 @@ sequenceDiagram
     H-->>H: журнал (scope export) — шаги цепочки
 ```
 
-Все шаги видны в «Журнале» Hub (scope `export`): `источник «NDR Rules Hub» найден (pk=7); файл clearndr-import.rules загружен и импортирован (6.2 МБ); набор применён к Suricata (update_push_all: ok)`.
+Все шаги видны в «Журнале» Hub (scope `export`): `источник «NDR&DNS Rules HUB» найден (pk=7); файл clearndr-import.rules загружен и импортирован (6.2 МБ); набор применён к Suricata (update_push_all: ok)`.
 
 ### Автообновление при push-схеме
 
@@ -373,7 +373,7 @@ curl -s http://127.0.0.1:8080/_stats | python3 -m json.tool
 2. ☐ Схема выбрана: PULL (§3) или PUSH (§4).
 3. ☐ PULL: `clearndr-setup-pull.sh` отработал 5/5, источник и ruleset созданы, категория включена.
    PUSH: в Hub выбран режим «Clear NDR REST», указаны URL/токен, кнопка «Экспортировать в Clear NDR» дала «update_push_all: ok».
-4. ☐ Тестовый прогон: сборка в Hub → файл появился в Clear NDR (Sources → NDR Rules Hub → rules_count).
+4. ☐ Тестовый прогон: сборка в Hub → файл появился в Clear NDR (Sources → NDR&DNS Rules HUB → rules_count).
 5. ☐ Автообновление включено: recurrence в Clear NDR (a) и/или cron `update_push_all` (b) и/или cron Hub (c).
 6. ☐ Через сутки проверены журнал Hub (`export`) и History Clear NDR — записи обновления есть.
 7. ☐ Токен передаётся через переменные окружения/настройки, не светится в логах и git.

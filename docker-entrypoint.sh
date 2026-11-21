@@ -94,5 +94,5 @@ fi
 # Разрешения для WireGuard-конфигов
 chmod 700 /app/data/wireguard 2>/dev/null || true
 
-echo "[entrypoint] запуск NDR Rules Hub на порту ${PORT:-3000}"
+echo "[entrypoint] запуск NDR&DNS Rules HUB на порту ${PORT:-3000}"
 exec "$@"

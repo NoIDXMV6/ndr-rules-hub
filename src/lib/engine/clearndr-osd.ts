@@ -450,7 +450,7 @@ export async function startOsdRun(cfg: UpdateSettings, o: OsdRunOptions): Promis
   const sudo = cfg.updateMode === 'local' ? '' : sudoPrefix(cfg.sudoMode, cfg.sshUser)
   const runner = [
     '#!/bin/sh',
-    `# Раннер OSD-аналитики NDR Rules Hub (${new Date().toISOString()})`,
+    `# Раннер OSD-аналитики NDR&DNS Rules HUB (${new Date().toISOString()})`,
     `echo $$ > '${remoteDir}/pid'`,
     `cd '${cfg.instanceDir}' 2>/dev/null || true`,
     `${sudo}bash '${scriptOnHost}' ${args.map((a) => `'${a}'`).join(' ')}`,

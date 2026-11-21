@@ -4,7 +4,7 @@
 
 export const ru = {
   meta: {
-    title: 'NDR Rules Hub — правила Snort/Suricata для Clear NDR',
+    title: 'NDR&DNS Rules HUB — правила Snort/Suricata для Clear NDR',
     description:
       'Управление источниками правил, конвертация Snort 3 / Snort 2.9 → Suricata, сборка, валидация и экспорт наборов в Clear NDR.',
   },
@@ -57,7 +57,7 @@ export const ru = {
   },
 
   footer: {
-    tagline: 'NDR Rules Hub — объединение, дедупликация и экспорт наборов правил Snort/Suricata',
+    tagline: 'NDR&DNS Rules HUB — объединение, дедупликация и экспорт наборов правил Snort/Suricata',
     developer: 'Разработчик:',
     authorName: 'Павел Кожеватов',
     repoLink: 'репозиторий',
@@ -584,7 +584,7 @@ PersistentKeepalive = 25
     checkCompose: 'Конфигурация стека (docker compose)',
     composeBroken: 'Конфигурация инстанса повреждена:',
     composeBrokenShort: 'ошибка конфигурации',
-    composeRepairHint: 'Восстановите на хосте: sudo clearndr-repair-stack.sh --instance-dir <инстанс> (скрипт идёт в составе NDR Rules Hub, каталог scripts/). Обновление при повреждённой конфигурации заблокировано.',
+    composeRepairHint: 'Восстановите на хосте: sudo clearndr-repair-stack.sh --instance-dir <инстанс> (скрипт идёт в составе NDR&DNS Rules HUB, каталог scripts/). Обновление при повреждённой конфигурации заблокировано.',
     mikrocataFound: 'Интеграция MikroTik (mikrocata2selks) обнаружена — будет проверена',
     mikrocataNone: 'Интеграция MikroTik не обнаружена',
     stackState: 'Состояние стека',
@@ -1080,7 +1080,7 @@ PersistentKeepalive = 25
   auth: {
     splash: 'Проверка сессии…',
     splashError: 'Проверка сессии не удалась: {error}. Повтор каждые 30 с; если повторяется — см. docker logs и /api/health (самодиагностика).',
-    title: 'Вход в NDR Rules Hub',
+    title: 'Вход в NDR&DNS Rules HUB',
     subtitle: 'Многопользовательский режим (редакция Enterprise)',
     loginTab: 'Вход',
     registerTab: 'Регистрация',

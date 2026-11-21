@@ -7,7 +7,7 @@ import type { Dictionary } from './ru'
 
 export const en: Dictionary = {
   meta: {
-    title: 'NDR Rules Hub — Snort/Suricata rules for Clear NDR',
+    title: 'NDR&DNS Rules HUB — Snort/Suricata rules for Clear NDR',
     description:
       'Managing rule sources, Snort 3 / Snort 2.9 → Suricata conversion, building, validating and exporting rulesets into Clear NDR.',
   },
@@ -60,7 +60,7 @@ export const en: Dictionary = {
   },
 
   footer: {
-    tagline: 'NDR Rules Hub — merging, deduplication and export of Snort/Suricata rule sets',
+    tagline: 'NDR&DNS Rules HUB — merging, deduplication and export of Snort/Suricata rule sets',
     developer: 'Developer:',
     authorName: 'Pavel Kozhevatov',
     repoLink: 'repository',
@@ -588,7 +588,7 @@ PersistentKeepalive = 25
     checkCompose: 'Stack config (docker compose)',
     composeBroken: 'Instance configuration is broken:',
     composeBrokenShort: 'config error',
-    composeRepairHint: 'Repair on the host: sudo clearndr-repair-stack.sh --instance-dir <instance> (shipped with NDR Rules Hub, scripts/ directory). Updates are blocked while the configuration is broken.',
+    composeRepairHint: 'Repair on the host: sudo clearndr-repair-stack.sh --instance-dir <instance> (shipped with NDR&DNS Rules HUB, scripts/ directory). Updates are blocked while the configuration is broken.',
     mikrocataFound: 'MikroTik integration (mikrocata2selks) detected — it will be verified',
     mikrocataNone: 'No MikroTik integration detected',
     stackState: 'Stack state',
@@ -1084,7 +1084,7 @@ PersistentKeepalive = 25
   auth: {
     splash: 'Checking session…',
     splashError: 'Session check failed: {error}. Retrying every 30 s; if it persists — see docker logs and /api/health (self-diagnostics).',
-    title: 'Sign in to NDR Rules Hub',
+    title: 'Sign in to NDR&DNS Rules HUB',
     subtitle: 'Multi-user mode (Enterprise edition)',
     loginTab: 'Sign in',
     registerTab: 'Register',

@@ -59,21 +59,21 @@ export async function serveDomainList(opts: ServeAuth = {}): Promise<ServeResult
         status: 429,
         contentType: TEXT,
         retryAfterSec: 900,
-        body: 'NDR Rules Hub: слишком много неверных ключей с этого адреса — доступ приостановлен на 15 минут (защита от перебора ключей).',
+        body: 'NDR&DNS Rules HUB: слишком много неверных ключей с этого адреса — доступ приостановлен на 15 минут (защита от перебора ключей).',
       }
     }
     return {
       status: 403,
       contentType: TEXT,
       body: access.reason === 'scope'
-        ? 'NDR Rules Hub: доступ запрещён — этот токен выдан только для правил Suricata. Для скачивания списка доменов создайте токен со scope «домены» или «оба списка» в разделе «Аккаунт → Токены и доступ».'
-        : 'NDR Rules Hub: доступ запрещён — без токена отдача списка доменов запрещена. Создайте токен со scope «домены» или «оба списка» в разделе «Аккаунт → Токены и доступ» и добавьте его к URL (?token=ndrt_… — при создании токена показывается полный Uri) либо передайте в заголовке Authorization.',
+        ? 'NDR&DNS Rules HUB: доступ запрещён — этот токен выдан только для правил Suricata. Для скачивания списка доменов создайте токен со scope «домены» или «оба списка» в разделе «Аккаунт → Токены и доступ».'
+        : 'NDR&DNS Rules HUB: доступ запрещён — без токена отдача списка доменов запрещена. Создайте токен со scope «домены» или «оба списка» в разделе «Аккаунт → Токены и доступ» и добавьте его к URL (?token=ndrt_… — при создании токена показывается полный Uri) либо передайте в заголовке Authorization.',
     }
   }
 
   const build = await db.domainBuild.findFirst({ orderBy: { createdAt: 'desc' } })
   if (!build) {
-    return { status: 404, contentType: TEXT, body: 'NDR Rules Hub: список доменов ещё не собран — выполните сборку на вкладке «DNS списки».' }
+    return { status: 404, contentType: TEXT, body: 'NDR&DNS Rules HUB: список доменов ещё не собран — выполните сборку на вкладке «DNS списки».' }
   }
   try {
     const content = await fs.readFile(build.filePath)
@@ -86,6 +86,6 @@ export async function serveDomainList(opts: ServeAuth = {}): Promise<ServeResult
     }
     return { status: 200, contentType: TEXT, fileName: build.fileName, body: content }
   } catch {
-    return { status: 404, contentType: TEXT, body: `NDR Rules Hub: файл списка доменов не найден на диске: ${build.filePath} — пересоберите список.` }
+    return { status: 404, contentType: TEXT, body: `NDR&DNS Rules HUB: файл списка доменов не найден на диске: ${build.filePath} — пересоберите список.` }
   }
 }

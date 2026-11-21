@@ -76,7 +76,7 @@ fi
 # Файлы окружения
 mkdir -p "$OUT"
 cat > "${OUT}/docker-compose.gotify.yml" <<EOF
-# Gotify — сервер уведомлений для NDR Rules Hub (сгенерировано scripts/gotify-deploy.sh)
+# Gotify — сервер уведомлений для NDR&DNS Rules HUB (сгенерировано scripts/gotify-deploy.sh)
 # Запуск: docker compose -f docker-compose.gotify.yml up -d
 # Документация: https://gotify.net/docs/install
 services:
@@ -145,7 +145,7 @@ cat > "${OUT}/README.md" <<EOF
 
 ## 2. Создание приложения и токена
 - Web UI → Apps → Create Application → скопируйте **Token** приложения.
-- Токен вставьте в NDR Rules Hub: Интеграции → Уведомления и сервисы → Gotify (URL + токен), включите канал и нажмите «Тест».
+- Токен вставьте в NDR&DNS Rules HUB: Интеграции → Уведомления и сервисы → Gotify (URL + токен), включите канал и нажмите «Тест».
 
 ## 3. Домен и DNS
 - Заведите A/AAAA-запись DNS на IP сервера (например \`gotify.example.com → 203.0.113.10\`).

@@ -819,6 +819,54 @@ export function dnsBuildProgressState() {
   return getDnsBuildProgress()
 }
 
+/** Безопасный разбор statsJson: битый JSON не должен ронять GET /api/dns/build */
+function parseDnsStatsJson(json: string | null): Record<string, unknown> {
+  try {
+    const raw = JSON.parse(json || '{}') as unknown
+    return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+const num0 = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+/**
+ * Нормализация статистики сборки из БД. Сборки, сохранённые до появления новых
+ * полей (droppedDead — v1.37.0 и т.п.), не содержат их в statsJson; рендер
+ * вкладки «Сборка и экспорт» читает их без защиты и падает
+ * «Cannot read properties of undefined (reading 'toLocaleString')».
+ * Недостающие числовые поля восполняются нулями — старые сборки показываются.
+ */
+function normalizeDnsStats(raw: Record<string, unknown>): Record<string, unknown> {
+  const perSourceIn = (raw.perSource && typeof raw.perSource === 'object' ? raw.perSource : {}) as Record<string, Record<string, unknown>>
+  const perSource: Record<string, Record<string, number>> = {}
+  for (const [name, st] of Object.entries(perSourceIn)) {
+    if (!st || typeof st !== 'object') continue
+    perSource[name] = {
+      total: num0(st.total),
+      kept: num0(st.kept),
+      droppedDuplicate: num0(st.droppedDuplicate),
+      droppedAllowed: num0(st.droppedAllowed),
+      droppedCategory: num0(st.droppedCategory),
+      droppedOverride: num0(st.droppedOverride),
+      droppedDead: num0(st.droppedDead),
+    }
+  }
+  return {
+    ...raw,
+    totalInput: num0(raw.totalInput),
+    duplicateByDomain: num0(raw.duplicateByDomain),
+    allowedRemoved: num0(raw.allowedRemoved),
+    categoryRemoved: num0(raw.categoryRemoved),
+    overrideRemoved: num0(raw.overrideRemoved),
+    deadRemoved: num0(raw.deadRemoved),
+    forcedBlock: num0(raw.forcedBlock),
+    tldCount: num0(raw.tldCount),
+    perSource,
+  }
+}
+
 /** Последняя сборка списка доменов */
 export async function lastDomainBuild() {
   const b = await db.domainBuild.findFirst({ orderBy: { createdAt: 'desc' } })
@@ -827,7 +875,7 @@ export async function lastDomainBuild() {
     id: b.id, createdAt: b.createdAt, totalDomains: b.totalDomains,
     fileName: b.fileName, filePath: b.filePath, sha256: b.sha256,
     sizeBytes: b.sizeBytes, source: b.source,
-    stats: JSON.parse(b.statsJson || '{}'),
+    stats: normalizeDnsStats(parseDnsStatsJson(b.statsJson)),
   }
 }
 

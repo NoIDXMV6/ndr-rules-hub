@@ -116,15 +116,15 @@ export async function serveBuild(opts: ServeAuth & { archive?: boolean } = {}): 
         status: 429,
         contentType: TEXT,
         retryAfterSec: 900,
-        body: 'NDR Rules Hub: слишком много неверных ключей с этого адреса — доступ приостановлен на 15 минут (защита от перебора ключей).',
+        body: 'NDR&DNS Rules HUB: слишком много неверных ключей с этого адреса — доступ приостановлен на 15 минут (защита от перебора ключей).',
       }
     }
     return {
       status: 403,
       contentType: TEXT,
       body: access.reason === 'scope'
-        ? 'NDR Rules Hub: доступ запрещён — этот токен выдан только для списка доменов (DNS-фильтрация). Для скачивания правил создайте токен со scope «правила» или «оба списка» (раздел «Аккаунт» → «Токены и доступ»).'
-        : 'NDR Rules Hub: доступ запрещён — неверный ключ отдачи. Вставьте токен в поле authkey источника Clear NDR (scirius передаст его в заголовке Authorization) или добавьте к URL ?token=<токен>. Токен скачивания выдаётся в разделе «Аккаунт» → «Токены и доступ».',
+        ? 'NDR&DNS Rules HUB: доступ запрещён — этот токен выдан только для списка доменов (DNS-фильтрация). Для скачивания правил создайте токен со scope «правила» или «оба списка» (раздел «Аккаунт» → «Токены и доступ»).'
+        : 'NDR&DNS Rules HUB: доступ запрещён — неверный ключ отдачи. Вставьте токен в поле authkey источника Clear NDR (scirius передаст его в заголовке Authorization) или добавьте к URL ?token=<токен>. Токен скачивания выдаётся в разделе «Аккаунт» → «Токены и доступ».',
     }
   }
 
@@ -139,7 +139,7 @@ export async function serveBuild(opts: ServeAuth & { archive?: boolean } = {}): 
     servedFrom = 'system-fallback'
   }
   if (!build) {
-    return { status: 404, contentType: TEXT, body: 'NDR Rules Hub: нет сборок — сначала выполните сборку (вкладка «Сборка»).' }
+    return { status: 404, contentType: TEXT, body: 'NDR&DNS Rules HUB: нет сборок — сначала выполните сборку (вкладка «Сборка»).' }
   }
   if (servedFrom === 'system-fallback') {
     void audit('download', { userId: opts.workspaceUserId ?? access.tokenRow?.userId, ip: opts.ip, detail: 'персональная сборка ещё не выполнялась — отдан системный набор' })
@@ -158,14 +158,14 @@ export async function serveBuild(opts: ServeAuth & { archive?: boolean } = {}): 
   if (opts.archive) {
     const stats = JSON.parse(build.statsJson || '{}') as { archive?: { filePath: string; fileName: string } }
     if (!stats.archive) {
-      return { status: 404, contentType: TEXT, body: 'NDR Rules Hub: в этой сборке нет tgz-архива — включите «Формат сборки: файл + tgz» в настройках и пересоберите набор.' }
+      return { status: 404, contentType: TEXT, body: 'NDR&DNS Rules HUB: в этой сборке нет tgz-архива — включите «Формат сборки: файл + tgz» в настройках и пересоберите набор.' }
     }
     try {
       const content = await fs.readFile(stats.archive.filePath)
       await stat(content.length)
       return { status: 200, contentType: 'application/gzip', fileName: stats.archive.fileName, body: content }
     } catch {
-      return { status: 404, contentType: TEXT, body: `NDR Rules Hub: файл архива не найден на диске: ${stats.archive.filePath}` }
+      return { status: 404, contentType: TEXT, body: `NDR&DNS Rules HUB: файл архива не найден на диске: ${stats.archive.filePath}` }
     }
   }
 
@@ -174,6 +174,6 @@ export async function serveBuild(opts: ServeAuth & { archive?: boolean } = {}): 
     await stat(content.length)
     return { status: 200, contentType: TEXT, fileName: build.fileName, body: content }
   } catch {
-    return { status: 404, contentType: TEXT, body: `NDR Rules Hub: файл сборки не найден на диске: ${build.filePath} — пересоберите набор.` }
+    return { status: 404, contentType: TEXT, body: `NDR&DNS Rules HUB: файл сборки не найден на диске: ${build.filePath} — пересоберите набор.` }
   }
 }
