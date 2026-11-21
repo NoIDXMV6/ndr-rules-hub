@@ -1410,7 +1410,7 @@ PersistentKeepalive = 25
     aliveProgProcessed: 'Processed: {n}',
     aliveProgSkipped: 'Fresh skipped: {n}',
     aliveLogTitle: 'Check log',
-    aliveAutoNote: 'With the filter enabled the scan starts automatically after the DNS cycle (cron / full cycle) — verdicts refresh without a manual run.',
+    aliveAutoNote: 'With the filter enabled the scan starts automatically after the DNS cycle (cron / full cycle) — verdicts refresh without a manual run. The scan survives a container restart: verdicts are saved to the DB as it goes (every 1000 checks) and an interrupted scan resumes automatically from where it stopped — already checked domains are not re-probed.',
     thAlive: 'Liveness',
     statDead: 'Excluded by liveness',
   },

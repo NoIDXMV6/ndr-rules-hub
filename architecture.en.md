@@ -382,6 +382,16 @@ flowchart TD
    parallel queries); later runs re-check only records whose TTL expired (`skippedFresh`).
    Settings: `dnsAliveCheckEnabled` (default `false`), `dnsAliveTtlDays` = 14,
    `dnsAliveConcurrency` = 50, `dnsAliveTimeoutMs` = 4000.
+7. **Scan resilience (v1.40.1).** The scan survives a container restart: verdicts
+   are flushed incrementally (every 1000 checks, not only at the batch boundary),
+   and the scan checkpoint lives in `Setting` (`dnsAliveScanState`). At process
+   start `instrumentation.ts` calls `maybeResumeInterruptedScan`: an active
+   checkpoint = "the process died mid-scan" → the scan resumes automatically
+   (origin `resume`), fresh verdicts in the DB are not re-probed (TTL), counters
+   continue from where it stopped; with the filter off the checkpoint is cleared
+   without a restart. Finish/cancel/error deactivate the checkpoint (no resume
+   loop). Every batch and key events are written to the persistent journal
+   (`LogEntry`).
 
 ## 9. WireGuard VPN layer
 

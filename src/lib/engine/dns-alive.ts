@@ -14,8 +14,21 @@
 // переиспользуются до старта TTL (dnsAliveTtlDays). Скан идёт фоном с пулом
 // параллельных запросов (dnsAliveConcurrency), с прогрессом и отменой.
 //
-// Первичный прогон по миллионам доменов занимает часы (это честно: ~50
+// Первичный прогон по миллионам доменов занимает ЧАСЫ И ДНИ (это честно: ~50
 // параллельных DNS-запросов), повторные — только устаревшие записи.
+//
+// Живучесть скана (v1.40.1):
+//   • вердикты сбрасываются в БД не только по границе партии, но и каждые
+//     dnsAliveFlushEvery проверок — при рестарте теряется максимум последняя
+//     сотня доменов, а не партия 25 000;
+//   • чекпоинт скана хранится в Setting dnsAliveScanState (переживает рестарт):
+//     активен ли скан, origin, счётчики; при завершении/отмене/ошибке — деактивируется;
+//   • при старте контейнера (instrumentation.ts) найденный активный чекпоинт =
+//     «скан оборвался рестартом» → скан автоматически возобновляется (origin
+//     'resume'), свежие вердикты из БД не перепроверяются (TTL), счётчики
+//     продолжаются с места остановки;
+//   • каждая партия и все ключевые события пишутся в постоянный журнал
+//     (LogEntry) — история скана видна в UI и переживает рестарт.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Resolver } from 'dns/promises'
 import { db, dbHeavy } from '@/lib/db'
@@ -28,6 +41,99 @@ export const DNS_ALIVE_DEFAULTS: Record<string, string> = {
   dnsAliveTtlDays: '14', // срок годности вердикта DomainAlive (дней)
   dnsAliveConcurrency: '50', // параллельных DNS-проверок
   dnsAliveTimeoutMs: '4000', // таймаут одного запроса
+}
+
+// ── Чекпоинт скана (Setting dnsAliveScanState — переживает рестарт) ─────────
+
+export interface AliveCheckpoint {
+  active: boolean
+  origin: string
+  startedAt: string
+  processed: number
+  alive: number
+  dead: number
+  errors: number
+  skippedFresh: number
+  finishedAt: string | null
+  updatedAt: string
+}
+
+const CKPT_KEY = 'dnsAliveScanState'
+
+/** Прочитать чекпоинт скана (null — нет/битый JSON). */
+export async function getAliveCheckpoint(): Promise<AliveCheckpoint | null> {
+  try {
+    const row = await db.setting.findUnique({ where: { key: CKPT_KEY } })
+    if (!row?.value) return null
+    const j = JSON.parse(row.value) as AliveCheckpoint
+    if (!j || typeof j !== 'object' || typeof j.active !== 'boolean') return null
+    return j
+  } catch {
+    return null
+  }
+}
+
+async function saveAliveCheckpoint(ck: AliveCheckpoint): Promise<void> {
+  try {
+    await db.setting.upsert({
+      where: { key: CKPT_KEY },
+      create: { key: CKPT_KEY, value: JSON.stringify(ck) },
+      update: { value: JSON.stringify(ck) },
+    })
+  } catch (e) {
+    aliveLog(`Ошибка записи чекпоинта скана: ${(e as Error).message}`)
+  }
+}
+
+/** Чекпоинт = зеркало живого состояния скана (счётчики кумулятивные). */
+function checkpointFromState(finished: boolean): AliveCheckpoint {
+  const s = aliveState!
+  return {
+    active: !finished,
+    origin: s.origin,
+    startedAt: s.startedAt ?? nowIso(),
+    processed: s.processed,
+    alive: s.alive,
+    dead: s.dead,
+    errors: s.errors,
+    skippedFresh: s.skippedFresh,
+    finishedAt: finished ? (s.finishedAt ?? nowIso()) : null,
+    updatedAt: nowIso(),
+  }
+}
+
+/**
+ * Автовозобновление прерванного скана: чекпоинт «активен» после рестарта
+ * контейнера означает, что процесс умер посреди скана. Фильтр неделегированных
+ * включён → перезапускаем скан (origin 'resume', счётчики продолжаются, свежие
+ * вердикты из БД не перепроверяются). Выключен → чекпоинт гасим (пользователь
+ * отключил фильтр — рестарт скана не нужен). Вызывается при старте процесса.
+ */
+export async function maybeResumeInterruptedScan(): Promise<boolean> {
+  try {
+    const ck = await getAliveCheckpoint()
+    if (!ck?.active) return false
+    if (aliveState?.active) return false
+    const { getSettings, log } = await import('./service')
+    const s = await getSettings()
+    if (s.dnsAliveCheckEnabled !== 'true') {
+      await saveAliveCheckpoint({ ...ck, active: false, finishedAt: nowIso(), updatedAt: nowIso() })
+      await log('info', 'dns',
+        `Живость доменов: обнаружен скан, прерванный рестартом (было проверено ${ck.processed.toLocaleString('ru-RU')}); фильтр неделегированных выключен — возобновление не требуется`,
+        undefined,
+        `Domain liveness: scan interrupted by restart found (${ck.processed} checked); dead-domain filter is off — no resume needed`)
+        .catch(() => undefined)
+      return false
+    }
+    await log('info', 'dns',
+      `Живость доменов: скан был прерван рестартом контейнера — возобновляю с места остановки (в счётчике ${ck.processed.toLocaleString('ru-RU')} доменов; проверенные вердикты сохранены в БД и не перепроверяются)`,
+      undefined,
+      `Domain liveness: scan was interrupted by container restart — resuming (${ck.processed} processed; stored verdicts are kept and not re-probed)`)
+      .catch(() => undefined)
+    return await startDomainAliveScan('resume', { resumeFrom: ck })
+  } catch {
+    return false
+  }
 }
 
 // ── Прогресс скана (зеркало dns-progress в уменьшенном виде) ────────────────
@@ -63,19 +169,19 @@ function consoleLog(msg: string): void {
   console.log(`[dns-alive ${nowIso().slice(11, 19)}] ${msg}`)
 }
 
-function resetProgress(origin: string): void {
+function resetProgress(origin: string, resume?: AliveCheckpoint | null): void {
   aliveState = {
     active: true,
     origin,
     stage: 'read',
     percent: 0,
-    processed: 0,
+    processed: resume?.processed ?? 0,
     total: 0,
-    alive: 0,
-    dead: 0,
-    errors: 0,
-    skippedFresh: 0,
-    startedAt: nowIso(),
+    alive: resume?.alive ?? 0,
+    dead: resume?.dead ?? 0,
+    errors: resume?.errors ?? 0,
+    skippedFresh: resume?.skippedFresh ?? 0,
+    startedAt: resume?.startedAt ?? nowIso(),
     finishedAt: null,
     error: null,
     log: [],
@@ -218,6 +324,10 @@ export interface AliveScanOptions {
   timeoutMs?: number
   /** максимум проверок за прогон (предохранитель; 0 — без ограничения) */
   limit?: number
+  /** сбрасывать вердикты в БД каждые N проверок (по умолчанию 1000) */
+  flushEvery?: number
+  /** чекпоинт прерванного скана: продолжить счётчики (автовозобновление) */
+  resumeFrom?: AliveCheckpoint
   /** подмена чтения доменов (тесты): батчи уникальных доменов */
   batches?: AsyncIterable<string[]>
 }
@@ -245,13 +355,14 @@ async function * domainBatches(): AsyncIterable<string[]> {
 export async function startDomainAliveScan(origin = 'manual', opts: AliveScanOptions = {}): Promise<boolean> {
   if (aliveState?.active) return false
   cancelRequested = false
-  resetProgress(origin)
+  resetProgress(origin, opts.resumeFrom)
   void runScan(origin, opts).catch((e) => {
     if (aliveState) {
       aliveState.active = false
       aliveState.finishedAt = nowIso()
       aliveState.error = (e as Error).message.slice(0, 500)
     }
+    void saveAliveCheckpoint(checkpointFromState(true)) // аварийный финиш — чекпоинт гасим, чтобы не зациклить автовозобновление
     aliveLog(`Ошибка проверки живости: ${(e as Error).message}`)
   })
   return true
@@ -274,7 +385,9 @@ async function runScan(origin: string, opts: AliveScanOptions): Promise<void> {
   const freshAfter = new Date(Date.now() - ttlDays * 86_400_000)
   const resolver = opts.resolverFactory?.() ?? systemResolver()
   const state = aliveState!
-  aliveLog(`Проверка живости (${origin}): пул ${concurrency}, таймаут ${timeoutMs} мс, TTL вердиктов ${ttlDays} дн.`)
+  const flushEvery = Math.max(1, opts.flushEvery ?? 1000)
+  aliveLog(`Проверка живости (${origin}): пул ${concurrency}, таймаут ${timeoutMs} мс, TTL вердиктов ${ttlDays} дн.${state.processed > 0 ? `, продолжение — в счётчике ${state.processed.toLocaleString('ru-RU')} доменов` : ''}`)
+  await saveAliveCheckpoint(checkpointFromState(false)) // скан активен — чекпоинт переживёт рестарт
 
   const writeQueue: Array<{ domain: string; verdict: AliveVerdict; ns: number }> = []
   const flushWrites = async (): Promise<void> => {
@@ -287,6 +400,7 @@ async function runScan(origin: string, opts: AliveScanOptions): Promise<void> {
            ON CONFLICT(domain) DO UPDATE SET status = excluded.status, checkedAt = excluded.checkedAt, ns = excluded.ns`,
           w.domain, w.verdict, new Date(), w.ns)))
       invalidateAliveCounts()
+      await saveAliveCheckpoint(checkpointFromState(false)) // счётчики чекпоинта — вслед за вердиктами
     } catch (e) {
       aliveLog(`Ошибка записи вердиктов (${chunk.length}): ${(e as Error).message}`)
     }
@@ -310,6 +424,9 @@ async function runScan(origin: string, opts: AliveScanOptions): Promise<void> {
       }
       state.processed++
       checked++
+      // промежуточный сброс: рестарт в середине партии теряет максимум flushEvery
+      // проверок, а не всю партию 25 000 (часы работы при медленных доменах)
+      if (writeQueue.length >= flushEvery) await flushWrites()
     }
   }
 
@@ -338,6 +455,13 @@ async function runScan(origin: string, opts: AliveScanOptions): Promise<void> {
     }
     state.percent = Math.min(99, Math.round((state.processed / Math.max(1, state.total)) * 100))
     aliveLog(`Партия ${batchNo}: доменов ${batch.length.toLocaleString('ru-RU')}, к проверке ${stale.length.toLocaleString('ru-RU')}, свежих ${state.skippedFresh.toLocaleString('ru-RU')}; итоги: живых ${state.alive.toLocaleString('ru-RU')}, мёртвых ${state.dead.toLocaleString('ru-RU')}, ошибок ${state.errors.toLocaleString('ru-RU')}`)
+    // постоянный журнал: партия + счётчики (переживает рестарт, виден в UI «Журнал»)
+    await import('./service').then(({ log }) =>
+      log('info', 'dns',
+        `Живость доменов (партия ${batchNo}): доменов ${batch.length.toLocaleString('ru-RU')}, к проверке ${stale.length.toLocaleString('ru-RU')}, свежих пропущено ${state.skippedFresh.toLocaleString('ru-RU')}; всего: живых ${state.alive.toLocaleString('ru-RU')}, мёртвых ${state.dead.toLocaleString('ru-RU')}, ошибок ${state.errors.toLocaleString('ru-RU')}`,
+        undefined,
+        `Domain liveness (batch ${batchNo}): domains ${batch.length}, to probe ${stale.length}, fresh skipped ${state.skippedFresh}; totals: alive ${state.alive}, dead ${state.dead}, errors ${state.errors}`))
+      .catch(() => undefined)
     await yieldToLoop()
   }
 
@@ -347,6 +471,7 @@ async function runScan(origin: string, opts: AliveScanOptions): Promise<void> {
   state.stage = 'done'
   state.percent = 100
   state.finishedAt = nowIso()
+  await saveAliveCheckpoint(checkpointFromState(true)) // скан завершён/остановлен — чекпоинт гасим (автовозобновление больше не нужно)
   const dt = ((Date.now() - t0) / 1000).toFixed(1)
   if (cancelRequested) {
     aliveLog(`Проверка живости остановлена вручную: проверено ${checked.toLocaleString('ru-RU')} доменов за ${dt} с`)

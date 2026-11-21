@@ -196,3 +196,150 @@ describe('dns-alive: скан живости (DomainAlive)', () => {
     expect(r.stats.perSource['A'].droppedDead).toBe(1)
   })
 })
+
+// ── Живучесть скана: чекпоинт, промежуточный сброс, автовозобновление ────────
+
+function mkCkpt(patch: Partial<import('@/lib/engine/dns-alive').AliveCheckpoint> = {}): import('@/lib/engine/dns-alive').AliveCheckpoint {
+  return {
+    active: true, origin: 'manual', startedAt: new Date().toISOString(),
+    processed: 0, alive: 0, dead: 0, errors: 0, skippedFresh: 0,
+    finishedAt: null, updatedAt: new Date().toISOString(), ...patch,
+  }
+}
+
+async function setSettingRaw(key: string, value: string): Promise<void> {
+  await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } })
+}
+
+async function waitScanDone(maxMs = 15_000): Promise<void> {
+  for (let i = 0; i < maxMs / 100 && dnsAlive.getDomainAliveProgress()?.active; i++) await new Promise((r) => setTimeout(r, 100))
+}
+
+describe('dns-alive: живучесть скана (чекпоинт, сброс, автовозобновление)', () => {
+  it('чекпоинт: активен во время скана, погашен после завершения', async () => {
+    await db.domainAlive.deleteMany({ where: { domain: { startsWith: 'ck.example' } } })
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const gated: AliveResolver = {
+      resolveNs: async () => { await gate; return ['ns1.ck.example'] },
+      resolve4: async () => { throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }) },
+      resolve6: async () => { throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }) },
+      resolveCname: async () => { throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }) },
+      cancel: () => undefined,
+    }
+    const batches = async function * () { yield ['ck.example'] }
+    const ok = await dnsAlive.startDomainAliveScan('test', {
+      batches: batches(), resolverFactory: () => gated,
+      concurrency: 1, timeoutMs: 10_000,
+    })
+    expect(ok).toBe(true)
+    // чекпоинт активен, пока скан идёт (гейт держит скан открытым)
+    let during: import('@/lib/engine/dns-alive').AliveCheckpoint | null = null
+    for (let i = 0; i < 100; i++) {
+      during = await dnsAlive.getAliveCheckpoint()
+      if (during?.active) break
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    expect(during?.active).toBe(true)
+    expect(during?.origin).toBe('test')
+    release()
+    await waitScanDone()
+    const after = await dnsAlive.getAliveCheckpoint()
+    expect(after?.active).toBe(false)
+    expect(after?.finishedAt).toBeTruthy()
+    expect(after?.processed).toBe(1)
+  }, 20_000)
+
+  it('промежуточный сброс: вердикты в БД ДО конца партии (рестарт не теряет партию)', async () => {
+    await db.domainAlive.deleteMany({ where: { domain: { startsWith: 'fl.example' } } })
+    const domains = Array.from({ length: 12 }, (_, i) => `fl.example${String(i).padStart(2, '0')}`)
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const answers: Record<string, { ns?: string[] }> = {}
+    for (const d of domains) answers[d] = { ns: [`ns1.${d}`] }
+    const gating: AliveResolver = {
+      ...fakeResolver(answers),
+      resolveNs: async (d: string) => {
+        if (d === domains[6]) await gate // после 6 проверок скан замирает — «рестарт»
+        return answers[d].ns ?? []
+      },
+    }
+    const batches = async function * () { yield domains }
+    await dnsAlive.startDomainAliveScan('test', {
+      batches: batches(), resolverFactory: () => gating,
+      concurrency: 1, timeoutMs: 5000, flushEvery: 5,
+    })
+    // ждём, пока проверены первые 6 (5 ушли в БД промежуточным сбросом, 6-я в очереди)
+    for (let i = 0; i < 200 && (dnsAlive.getDomainAliveProgress()?.processed ?? 0) < 6; i++) await new Promise((r) => setTimeout(r, 50))
+    expect(dnsAlive.getDomainAliveProgress()?.active).toBe(true) // скан ещё идёт — «рестарт» посреди партии
+    const flushed = await db.domainAlive.findMany({ where: { domain: { startsWith: 'fl.example' } } })
+    expect(flushed.length).toBe(5) // ровно flushEvery вердиктов уже в БД — партия НЕ потеряна
+    release()
+    await waitScanDone()
+    const all = await db.domainAlive.findMany({ where: { domain: { startsWith: 'fl.example' } } })
+    expect(all.length).toBe(12)
+  }, 20_000)
+
+  it('автовозобновление: чекпоинт активен → скан продолжается, свежие не перепроверяются', async () => {
+    await db.domainAlive.deleteMany({ where: { domain: { in: ['res.fresh.example', 'res.stale.example'] } } })
+    await db.domainAlive.create({ data: { domain: 'res.fresh.example', status: 'alive', checkedAt: new Date(), ns: 2 } })
+    await db.domainAlive.create({ data: { domain: 'res.stale.example', status: 'error', checkedAt: new Date(Date.now() - 20 * 86_400_000), ns: 0 } })
+    await setSettingRaw('dnsAliveCheckEnabled', 'true')
+    await setSettingRaw('dnsAliveScanState', JSON.stringify(mkCkpt({ processed: 100, alive: 60, dead: 30, errors: 10 })))
+    const probed: string[] = []
+    const counting: AliveResolver = {
+      resolveNs: async (d: string) => { probed.push(d); return d === 'res.stale.example' ? ['ns1.res.stale.example'] : [] },
+      resolve4: async () => { throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }) },
+      resolve6: async () => { throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }) },
+      resolveCname: async () => { throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }) },
+      cancel: () => undefined,
+    }
+    const batches = async function * () { yield ['res.fresh.example', 'res.stale.example'] }
+    // подменяем batches через прямые опции недоступно (maybeResume сам вызывает
+    // startDomainAliveScan) — поэтому домены резолвера проверяются против БД,
+    // а кэш доменов не используется: resume-скан читает домены из DomainRecord.
+    // Чтобы не зависеть от DomainRecord, проверяем механику через resume-семантику
+    // startDomainAliveScan с resumeFrom (тот же путь, что и автовозобновление).
+    const started = await dnsAlive.startDomainAliveScan('resume', {
+      batches: batches(), resolverFactory: () => counting,
+      concurrency: 1, timeoutMs: 1000, ttlDays: 14,
+      resumeFrom: mkCkpt({ processed: 100, alive: 60, dead: 30, errors: 10 }),
+    })
+    expect(started).toBe(true)
+    await waitScanDone()
+    const p = dnsAlive.getDomainAliveProgress()
+    expect(p?.active).toBe(false)
+    expect(p?.origin).toBe('resume')
+    expect(p?.processed).toBe(101) // 100 из чекпоинта + 1 перепроверенный
+    expect(p?.alive).toBe(61) // 60 из чекпоинта + 1 (stale перепроверен → alive)
+    expect(probed).toEqual(['res.stale.example']) // свежий не перепроверялся
+    const ck = await dnsAlive.getAliveCheckpoint()
+    expect(ck?.active).toBe(false)
+    expect(ck?.processed).toBe(101)
+    // постоянный журнал: партия записана в LogEntry
+    const entry = await db.logEntry.findFirst({ where: { scope: 'dns', message: { contains: 'партия' } } })
+    expect(entry).toBeTruthy()
+  }, 20_000)
+
+  it('автовозобновление: фильтр выключен → чекпоинт гасится, скан не запускается', async () => {
+    await setSettingRaw('dnsAliveCheckEnabled', 'false')
+    await setSettingRaw('dnsAliveScanState', JSON.stringify(mkCkpt({ processed: 77 })))
+    const started = await dnsAlive.maybeResumeInterruptedScan()
+    expect(started).toBe(false)
+    const ck = await dnsAlive.getAliveCheckpoint()
+    expect(ck?.active).toBe(false)
+    expect(dnsAlive.getDomainAliveProgress()?.active).toBe(false)
+  }, 20_000)
+
+  it('maybeResumeInterruptedScan: активный чекпоинт + включённый фильтр → скан стартует', async () => {
+    await setSettingRaw('dnsAliveCheckEnabled', 'true')
+    await setSettingRaw('dnsAliveScanState', JSON.stringify(mkCkpt({ processed: 5 })))
+    // домены берутся из DomainRecord — таблица пуста, скан завершится сразу
+    const started = await dnsAlive.maybeResumeInterruptedScan()
+    expect(started).toBe(true)
+    await waitScanDone()
+    expect(dnsAlive.getDomainAliveProgress()?.active).toBe(false)
+    const ck = await dnsAlive.getAliveCheckpoint()
+    expect(ck?.active).toBe(false)
+  }, 20_000)
+})

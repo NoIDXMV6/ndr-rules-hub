@@ -92,6 +92,9 @@ server.log
 !/scripts/gotify-deploy.sh
 !/scripts/extract-mermaid.py
 !/scripts/render-mermaid.py
+!/scripts/gitverse-release.sh
+!/scripts/pack-diagrams.py
+!/scripts/gen-release-notes.py
 /mini-services
 dev.log
 server.log
