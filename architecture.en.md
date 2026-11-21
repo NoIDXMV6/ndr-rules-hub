@@ -334,6 +334,54 @@ Categories / Records (search, duplicates, manual decisions) / Build & Export.
 | Serving | `GET /api/dns/export` — FORBIDDEN WITHOUT A TOKEN: a personal download token of the "domains"/"both" scope (full Uri `?token=ndrt_…`) or a cabinet session; the global `dnsServeToken` key was removed (v1.34.0), tokens are managed in "Account" only |
 | DNS cycle (`dnsCycleMode` / `runDnsCycle`) | three modes: `inline` — right after the main cycle (`runPipeline`); `deferred` — on its own `dnsCronSchedule` schedule (a second scheduler cron job — peak-load staggering: rules first, domains later); `off` — disabled by `dnsCronEnabled`. An invalid expression logs a warning and falls back to `inline` |
 | DNS cycle notification | in the `deferred` mode the cycle sends its OWN Telegram/Gotify notification (scope `dns`, the “Domain lists” line, the `notifyOnDns` switch in “Integrations”): source update and list build results; in the `inline` mode the DNS results are part of the full-cycle notification (the “DNS: …” line) |
+| Domain liveness (`dns-alive.ts`, v1.37.0) | a delegation check for domains taken from `DomainRecord` (not from the final file): `resolveNs` → on NXDOMAIN `resolve4/6/CNAME` in parallel; the `alive / dead / error` verdicts are written to `DomainAlive` (batched upsert) and applied by the NEXT build — details in 8.1 |
+| Liveness API | `GET /api/dns/alive` — the `dnsAlive*` settings, scan progress, verdict counters (60 s cache); `POST /api/dns/alive {action:"start"|"cancel"}` — manual start/cancel (admin only: the scan sends bulk DNS queries out) |
+
+### 8.1 Domain liveness check (v1.37.0)
+
+Hostlists accumulate non-delegated domains (expired, deleted, reserved by the
+registry) — useless in the final list while bloating the build and the DNS server's
+memory. The mechanics:
+
+```mermaid
+flowchart TD
+    DR[("DomainRecord<br/>all unique source domains")]
+    SCAN["dns-alive.ts scan<br/>25k batches · fresh TTL skip"]
+    PROBE["Pool of 50 DNS queries<br/>NS → A/AAAA/CNAME · 4 s timeout"]
+    DA[("DomainAlive<br/>status: alive / dead / error")]
+    BL["buildDomainList (next build)<br/>dead set from DB: status='dead', fresh TTL"]
+    MG["mergeDomainSources<br/>… → liveness: dead → droppedDead"]
+    OUT["blocked-domains.txt<br/>+ sha256"]
+
+    DR --> SCAN --> PROBE --> DA
+    DA -- "at the next build, dnsAliveCheckEnabled=true" --> BL
+    BL --> MG --> OUT
+```
+
+1. **Where the domains come from.** The scan does NOT read the final file: it walks the
+   DB cursor over `DomainRecord` (`SELECT DISTINCT domain … ORDER BY domain LIMIT 25000`)
+   — every raw domain of every enabled source, including entries later dropped by the
+   merge.
+2. **Classification.** `NS` answers → alive; otherwise `A/AAAA/CNAME` in parallel: any
+   record → alive; ALL queries NXDOMAIN → dead; SERVFAIL/timeout → error (no verdict —
+   false exclusions are worse than misses, the domain stays in the build).
+3. **What happens to the final list.** The scan does NOT modify the final file: it only
+   fills `DomainAlive` (domain PK, status, checkedAt, ns) with batched upserts.
+4. **Application at the next build.** With `dnsAliveCheckEnabled=true` `buildDomainList`
+   loads fresh dead verdicts (`checkedAt > now − dnsAliveTtlDays`) and passes them to
+   `mergeDomainSources`: the block record of a dead domain does not reach the file
+   (counted in `droppedDead`/`deadRemoved` and in the per-source build log). Verdicts
+   older than the TTL are ignored until re-checked, `error` never excludes.
+5. **Automation.** After the DNS cycle (`runDnsCycle` / the `inline` branch of
+   `runPipeline`) `maybeStartAliveScan` starts the background scan only if the filter is
+   enabled. The cycle: sources → build → background scan; the next build applies the
+   verdicts (a manual rebuild applies them immediately, without waiting for cron). A
+   second scan is rejected (409 by the API, false by cron); cancel finishes after the
+   current batch.
+6. **Scale and settings.** The first run over millions of domains takes hours (~50
+   parallel queries); later runs re-check only records whose TTL expired (`skippedFresh`).
+   Settings: `dnsAliveCheckEnabled` (default `false`), `dnsAliveTtlDays` = 14,
+   `dnsAliveConcurrency` = 50, `dnsAliveTimeoutMs` = 4000.
 
 ## 9. WireGuard VPN layer
 
