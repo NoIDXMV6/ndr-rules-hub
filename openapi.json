@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "NDR Rules Hub API",
-    "version": "1.38.0",
+    "version": "1.39.0",
     "summary": "Управление источниками правил Snort/Suricata и экспорт в Clear NDR",
     "description": "REST API NDR Rules Hub.\n\nРедакции: **Community** (однопользовательский режим, без аутентификации) и **Enterprise** (многопользовательский режим: регистрация, верификация администратором, личный кабинет, персональные токены скачивания).\n\nСхемы безопасности:\n- `sessionCookie` — cookie `ndrh_sid` (HttpOnly, SameSite=Lax, Secure), выдаётся POST /api/auth/login. Enterprise: все эндпоинты кроме `/api`, `/api/health`, `/api/auth/*` и `GET /api/export` требуют сессию; помеченные «только администратор» — роль admin.\n- `downloadToken` — персональный токен `ndrt_…` (?token= или Authorization) или глобальный ключ отдачи serveToken — только для GET /api/export (PULL-схема Clear NDR).\n\nЗащита: rate limit по IP на каждом эндпоинте (429 + Retry-After), анти-брутфорс (вход, ключи отдачи, токены), очередь тяжёлых операций (429 при переполнении), троттлинг канала для отдачи файлов, CSRF-проверка Origin/Sec-Fetch-Site для state-changing запросов браузера, scrypt-пароли, SHA-256 токенов в БД.\n\nВход и регистрация (Enterprise) защищены одноразовой SVG-капчей (`POST /api/auth/captcha`, ответ сгорает после каждой попытки) и двухфакторной аутентификацией: код в Telegram (привязка чата по /start боту) или TOTP (RFC 6238). После пароля выдаётся HMAC-билет в cookie `ndrh_mfa` (5 минут); сессия создаётся только после кода (`/api/auth/login/verify`, `/api/auth/register/verify`). Метод 2FA выбирается при регистрации и меняется в кабинете (`/api/auth/account`).",
     "contact": {
@@ -3259,6 +3259,83 @@
         "tags": [
           "RST Cloud"
         ]
+      }
+    },
+    "/api/rst/ioc": {
+      "post": {
+        "summary": "Фидбек RST Cloud: предложить индикатор / сообщить false positive",
+        "description": "POST https://api.rstcloud.net/v1/ioc — предложить индикатор для включения в базу (body: {value, description?, falsePositive?}); PUT — репорт false positive. Только для администратора; тратит квоту ключа.",
+        "responses": {
+          "200": {
+            "description": "Результат вызова RST Cloud API (ok/status/data или error)"
+          }
+        }
+      }
+    },
+    "/api/rst/benign": {
+      "post": {
+        "summary": "RST Noise Control batch",
+        "description": "POST https://api.rstcloud.net/v1/benign/batch/{ioctype} — пакетная проверка до 500 значений на «доброкачественность» (body: {action:\"batch\", ioctype, values[]}); action:\"result\" с token из ответа — забрать результат (/benign/result/{ioctype}). Только для администратора.",
+        "responses": {
+          "200": {
+            "description": "Результат вызова RST Cloud API (ok/status/data или error)"
+          }
+        }
+      }
+    },
+    "/api/rst/assistant": {
+      "get": {
+        "summary": "RST CTI Assistant",
+        "description": "GET — доступные модели (/v1/models); POST {model, messages[]} — AI-запрос по threat intelligence (/v1/chat/completions). Только для администратора.",
+        "responses": {
+          "200": {
+            "description": "Результат вызова RST Cloud API (ok/status/data или error)"
+          }
+        }
+      }
+    },
+    "/api/rst/reports": {
+      "get": {
+        "summary": "RST Report Hub — отчёты и бюллетени",
+        "description": "GET ?startdate=YYYY-MM-DD — список отчётов (/v1/reports); ?report=<id>&format=json|stix|pdf — содержимое отчёта (PDF возвращается base64). Только для администратора.",
+        "responses": {
+          "200": {
+            "description": "Результат вызова RST Cloud API (ok/status/data или error)"
+          }
+        }
+      }
+    },
+    "/api/rst/threat-objects": {
+      "get": {
+        "summary": "RST Threat Library — объекты угроз",
+        "description": "GET ?type=actors|malware|campaigns|ttps&limit=&offset=&name=&filter=&orderBy=&orderMode= — курируемые объекты угроз (/v1/threat-objects/{type}). Только для администратора.",
+        "responses": {
+          "200": {
+            "description": "Результат вызова RST Cloud API (ok/status/data или error)"
+          }
+        }
+      }
+    },
+    "/api/rst/scan": {
+      "get": {
+        "summary": "RST Scan API — сканирование ресурса",
+        "description": "GET ?kind=cs-beacon|ssl|favicon|html&target=<домен|IP|URL> — Cobalt Strike beacon scan, SSL-сертификат, favicon-хэш, HTML-тело (/v1/scan/*). Только для администратора.",
+        "responses": {
+          "200": {
+            "description": "Результат вызова RST Cloud API (ok/status/data или error)"
+          }
+        }
+      }
+    },
+    "/api/rst/whois": {
+      "get": {
+        "summary": "RST Whois API — расширенные варианты",
+        "description": "GET ?domain=X&variant=parsed|full|raw — /v1/whois/{домен} (parsed, по умолчанию), /v1/whois/full/{домен}, /v1/whois/raw/{домен}. Только для администратора.",
+        "responses": {
+          "200": {
+            "description": "Результат вызова RST Cloud API (ok/status/data или error)"
+          }
+        }
       }
     }
   },

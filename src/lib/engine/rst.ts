@@ -248,3 +248,133 @@ export function rstIocVerdict(data: Record<string, unknown>): { malicious: boole
     : 'Не найден в базе RST Cloud (0 баллов — на момент проверки не считался вредоносным)'
   return { malicious, score, tags, text }
 }
+
+// ── Расширение v1.39.0: весь функционал RST Cloud API ───────────────────────
+// POST /ioc — предложить индикатор для включения в базу RST Cloud
+export async function rstIocSubmit(value: string, description: string, apiKey: string): Promise<RstCallResult> {
+  return rstCall('/ioc', apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value: value.trim(), description: (description || 'manual submission').trim() }),
+  })
+}
+
+// PUT /ioc — сообщить о false positive (индикатор не является вредоносным)
+export async function rstIocFalsePositive(value: string, description: string, apiKey: string): Promise<RstCallResult> {
+  return rstCall('/ioc', apiKey, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value: value.trim(), description: (description || 'manual submission').trim() }),
+  })
+}
+
+// POST /benign/batch/{ioctype} — пакетная проверка «шума» (Noise Control batch):
+// ioctype: ip | domain | url | hash; data — JSON со списком значений
+// (официальный клиент передаёт {"value": [...]})
+export async function rstBenignBatch(ioctype: string, values: string[], apiKey: string): Promise<RstCallResult> {
+  return rstCall(`/benign/batch/${encodeURIComponent(ioctype)}`, apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value: values }),
+  })
+}
+
+// POST /benign/result/{ioctype} — забрать результат пакетной проверки по токену
+export async function rstBenignBatchResult(ioctype: string, token: string, apiKey: string): Promise<RstCallResult> {
+  return rstCall(`/benign/result/${encodeURIComponent(ioctype)}`, apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+}
+
+// GET /models — список моделей RST CTI Assistant
+export async function rstModels(apiKey: string): Promise<RstCallResult> {
+  return rstCall('/models', apiKey)
+}
+
+// POST /chat/completions — запрос к CTI Assistant (анализ угроз, обогащение IoC)
+export async function rstChat(model: string, messages: Array<{ role: string; content: string }>, apiKey: string): Promise<RstCallResult> {
+  return rstCall('/chat/completions', apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages }),
+  })
+}
+
+// GET /reports?startdate=YYYY-MM-DD — список отчётов RST Report Hub
+export async function rstReports(startdate: string, apiKey: string): Promise<RstCallResult> {
+  const q = startdate ? `?startdate=${encodeURIComponent(startdate)}` : ''
+  return rstCall(`/reports${q}`, apiKey)
+}
+
+// GET /reports/{id}/json|stix|pdf — отчёт в формате JSON / STIX 2.1 / PDF.
+// PDF — бинарный: rstCallJson не годится, читаем как массив байт → base64.
+export async function rstReportFile(reportId: string, format: 'json' | 'stix' | 'pdf', lang: string, apiKey: string): Promise<RstCallResult & { base64?: string }> {
+  const path = `/reports/${encodeURIComponent(reportId.trim())}/${format}${lang && format !== 'pdf' ? `?lang=${encodeURIComponent(lang)}` : ''}`
+  if (format === 'pdf') {
+    try {
+      const res = await fetch(`${RST_API_BASE}${path}`, {
+        signal: AbortSignal.timeout(60_000),
+        headers: { Accept: 'application/pdf', 'X-Api-Key': apiKey.trim() },
+      })
+      if (!res.ok) return { ok: false, status: res.status, data: null, error: `HTTP ${res.status}` }
+      const buf = Buffer.from(await res.arrayBuffer())
+      return { ok: true, status: res.status, data: null, base64: buf.toString('base64') }
+    } catch (e) {
+      return { ok: false, status: 0, data: null, error: (e as Error).message || 'ошибка запроса к RST Cloud' }
+    }
+  }
+  return rstCall(path, apiKey)
+}
+
+// GET /whois/full/{домен} | /whois/raw/{домен} — расширенные/сырые whois-данные
+export async function rstWhoisVariant(domain: string, variant: 'parsed' | 'full' | 'raw', apiKey: string): Promise<RstCallResult> {
+  const d = encodeURIComponent(domain.trim().replace(/\.$/, ''))
+  const prefix = variant === 'full' ? '/whois/full/' : variant === 'raw' ? '/whois/raw/' : '/whois/'
+  return rstCall(`${prefix}${d}`, apiKey)
+}
+
+// ── Scan API: внешнее сканирование ресурса ───────────────────────────────────
+export const RST_SCAN_KINDS = ['cs-beacon', 'ssl', 'favicon', 'html'] as const
+export type RstScanKind = typeof RST_SCAN_KINDS[number]
+
+const SCAN_PATHS: Record<RstScanKind, string> = {
+  'cs-beacon': '/scan/cs-beacon',
+  ssl: '/scan/ssl/certificate',
+  favicon: '/scan/favicon',
+  html: '/scan/html/body',
+}
+
+// GET /scan/{cs-beacon|ssl/certificate|favicon|html/body}?target=…
+export async function rstScan(kind: RstScanKind, target: string, apiKey: string): Promise<RstCallResult> {
+  return rstCall(`${SCAN_PATHS[kind]}?target=${encodeURIComponent(target.trim())}`, apiKey)
+}
+
+// ── RST Threat Library: курируемые объекты угроз ─────────────────────────────
+// object_type: actors | malware | campaigns | ttps (по документации Threat
+// Library: акторы, алиасы, кампании, TTP); произвольный тип пробрасывается как есть.
+export const RST_OBJECT_TYPES = ['actors', 'malware', 'campaigns', 'ttps'] as const
+
+export interface RstObjectQuery {
+  limit?: number
+  offset?: number
+  id?: string
+  name?: string
+  filter?: string
+  orderBy?: string
+  orderMode?: 'asc' | 'desc'
+}
+
+export async function rstThreatObjects(objectType: string, q: RstObjectQuery, apiKey: string): Promise<RstCallResult> {
+  const params = new URLSearchParams()
+  if (q.limit && q.limit > 0) params.set('limit', String(Math.min(q.limit, 200)))
+  if (q.offset && q.offset > 0) params.set('offset', String(q.offset))
+  if (q.id) params.set('id', q.id.trim())
+  if (q.name) params.set('name', q.name.trim())
+  if (q.filter) params.set('filter', q.filter.trim())
+  if (q.orderBy) params.set('orderBy', q.orderBy.trim())
+  if (q.orderMode) params.set('orderMode', q.orderMode)
+  const qs = params.toString()
+  return rstCall(`/threat-objects/${encodeURIComponent(objectType.trim())}${qs ? `?${qs}` : ''}`, apiKey)
+}

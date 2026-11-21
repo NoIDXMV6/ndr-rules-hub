@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ============================================================================
-// db-heal.cjs — самовосстановление БД тома до схемы образа, БЕЗ потери данных.
+// db-heal.cjs — докатка схемы БД тома до схемы образа, БЕЗ потери данных.
 // Запускается docker-entrypoint.sh ДО старта сервера.
 //
 //   node db-heal.cjs <файл-БД> <манифест-схемы.json>
@@ -11,60 +11,50 @@
 //   - отсутствующую колонку  → ALTER TABLE ADD COLUMN (тип; DEFAULT — если был;
 //     NOT NULL без DEFAULT не переносится — колонка станет nullable, Prisma
 //     это допускает, данные не теряются);
-//   - отсутствующий индекс   → CREATE INDEX.
-// Перед первым изменением — консистентная копия БД через VACUUM INTO
-// (в файл <db>.preheal-<время>).
+//   - отсутствующий индекс   → CREATE INDEX (best-effort: на таблице в миллионы
+//     строк индекс строится минутами, его таймаут НЕ проваливает запуск).
 //
-// Чинит два инцидента из продакшена:
-//  1) P2022 «The column `deletedAt` does not exist in the current database»
-//     после обновления образа, когда sidecar-файл .schema-version не отражал
-//     реальную структуру БД;
-//  2) SQLITE_CORRUPT «database disk image is malformed» (extended_code 11) —
-//     битые страницы данных. ALTER TABLE редактирует страницу 1 (sqlite_master)
-//     и может «успешно» пройти на повреждённой БД: приложение стартует, но падает
-//     на каждом запросе. Поэтому перед лечением БД проверяется быстрым сканом
-//     (quick_check, см. ниже), а при провале восстанавливается из последнего
-//     здорового снимка:
-//       <db>.preheal-*  — VACUUM-копии, которые этот скрипт делает перед ALTER'ами;
-//       <db>.bak-*      — бэкапы entrypoint при подмене БД шаблоном.
-//     Хвостовые -wal/-shm при подмене файла БД удаляются: кадры старого WAL,
-//     наложенные на страницы другого файла — типичная причина «malformed».
+// ГЛАВНЫЙ ПРИНЦИП (v1.39.0): докатка схемы — операции МЕТАДАННЫХ (sqlite_master,
+// PRAGMA table_info, CREATE TABLE, ADD COLUMN). Они не читают страницы данных,
+// выполняются за миллисекунды и не требуют бэкапа. Любая тяжёлая работа
+// (скан целостности, восстановление) — только по явным доказательствам
+// повреждения или вручную через env.
 //
-// ИНЦИДЕНТ v1.36.0 (продакшен): контейнер unhealthy, docker logs ПУСТЫ,
-// рестарт не помогает. Причина: db-heal выполнял ТЯЖЁЛЫЕ операции молча и
-// БЕЗ ограничения времени — integrity_check на огромной БД (после зависших
-// DNS-сборок том разросся: миллионы доменов + гигабайтный WAL), проверка до
-// 15 снапшотов подряд, мультигигабайтный VACUUM INTO. Всё это — ДО exec node
-// server.js: приложение не стартует, healthcheck не отвечает, логи пустые.
-// Лечение (все тяжёлые шаги):
-//   • печать размеров/прогресса ДО начала работы — логи больше не пустые;
-//   • жёсткий таймаут на каждый шаг (DB_HEAL_TIMEOUT_MS, дефолт 90с);
-//   • bounded-скан quick_check(25) вместо полного integrity_check: стоп
-//     после 25 проблем (быстрый фейл на повреждённой БД); полный
-//     integrity_check — только при NDR_DB_FULL_CHECK=1;
-//   • снапшотов проверяется максимум 5 (каждый со своим таймаутом);
-//   • коды выхода: 0 — ок/докатано; 1 — БД повреждена без здоровых снимков
-//     (entrypoint бэкапит и создаёт БД из шаблона); 2 — проверка НЕ
-//     ЗАВЕРШИЛАСЬ (таймаут) — БД НЕ считается повреждённой, entrypoint
-//     запускает сервер с существующей БД (диагностика в /api/health).
-// После успешной проверки — wal_checkpoint(TRUNCATE): подрезает огромный
-// WAL, оставшийся от зависших сборок (мог быть больше самой БД).
-// Никогда не стирает данные сам: решение «шаблон вместо БД» принимает
-// только entrypoint и только на коде 1.
+// ИНЦИДЕНТ v1.39.0 (продакшен, 10 дней): на БД 1.3 GB докатка схемы не
+// выполнялась НИ РАЗУ с v1.37: перед ALTER'ами запускался «предохранительный»
+// VACUUM INTO (копия БД), он не укладывался в 90с, шаг помечался пропущенным,
+// но брошенный запрос продолжал выполняться в фоне — и `await
+// vacClient.$disconnect()` в finally ждал его завершения МИНУТАМИ. Глобальный
+// таймаут рестарта (300с) убивал процесс ДО ALTER'ов. Итог: недостающая
+// таблица не создавалась НИКОГДА, при каждом рестарте всё повторялось,
+// рядом копились частичные .preheal-копии (8 файлов ≈ 2.9 GB) с горячими
+// -journal. Лечение (этот файл):
+//   • VACUUM INTO ПЕРЕД докаткой УДАЛЁН как класс: метаданные не нуждаются
+//     в бэкапе, а на большой БД он гарантированно не укладывался в бюджет
+//     и блокировал саму докатку. Полная консистентная копия — вручную, при
+//     остановленном приложении: sqlite3 hub.db "VACUUM INTO '/путь/копия.db'";
+//   • по таймауту шага клиент НЕ.disconnect() (брошенный запрос нельзя
+//     дождаться) — процесс просто завершается, движок прибирается сам;
+//   • докатка выполняется ВСЕГДА и первой; таймаут одного ALTER'а — сигнал
+//     «не успел» (код 2), повтор при следующем рестарте — как и раньше;
+//   • уборка мусора: частичные .preheal-копии (с горячим -journal) удаляются
+//     всегда, сверх двух свежих — тоже (два последних снимка остаются
+//     кандидатами восстановления);
+//   • при актуальной схеме весь проход занимает секунды на БД любого размера.
 //
-// ИНЦИДЕНТ v1.36.2 (продакшен): БД тома 1.3 GB — quick_check(25) не
-// укладывался в 90с, выход с кодом 2 обрывал скрипт ДО докатки схемы
-// (код 2 означал «не успел, БД не тронута») — сервер стартовал на устаревшей
-// схеме тома, все API падали P2022/P2021, UI вечно показывал «Проверка
-// сессии…». Лечение:
-//   • скан целостности ПРОПУСКАЕТСЯ на БД больше DB_HEAL_CHECK_SKIP_MB
-//     (дефолт 400 MB): на большой БД скан идёт минутами и съедал бюджет
-//     рестарта, а докатка схемы — метаданные (sqlite_master + PRAGMA
-//     table_info), на страницах данных не зависит; полный скан — вручную:
-//     NDR_DB_FULL_CHECK=1 (+ DB_HEAL_TIMEOUT_MS побольше);
-//   • тайм-аут скана больше НЕ обрывает скрипт: повреждённость не доказана
-//     (структурная проверка пройдена) — докатка выполняется, сервер стартует
-//     со СВЕЖЕЙ схемой вместо устаревшей.
+// ПРЕДЫДУЩИЕ ИНЦИДЕНТЫ (v1.36.0, v1.36.2) — сохранены уроки:
+//   • логи печатаются ПЕРВЫМИ (размеры БД/WAL, режим скана) — «пустые docker
+//     logs» больше невозможны;
+//   • скан целостности пропускается на БД больше DB_HEAL_CHECK_SKIP_MB
+//     (дефолт 400 MB) — полный скан вручную: NDR_DB_FULL_CHECK=1
+//     (+ увеличенный DB_HEAL_TIMEOUT_MS);
+//   • тайм-ауты не означают повреждение: код 2 («не успел/не доказано») —
+//     entrypoint запускает сервер с существующей БД; код 1 — ТОЛЬКО по
+//     доказанному повреждению (quick_check/integrity_check со структурной
+//     проверкой мастера) и только когда ни один снимок не здоров;
+//   • каждый тяжёлый шаг — со своим таймаутом (DB_HEAL_TIMEOUT_MS, дефолт 90с);
+//   • после успешного прохода — wal_checkpoint(TRUNCATE) подрезает WAL,
+//     оставшийся от зависших сборок (best-effort, с таймаутом).
 // ============================================================================
 const fs = require('fs')
 const path = require('path')
@@ -74,7 +64,7 @@ const dbArg = process.argv[2]
 const manifestArg = process.argv[3]
 // сколько самых свежих снимков проверять; каждый — со своим таймаутом
 const MAX_CANDIDATES = 5
-// таймаут ОДНОГО тяжёлого шага (скан, снапшот, VACUUM, индекс);
+// таймаут ОДНОГО тяжёлого шага (скан, снапшот, ALTER, индекс);
 // DB_HEAL_TIMEOUT_MS задаётся в секундах*1000 при запуске, любые значения > 0
 // допускаются (тесты), отсутствие/некорректное — дефолт 90с
 const rawTimeoutMs = Number(process.env.DB_HEAL_TIMEOUT_MS)
@@ -86,6 +76,8 @@ const FULL_CHECK = process.env.NDR_DB_FULL_CHECK === '1'
 // (поведение до v1.36.2); отрицательное/некорректное — дефолт 400.
 const rawSkipMb = Number(process.env.DB_HEAL_CHECK_SKIP_MB)
 const CHECK_SKIP_MB = Number.isFinite(rawSkipMb) && rawSkipMb >= 0 ? rawSkipMb : 400
+// сколько свежих .preheal-снимков хранить как кандидатов восстановления
+const KEEP_PREHEAL = 2
 const dbBytes = (() => { try { return fs.statSync(dbArg).size } catch { return 0 } })()
 const scanSkippedBySize = !FULL_CHECK && CHECK_SKIP_MB > 0 && dbBytes > CHECK_SKIP_MB * 1024 * 1024
 
@@ -162,9 +154,23 @@ async function clientFor(dbPath) {
 }
 
 /**
+ * Отключить клиент, НЕ дожидаясь зависших запросов: $disconnect на клиенте
+ * с выполняющимся запросом ждёт его завершения (инцидент v1.39.0 — так
+ * докатка схемы не выполнялась неделями). Гонка с коротким таймером: что
+ * раньше — disconnect или 2с; брошенный движок прибирается при process.exit.
+ */
+async function detachQuietly(client) {
+  if (!client) return
+  await Promise.race([
+    client.$disconnect().catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, 2000).unref()),
+  ])
+}
+
+/**
  * Жёсткий таймаут тяжёлого шага. Прервать запрос Prisma извне нельзя, поэтому
- * по таймауту шаг помечается пропущенным, его клиент оставляется висеть
- * (движок приберётся при process.exit в конце), а работа продолжается.
+ * по таймауту шаг помечается пропущенным, клиент БРОСАЕТСЯ (не disconnect! —
+ * см. detachQuietly/шапку), а работа продолжается.
  * Возвращает { timedOut, value } — value только если timedOut=false.
  */
 async function withTimeout(label, fn) {
@@ -193,14 +199,11 @@ async function withTimeout(label, fn) {
 // Возвращает { ok, problems, timedOut }.
 async function checkIntegrity(dbPath) {
   const sql = FULL_CHECK ? 'PRAGMA integrity_check' : 'PRAGMA quick_check(25)'
+  let client = null
   try {
     const res = await withTimeout(`скан целостности ${path.basename(dbPath)}`, async () => {
-      const c = await clientFor(dbPath)
-      try {
-        return await c.$queryRawUnsafe(sql)
-      } finally {
-        try { await c.$disconnect() } catch { /* коннекция уже мертва */ }
-      }
+      client = await clientFor(dbPath)
+      return await client.$queryRawUnsafe(sql)
     })
     if (res.timedOut) return { ok: false, problems: [], timedOut: true }
     const problems = res.value
@@ -209,12 +212,14 @@ async function checkIntegrity(dbPath) {
     return { ok: problems.length === 0, problems, timedOut: false }
   } catch (e) {
     return { ok: false, problems: [String(e?.message ?? e).split('\n')[0]], timedOut: false }
+  } finally {
+    await detachQuietly(client)
   }
 }
 
 // Снимки БД рядом с текущей: <db>.preheal-* и <db>.bak-*. Хвостовые файлы
-// -wal/-shm (в т.ч. уехавшие в бэкап под именем <bak>-wal) кандидатами не
-// являются — это не самостоятельные БД.
+// -wal/-shm/-journal (в т.ч. уехавшие в бэкап под именем <bak>-wal) кандидатами
+// не являются — это не самостоятельные БД.
 function candidates(dbPath) {
   const dir = path.dirname(dbPath)
   const base = path.basename(dbPath)
@@ -222,7 +227,7 @@ function candidates(dbPath) {
   try {
     out = fs.readdirSync(dir)
       .filter((n) => (n.startsWith(`${base}.preheal-`) || n.startsWith(`${base}.bak-`))
-        && !n.endsWith('-wal') && !n.endsWith('-shm'))
+        && !n.endsWith('-wal') && !n.endsWith('-shm') && !n.endsWith('-journal'))
       .map((n) => path.join(dir, n))
       .filter((p) => { try { return fs.statSync(p).isFile() } catch { return false } })
       .map((p) => ({ p, m: fs.statSync(p).mtimeMs }))
@@ -233,6 +238,53 @@ function candidates(dbPath) {
     out = []
   }
   return out
+}
+
+/**
+ * Уборка мусора прежних попыток «бэкапа перед изменениями» (v1.39.0):
+ *  • .preheal-копия с соседним -journal — частичный файл прерванного
+ *    VACUUM INTO (горячий журнал), не снимок: удаляется ВСЕГДА вместе с
+ *    журналом (открытие такого файла — только лишний recovery);
+ *  • сверх KEEP_PREHEAL самых свежих .preheal-копий — тоже удаляются
+ *    (кандидаты восстановления — два последних), остальное — мусор недель;
+ *  • рядом с любыми снимками удаляются хвостовые -journal/-wal/-shm.
+ * .bak-* (бэкапы entrypoint при подмене БД шаблоном) не трогаются никогда.
+ */
+function cleanupPartialSnapshots(dbPath) {
+  const dir = path.dirname(dbPath)
+  const base = path.basename(dbPath)
+  let preheals = []
+  try {
+    preheals = fs.readdirSync(dir)
+      .filter((n) => n.startsWith(`${base}.preheal-`)
+        && !n.endsWith('-wal') && !n.endsWith('-shm') && !n.endsWith('-journal'))
+      .map((n) => path.join(dir, n))
+      .filter((p) => { try { return fs.statSync(p).isFile() } catch { return false } })
+      .map((p) => ({ p, m: fs.statSync(p).mtimeMs }))
+      .sort((a, b) => b.m - a.m)
+      .map((x) => x.p)
+  } catch { return }
+  let removed = 0
+  const rm = (p) => {
+    try { fs.rmSync(p, { force: true }); removed++ } catch { /* занят/нет файла */ }
+  }
+  preheals.forEach((p, i) => {
+    const partial = fs.existsSync(`${p}-journal`) // горячий журнал = прерванный VACUUM INTO
+    if (partial || i >= KEEP_PREHEAL) {
+      rm(p)
+      rm(`${p}-journal`)
+      log(partial
+        ? `убрана частичная копия ${path.basename(p)} (прерванный VACUUM INTO, горячий журнал) — снимком не является`
+        : `убрана старая копия ${path.basename(p)} (хранятся ${KEEP_PREHEAL} свежих как кандидаты восстановления)`)
+    }
+  })
+  // хвостовые журналы у выживших снимков — восстановлению не помогают
+  for (const p of preheals.slice(0, KEEP_PREHEAL)) {
+    for (const suf of ['-journal', '-wal', '-shm']) {
+      try { if (fs.existsSync(`${p}${suf}`)) fs.rmSync(`${p}${suf}`, { force: true }) } catch { /* нет файла */ }
+    }
+  }
+  if (removed > 0) log(`очистка мусора: удалено файлов ${removed}, освобождено место на томе`)
 }
 
 // Восстановление БД из последнего здорового снимка. Возвращает имя снимка
@@ -326,6 +378,10 @@ function finish(code, extra) {
 async function main() {
   printHeader()
 
+  // 0. Мусор прежних прогонов убирается ДО любой проверки: частичные копии
+  //    прерванных VACUUM INTO (v1.39.0) — не снимки и места не должны занимать.
+  cleanupPartialSnapshots(dbArg)
+
   // 1. Быстрая структурная проверка (страница 1 + sqlite_master — миллисекунды):
   //    «malformed» на мастере виден сразу, без полного скана. Свой клиент,
   //    отключается сразу: при последующем восстановлении файл будет подменён
@@ -336,14 +392,11 @@ async function main() {
     // подключение (включая открытие файла/recovery WAL) — ВНУТРИ таймаута:
     // открытие гигабайтного wal-файла может занять минуты
     let res
+    let probe = null
     try {
       res = await withTimeout('подключение к БД и чтение sqlite_master', async () => {
-        const probe = await clientFor(dbArg)
-        try {
-          return await probe.$queryRawUnsafe("SELECT count(*) AS n FROM sqlite_master WHERE type='table'")
-        } finally {
-          try { await probe.$disconnect() } catch { /* коннекция уже мертва */ }
-        }
+        probe = await clientFor(dbArg)
+        return await probe.$queryRawUnsafe("SELECT count(*) AS n FROM sqlite_master WHERE type='table'")
       })
     } catch (e) {
       const msg = String(e?.message ?? e)
@@ -353,6 +406,8 @@ async function main() {
         finish(2, `чтение sqlite_master не удалось (${msg.split('\n')[0]}) — повреждённость не доказана`)
         return
       }
+    } finally {
+      await detachQuietly(probe)
     }
     if (res.error) {
       masterOk = false
@@ -408,11 +463,14 @@ async function main() {
   //    до подмены, кэш страниц старого файла, запросы через него ломаются
   //    (инцидент тестов: «сверка схемы не удалась» сразу после restore).
   //    Подключение — под таймаутом (открытие огромной БД/recovery — минуты).
-  //    Каждое изменение — с таймаутом: CREATE INDEX на таблице в миллионы
-  //    строк может быть долгим.
+  //    ДОКАТКА БЕЗ ПРЕДВАРИТЕЛЬНОГО БЭКАПА (v1.39.0): CREATE TABLE и
+  //    ADD COLUMN — операции метаданных, страницы данных не трогают; бэкап
+  //    перед ними был балластом, который на большой БД съедал весь бюджет
+  //    рестарта и блокировал саму докатку (см. шапку).
   const openRes = await withTimeout('подключение к БД для сверки схемы', () => clientFor(dbArg))
   if (openRes.timedOut) { finish(2, `подключение к БД не завершилось — запуск продолжается`); return }
   const prisma = openRes.value
+  let indexPending = 0
   try {
     const liveTables = await prisma.$queryRawUnsafe(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_prisma_migrations'"
@@ -420,6 +478,7 @@ async function main() {
     const liveSet = new Set(liveTables.map((t) => t.name))
 
     const actions = []
+    const indexActions = []
     for (const [table, def] of Object.entries(manifest.tables)) {
       if (!liveSet.has(table)) {
         actions.push({ sql: def.ddl, log: `добавлена таблица ${table}` })
@@ -438,57 +497,56 @@ async function main() {
     const idxSet = new Set(liveIdx.map((i) => i.name))
     for (const idx of manifest.indexes || []) {
       if (!idxSet.has(idx.name)) {
-        actions.push({ sql: idx.sql, log: `добавлен индекс ${idx.name} (${idx.table})` })
+        // CREATE INDEX на таблице в миллионы строк — минуты: отдельно,
+        // best-effort — таймаут индекса НЕ проваливает запуск (схема
+        // работоспособна и без него, докатка повторится при рестарте)
+        indexActions.push({ sql: idx.sql, log: `добавлен индекс ${idx.name} (${idx.table})` })
       }
     }
 
-    if (actions.length > 0) {
-      // консистентная копия перед первым изменением (с таймаутом: копия
-      // гигабайтной БД на медленном диске — минуты, молчать нельзя).
-      // ОТДЕЛЬНЫЙ клиент: VACUUM INTO — только чтение источника, не должен
-      // блокировать ALTER'ы основного клиента даже после своего таймаута.
-      const backup = `${dbArg}.preheal-${new Date().toISOString().replace(/[:.]/g, '-')}`
-      const vacOpen = await withTimeout('подключение для VACUUM INTO', () => clientFor(dbArg))
-      if (vacOpen.timedOut) {
-        log(`ВНИМАНИЕ: подключение для бэкапа не завершилось — продолжаю без него (данные ALTER'ами не затрагиваются)`)
-      } else {
-        const vacClient = vacOpen.value
-        log(`бэкап перед изменениями (VACUUM INTO)…`)
-        try {
-          const vac = await withTimeout(`VACUUM INTO ${path.basename(backup)}`, () =>
-            vacClient.$executeRawUnsafe(`VACUUM INTO ${q(backup)}`)
-          )
-          if (vac.timedOut) {
-            log(`ВНИМАНИЕ: бэкап VACUUM INTO не завершился — продолжаю без него (данные ALTER'ами не затрагиваются)`)
-          } else {
-            log(`бэкап до изменений: ${backup}`)
-          }
-        } catch (e) {
-          log(`ВНИМАНИЕ: бэкап VACUUM INTO не удался (${String(e?.message ?? e).split('\n')[0]}) — продолжаю без него`)
-        } finally {
-          try { await vacClient.$disconnect() } catch { /* коннекция уже мертва */ }
-        }
-      }
+    if (actions.length > 0 || indexActions.length > 0) {
+      log(`схема отстаёт от манифеста: таблиц/колонок — ${actions.length}, индексов — ${indexActions.length}`)
+    }
 
-      // Ошибка (не таймаут) ALTER'а — тоже «неопределённость», а не «БД
-      // повреждена»: код 2, маркер не пишется, докатка повторится при рестарте
-      for (const a of actions) {
-        let r
-        try {
-          r = await withTimeout(a.log, () => prisma.$executeRawUnsafe(a.sql))
-        } catch (e) {
-          console.error(`${P} докатка не удалась (${a.log}): ${String(e?.message ?? e).split('\n')[0]}`)
-          return finish(2)
-        }
-        if (r.timedOut) {
-          console.error(`${P} докатка не завершена (таймаут) — маркер схемы НЕ записывается, проверка повторится при следующем рестарте`)
-          return finish(2)
-        }
-        log(a.log)
+    // Ошибка (не таймаут) ALTER'а — тоже «неопределённость», а не «БД
+    // повреждена»: код 2, маркер не пишется, докатка повторится при рестарте
+    for (const a of actions) {
+      let r
+      try {
+        r = await withTimeout(a.log, () => prisma.$executeRawUnsafe(a.sql))
+      } catch (e) {
+        console.error(`${P} докатка не удалась (${a.log}): ${String(e?.message ?? e).split('\n')[0]}`)
+        return finish(2)
       }
-      log(`схема докатана: ${actions.length} изменен(ий/ия) — данные сохранены`)
-    } else {
+      if (r.timedOut) {
+        console.error(`${P} докатка не завершена (таймаут) — маркер схемы НЕ записывается, проверка повторится при следующем рестарте`)
+        return finish(2)
+      }
+      log(a.log)
+    }
+    if (actions.length > 0) log(`структура схемы докатана: ${actions.length} изменен(ий/ия) — данные сохранены`)
+
+    // Индексы — best-effort: на большой таблице долгие, но не критичные
+    for (const a of indexActions) {
+      let r
+      try {
+        r = await withTimeout(a.log, () => prisma.$executeRawUnsafe(a.sql))
+      } catch (e) {
+        log(`индекс не создан (${a.log}): ${String(e?.message ?? e).split('\n')[0]} — некритично, повтор при рестарте`)
+        indexPending++
+        continue
+      }
+      if (r.timedOut) {
+        log(`индекс не создан за таймаут (${a.log}) — некритично, повтор при рестарте`)
+        indexPending++
+        continue
+      }
+      log(a.log)
+    }
+    if (actions.length === 0 && indexActions.length === 0) {
       log(`схема актуальна (${Object.keys(manifest.tables).length} таблиц), изменений не требуется`)
+    } else if (indexPending > 0) {
+      log(`докатка завершена (индексов отложено: ${indexPending} — создадутся при следующем рестарте)`)
     }
 
     // 4. Подрезка WAL: гигабайтный WAL от зависших сборок замедляет каждый
@@ -512,7 +570,8 @@ async function main() {
     console.error(`${P} сверка схемы не удалась: ${String(e?.message ?? e).split('\n')[0]}`)
     finish(2)
   } finally {
-    try { await prisma.$disconnect() } catch { /* коннекция уже мертва */ }
+    // НЕ ждем зависших запросов: disconnect — в гонке с 2с (v1.39.0)
+    await detachQuietly(prisma)
   }
 
   finish(exitCode, `инициализация БД успешна`)

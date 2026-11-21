@@ -133,7 +133,7 @@ describe('db-heal: докатка схемы старой БД без потер
     expect(out.stdout).toContain('добавлена колонка Source.deletedAt')
     expect(out.stdout).toContain('добавлена таблица Category')
     expect(out.stdout).toContain('добавлена таблица RuleOverride')
-    expect(out.stdout).toContain('схема докатана')
+    expect(out.stdout).toContain('структура схемы докатана')
 
     // данные сохранены, схема соответствует текущей
     const res = await rawDb(oldDb, `
@@ -161,6 +161,36 @@ describe('db-heal: докатка схемы старой БД без потер
       cwd: path.resolve(__dirname, '..'),
     })
     expect(out.stdout).toContain('изменений не требуется')
+  })
+
+  it('v1.39.0: частичная .preheal-копия (с горячим -journal) удаляется, 2 свежих снимка остаются', async () => {
+    // инцидент v1.39.0: частичные VACUUM-копии копились неделями (8 файлов ≈ 2.9 GB),
+    // каждая с горячим журналом прерванного VACUUM INTO — мусор, не снимки
+    const p1 = path.join(work, 'hub.db.preheal-2026-01-01T00-00-01')
+    const p2 = path.join(work, 'hub.db.preheal-2026-01-01T00-00-02')
+    const p3 = path.join(work, 'hub.db.preheal-2026-01-01T00-00-03')
+    await fs.copyFile(templateDb, p1)
+    await fs.copyFile(templateDb, p2)
+    await fs.copyFile(templateDb, p3)
+    // явные РАЗНЫЕ mtime: сортировка «свежести» в db-heal идёт по mtime,
+    // копии в одну миллисекунду дали бы недетерминированный порядок
+    await fs.utimes(p1, new Date('2026-01-01T00:00:01Z'), new Date('2026-01-01T00:00:01Z'))
+    await fs.utimes(p2, new Date('2026-01-01T00:00:02Z'), new Date('2026-01-01T00:00:02Z'))
+    await fs.utimes(p3, new Date('2026-01-01T00:00:03Z'), new Date('2026-01-01T00:00:03Z'))
+    await fs.writeFile(`${p1}-journal`, 'x') // горячий журнал = прерванный VACUUM INTO
+    const out = await execFileP('node', ['scripts/db-heal.cjs', oldDb, manifestPath], {
+      cwd: path.resolve(__dirname, '..'),
+    })
+    expect(existsSync(p1)).toBe(false) // частичная копия удалена
+    expect(existsSync(`${p1}-journal`)).toBe(false)
+    expect(existsSync(p3)).toBe(true) // два свежих остаются кандидатами восстановления
+    expect(existsSync(p2)).toBe(true)
+    expect(out.stdout).toContain('частичная копия')
+    // старая .bak-* (бэкап entrypoint) не трогается
+    const bak = path.join(work, 'hub.db.bak-20260101-000000')
+    await fs.copyFile(templateDb, bak)
+    await execFileP('node', ['scripts/db-heal.cjs', oldDb, manifestPath], { cwd: path.resolve(__dirname, '..') })
+    expect(existsSync(bak)).toBe(true)
   })
 
   it('несуществующая БД — внятный fatal, не крошится', async () => {
@@ -197,7 +227,7 @@ describe('db-heal: повреждённая БД (SQLITE_CORRUPT «database disk
     expect(out.stdout).toContain('структурная проверка НЕ ПРОЙДЕНА')
     expect(out.stdout).toContain('восстановлена из снимка hub.db.preheal-')
     expect(out.stdout).toContain('добавлена колонка Source.deletedAt')
-    expect(out.stdout).toContain('схема докатана')
+    expect(out.stdout).toContain('структура схемы докатана')
 
     // данные — из снимка (несброшенные строки битой БД утрачены), схема — текущая
     const res = await rawDb(db, `
@@ -341,7 +371,7 @@ describe('db-heal v1.36.2: порог скана на больших БД — д
     // скан пропущен, НО докатка состоялась — схема приведена к текущей
     expect(out.stdout).toContain('скан целостности пропущен')
     expect(out.stdout).toContain('добавлена колонка Source.deletedAt')
-    expect(out.stdout).toContain('схема докатана')
+    expect(out.stdout).toContain('структура схемы докатана')
     const res = await rawDb(db, `
       const { PrismaClient } = require('@prisma/client');
       const p = new PrismaClient();

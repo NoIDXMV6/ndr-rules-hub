@@ -17,7 +17,8 @@ import { DnsBuildTab } from '@/components/hub/dns-build-tab'
 import { VpnTab } from '@/components/hub/vpn-tab'
 import { UpdateTab } from '@/components/hub/update-tab'
 import { OsdTab } from '@/components/hub/osd-tab'
-import { IntegrationsTab } from '@/components/hub/integrations-tab'
+import { RstTab } from '@/components/hub/rst-tab'
+import { NotificationsTab } from '@/components/hub/notifications-tab'
 import { MispTab } from '@/components/hub/misp-tab'
 import { SettingsTab } from '@/components/hub/settings-tab'
 import { LogsTab } from '@/components/hub/logs-tab'
@@ -116,7 +117,8 @@ export default function Home() {
       allowed.add('update') // «Обновление Clear NDR» (меню «Интеграции»)
       allowed.add('osd') // «Дашборды OpenSearch» (меню «Интеграции»)
       allowed.add('vpn')
-      allowed.add('integrations') // «Уведомления и сервисы» в меню «Интеграции»
+      allowed.add('rst') // «RST Cloud» в меню «Интеграции» (v1.39.0 — вынесена из «Уведомлений и сервисов»)
+      allowed.add('notifications') // «Уведомления» переехали в «Администрирование» (v1.39.0)
       allowed.add('misp') // платформа threat intelligence + коннекторы
       allowed.add('settings')
       allowed.add('logs')
@@ -268,7 +270,7 @@ export default function Home() {
         )}
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsContent value="overview" className="mt-4">
-            <Overview data={data} onRefresh={refresh} role={role} onSettings={() => setTab('settings')} />
+            <Overview data={data} error={error} onRefresh={refresh} role={role} onSettings={() => setTab('settings')} />
           </TabsContent>
           <TabsContent value="sources" className="mt-4">
             <SourcesTab data={data} onChange={refresh} role={role} selfId={me.user?.id} />
@@ -319,8 +321,11 @@ export default function Home() {
           )}
           {isAdmin && (
             <>
-              <TabsContent value="integrations" className="mt-4">
-                <IntegrationsTab data={data} onChange={refresh} />
+              <TabsContent value="rst" className="mt-4">
+                <RstTab data={data} onChange={refresh} />
+              </TabsContent>
+              <TabsContent value="notifications" className="mt-4">
+                <NotificationsTab data={data} onChange={refresh} />
               </TabsContent>
               <TabsContent value="misp" className="mt-4">
                 <MispTab data={data} onChange={refresh} />
@@ -435,8 +440,9 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAcco
   if (isAdmin) {
     groups.push({
       kind: 'dropdown', key: 'integrations', label: t.menu.integrations, icon: ico(Blocks), items: [
-        // настройки уведомлений и сервисов уведомлений (Telegram/Gotify) — перенесены из «Настроек»
-        { value: 'integrations', label: t.tabs.notificationsServices, icon: ico(Bell) },
+        // v1.39.0: RST Cloud — отдельная вкладка (раньше карточка была внутри
+        // «Уведомлений и сервисов»); уведомления переехали в «Администрирование»
+        { value: 'rst', label: t.tabs.rstCloud, icon: ico(Shield) },
         { value: 'update', label: t.tabs.update, icon: ico(Download) },
         { value: 'osd', label: t.tabs.osd, icon: ico(ChartColumn) },
         { value: 'misp', label: t.tabs.misp, icon: ico(Share2) },
@@ -448,6 +454,9 @@ function buildMenu(t: Dictionary, isAdmin: boolean, showUsers: boolean, showAcco
   if (isAdmin) {
     const adminItems: MenuItemDef[] = [
       { value: 'settings', label: t.tabs.settings, icon: ico(Settings) },
+      // v1.39.0: «Уведомления» переехали сюда из «Интеграций» — это настройка платформы,
+      // а не внешняя интеграция (RST Cloud остался в «Интеграциях»)
+      { value: 'notifications', label: t.tabs.notifications, icon: ico(Bell) },
       { value: 'logs', label: t.tabs.logs, icon: ico(ScrollText) },
     ]
     if (showUsers) adminItems.push({ value: 'users', label: t.tabs.users, icon: ico(Users) })
@@ -615,9 +624,31 @@ function StatCard({ title, value, sub, icon }: { title: string; value: string; s
   )
 }
 
-function Overview({ data, onRefresh, role, onSettings }: { data: Dashboard | null; onRefresh: () => void; role: Role; onSettings: () => void }) {
+function Overview({ data, error, onRefresh, role, onSettings }: { data: Dashboard | null; error: string | null; onRefresh: () => void; role: Role; onSettings: () => void }) {
   const { t, tr, lang, loc } = useI18n()
   if (!data) {
+    // v1.39.0 (инцидент: БД блокирована — UI вечно «Загрузка данных…» без диагноза):
+    // при ошибке опроса дашборда вместо безмолвного спиннера — карточка с текстом
+    // ошибки, подсказкой диагностики и кнопкой «Повторить»
+    if (error) {
+      return (
+        <div className="flex items-center justify-center py-16">
+          <div className="max-w-2xl w-full rounded-lg border border-red-200/60 bg-red-50 text-red-700 px-4 py-4 text-sm space-y-3">
+            <div className="font-medium">{t.overview.loadErrorTitle}</div>
+            <div className="whitespace-pre-line break-words">{tr(t.header.apiError, { err: error })}</div>
+            <div className="text-red-600/80 text-xs">{t.overview.loadErrorHint}</div>
+            <div className="flex items-center gap-3">
+              <Button size="sm" variant="outline" className="border-red-300 text-red-700" onClick={onRefresh}>
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> {t.overview.loadErrorRetry}
+              </Button>
+              <Button size="sm" variant="outline" className="border-input text-foreground" onClick={onSettings}>
+                <Settings className="h-3.5 w-3.5 mr-1.5" /> {t.tabs.settings}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="flex items-center justify-center py-24 text-muted-foreground">
         <RefreshCw className="h-5 w-5 mr-2 animate-spin" /> {t.overview.loading}
@@ -629,6 +660,16 @@ function Overview({ data, onRefresh, role, onSettings }: { data: Dashboard | nul
   const db = data.dns?.lastBuild ?? null
   return (
     <div className="space-y-6">
+      {/* v1.39.0: деградация дашборда — часть блоков не ответила (таймаут/ошибка БД):
+          данные показаны, но администратор видит ЧТО именно не ответило */}
+      {data.degraded && data.degraded.length > 0 && (
+        <div className="rounded-lg border border-amber-300/70 bg-amber-50 text-amber-800 px-3 py-2 text-sm space-y-1">
+          <div className="font-medium">{t.overview.degradedTitle}</div>
+          <ul className="list-disc list-inside text-xs space-y-0.5">
+            {data.degraded.map((d, i) => <li key={i} className="break-words">{d}</li>)}
+          </ul>
+        </div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title={t.overview.statSources} value={`${data.sources.enabled}/${data.sources.total}`} sub={tr(t.overview.statSourcesSub, { n: data.sources.error })} icon={<Globe className="h-3.5 w-3.5" />} />
         <StatCard title={t.overview.statRulesDb} value={data.rules.inDb.toLocaleString(loc)} sub={t.overview.statRulesDbSub} icon={<Database className="h-3.5 w-3.5" />} />

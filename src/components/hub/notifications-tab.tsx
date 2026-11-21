@@ -1,31 +1,27 @@
 'use client'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Вкладка «Уведомления и сервисы» (меню «Интеграции», только администратор):
-// каналы уведомлений (Telegram, Gotify), собственный сервер Gotify (docker)
-// и рассылка о новых версиях. Перенесено из «Настроек».
+// Вкладка «Уведомления» (меню «Администрирование», только администратор) —
+// v1.39.0. Переехала из «Интеграции → Уведомления и сервисы»: уведомления —
+// настройки платформы (каналы доставки, события, рассылка версий), а не
+// внешняя интеграция. RST Cloud при этом вынесен в отдельную вкладку
+// «Интеграции → RST Cloud» (rst-tab.tsx) — это разные сущности.
 //
-// Исправления против прежней карточки в «Настройках»:
-//  1. Radix-Switch требует onCheckedChange — раньше использовали onChange
-//     (DOM-событие change на кнопке не срабатывает), и каналы было невозможно
-//     включить переключателем;
-//  2. поля токенов/URL видимы ВСЕГДА — раньше они показывались только после
-//     «включения» канала, и вставить токен было некуда;
-//  3. кнопка «Развернуть Gotify» неактивна, пока контейнер уже запущен
-//     (повторное развёртывание невозможно), активна — после удаления.
+// Содержимое (без изменений логики): Telegram (токен/chatId/прокси/apiBase),
+// Gotify (URL/токен/приоритет + развёртывание своего сервера docker),
+// рассылка о новых версиях, какие события слать.
 // ─────────────────────────────────────────────────────────────────────────────
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { api, Dashboard, RstCheckResult, RstStatus } from '@/components/hub/api'
-import { RstCheckDialog } from '@/components/hub/rst-check-dialog'
+import { api, Dashboard } from '@/components/hub/api'
 import { useI18n } from '@/lib/i18n'
-import { Save, Send, Rocket, Trash2, Eye, EyeOff, SearchCheck } from 'lucide-react'
+import { Save, Send, Rocket, Trash2, Eye, EyeOff } from 'lucide-react'
 
-export function IntegrationsTab({ data, onChange }: { data: Dashboard | null; onChange: () => void }) {
+export function NotificationsTab({ data, onChange }: { data: Dashboard | null; onChange: () => void }) {
   const { t, tr } = useI18n()
   const [s, setS] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState<string | null>(null)
@@ -34,19 +30,19 @@ export function IntegrationsTab({ data, onChange }: { data: Dashboard | null; on
   // обновляет data.settings и раньше ЗАТИРАЛ несохранённый ввод (вставленный токен
   // исчезал из поля до нажатия «Сохранить»). Теперь отредактированные значения
   // переживают обновление дашборда, пока их не сохранит «Сохранить»/«Тест».
-  const editedRef = useRef<Set<string>>(new Set())
+  const editedKeys = useRefSet()
   useEffect(() => {
     if (data?.settings) {
       setS((prev) => {
         const next = { ...data.settings }
-        for (const k of editedRef.current) if (k in prev) next[k] = prev[k]
+        for (const k of editedKeys.keys()) if (k in prev) next[k] = prev[k]
         return next
       })
     }
   }, [data?.settings])
 
   const set = (k: string, v: string) => {
-    editedRef.current.add(k)
+    editedKeys.add(k)
     setS((prev) => ({ ...prev, [k]: v }))
   }
 
@@ -78,6 +74,12 @@ export function IntegrationsTab({ data, onChange }: { data: Dashboard | null; on
   )
 }
 
+// локальный аналог useRef(new Set()) с корректным мутабельным поведением
+function useRefSet(): Set<string> {
+  const [ref] = useState(() => new Set<string>())
+  return ref
+}
+
 /** Карточка «Уведомления»: Telegram (с прокси) и Gotify (+ свой сервер) */
 function NotificationsCard({
   s,
@@ -102,19 +104,17 @@ function NotificationsCard({
   const [showTgToken, setShowTgToken] = useState(false)
   const [showGoToken, setShowGoToken] = useState(false)
 
-  const refreshState = useCallback(async () => {
-    try {
-      const r = await api.notifyState()
-      setGotifyRunning(r.gotify.containerRunning)
-      setGotifyUrl(r.gotify.url ?? null)
-    } catch {
-      setGotifyRunning(false)
-    }
-  }, [])
-
   useEffect(() => {
-    void refreshState()
-  }, [refreshState])
+    void (async () => {
+      try {
+        const r = await api.notifyState()
+        setGotifyRunning(r.gotify.containerRunning)
+        setGotifyUrl(r.gotify.url ?? null)
+      } catch {
+        setGotifyRunning(false)
+      }
+    })()
+  }, [])
 
   const testChannel = async (channel: 'telegram' | 'gotify') => {
     const setter = channel === 'telegram' ? setTgResult : setGoResult
@@ -144,7 +144,11 @@ function NotificationsCard({
       const ok = !!r.ok
       const lines = (r.instructions as string[] | undefined) ?? []
       setGoResult(ok ? [`${t.settings.gotifyDeployed}${r.url ? `: ${String(r.url)}` : ''}`, ...lines].join('\n') : `${t.settings.notifyTestFail}: ${r.error}`)
-      await refreshState()
+      try {
+        const st = await api.notifyState()
+        setGotifyRunning(st.gotify.containerRunning)
+        setGotifyUrl(st.gotify.url ?? null)
+      } catch { /* статус обновится при следующем открытии */ }
     } catch (e) {
       setGoResult((e as Error).message)
     } finally {
@@ -157,7 +161,11 @@ function NotificationsCard({
     try {
       const r = await api.notifyAction({ action: 'gotify-remove' })
       setGoResult(r.ok ? t.settings.gotifyRemoved : `${r.error}`)
-      await refreshState()
+      try {
+        const st = await api.notifyState()
+        setGotifyRunning(st.gotify.containerRunning)
+        setGotifyUrl(st.gotify.url ?? null)
+      } catch { /* статус обновится при следующем открытии */ }
     } catch (e) {
       setGoResult((e as Error).message)
     } finally {
@@ -165,95 +173,10 @@ function NotificationsCard({
     }
   }
 
-  // RST Cloud: диалог проверки индикаторов (IoC Lookup / Noise Control / Whois)
-  const [rstDialogVisible, setRstDialogVisible] = useState(false)
-  // статус интеграции: задан ли ключ, четыре фида Threat Feed (GET /api/rst/status)
-  const [rstStatus, setRstStatus] = useState<RstStatus | null>(null)
-  const [rstKeyChecking, setRstKeyChecking] = useState(false)
-  const [rstKeyResult, setRstKeyResult] = useState<RstCheckResult | null>(null)
-    const loadRstStatus = useCallback(async () => {
-    try {
-      setRstStatus(await api.rstStatus())
-    } catch {
-      setRstStatus(null) // админ-роут: не-администратор получает ошибку — карточка работает без статуса
-    }
-  }, [])
-  useEffect(() => {
-    void loadRstStatus()
-  }, [loadRstStatus])
-  const checkRstKey = async () => {
-    setRstKeyChecking(true)
-    setRstKeyResult(null)
-    try {
-      // сохраняем текущее значение поля (если ключ вводят здесь) и проверяем сохранённый
-      await api.saveSettings(s)
-      const r = await api.rst.check('')
-      setRstKeyResult(r)
-      await loadRstStatus()
-    } catch (e) {
-      setRstKeyResult({ ok: false, error: (e as Error).message })
-    } finally {
-      setRstKeyChecking(false)
-    }
-  }
   const tgOn = (s.notifyTgEnabled ?? 'false') === 'true'
   const goOn = (s.notifyGotifyEnabled ?? 'false') === 'true'
 
   return (
-    <>
-    <Card className="bg-card border-border mb-5">
-      <CardHeader className="pb-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <CardTitle className="text-base flex items-center gap-2 mr-auto">
-            <SearchCheck className="h-4 w-4 text-primary" /> {t.settings.rstCardTitle}
-          </CardTitle>
-          {/* статус ключа: задан/не задан — без похода во внешний API */}
-          {rstStatus && (
-            <span className={`text-xs rounded-full border px-2 py-0.5 ${rstStatus.keySet ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
-              {rstStatus.keySet ? t.settings.rstKeySet : t.settings.rstKeyMissing}
-            </span>
-          )}
-        </div>
-        <CardDescription>{t.settings.rstCardDesc}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => setRstDialogVisible(true)}>
-            <SearchCheck className="h-4 w-4 mr-1.5" /> {t.settings.rstCardBtn}
-          </Button>
-          <Button size="sm" variant="outline" className="border-input text-foreground" disabled={rstKeyChecking} onClick={() => void checkRstKey()}>
-            {rstKeyChecking ? '…' : t.settings.rstKeyBtn}
-          </Button>
-          {rstKeyResult && (
-            <span className={`text-xs whitespace-pre-line ${rstKeyResult.ok && rstKeyResult.valid ? 'text-emerald-700' : 'text-red-600'}`}>
-              {rstKeyResult.ok && rstKeyResult.valid
-                ? t.settings.rstKeyValid + (rstKeyResult.quota?.limit
-                    ? ` — ${tr(t.settings.rstKeyQuota, { used: rstKeyResult.quota.used ?? 0, limit: rstKeyResult.quota.limit ?? 0, remaining: rstKeyResult.quota.remaining ?? 0 })}`
-                    : '')
-                : `${t.settings.rstKeyInvalid}${rstKeyResult.error ? `: ${rstKeyResult.error}` : ''}`}
-            </span>
-          )}
-        </div>
-        {/* фиды Threat Feed: видно, где они живут и включены ли */}
-        {rstStatus && (rstStatus.ruleSources.length > 0 || rstStatus.dnsSources.length > 0) ? (
-          <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
-            <p className="text-xs text-muted-foreground">{t.settings.rstFeedsTitle}</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
-              {rstStatus.ruleSources.map((src) => (
-                <FeedRow key={src.id} name={src.name} on={src.enabled} ok={src.status === 'ok'} count={src.ruleCount} kind={t.settings.rstFeedsRules} onLabel={t.settings.rstFeedOn} offLabel={t.settings.rstFeedOff} />
-              ))}
-              {rstStatus.dnsSources.map((src) => (
-                <FeedRow key={src.id} name={src.name} on={src.enabled} ok={src.status === 'ok'} count={src.domainCount} kind={t.settings.rstFeedsDomains} onLabel={t.settings.rstFeedOn} offLabel={t.settings.rstFeedOff} />
-              ))}
-            </div>
-          </div>
-        ) : rstStatus ? (
-          <p className="text-xs text-amber-700">{t.settings.rstFeedsNone}</p>
-        ) : null}
-        <p className="text-xs text-muted-foreground whitespace-pre-line">{t.settings.rstCardHint}</p>
-      </CardContent>
-      {rstDialogVisible && <RstCheckDialog onClose={() => setRstDialogVisible(false)} />}
-    </Card>
     <Card className="bg-card border-border">
       <CardHeader className="pb-2">
         <CardTitle className="text-base">{t.settings.notifyTitle}</CardTitle>
@@ -292,7 +215,7 @@ function NotificationsCard({
             </div>
             <div>
               <Label className="text-foreground">{t.settings.tgApiBase}</Label>
-              <Input value={s.tgApiBase ?? ''} onChange={(e) => set('tgApiBase', e.target.value.trim())} className="bg-card border-input" placeholder="https://api.telegram.org" />
+              <Input value={s.tgApiBase ?? ''} onChange={(e) => set('tgApiBase', e.target.value.trim())} className="bg-card border-input font-mono" placeholder="https://api.telegram.org" />
               <p className="text-xs text-muted-foreground mt-1">{t.settings.tgApiBaseHelp}</p>
             </div>
             <div className="md:col-span-2">
@@ -441,7 +364,6 @@ function NotificationsCard({
         </div>
       </CardContent>
     </Card>
-    </>
   )
 }
 
@@ -450,30 +372,6 @@ function Badge2({ ok, on, off }: { ok: boolean; on: string; off: string }) {
     <span className={`text-xs rounded-full border px-2 py-0.5 ${ok ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-input text-muted-foreground'}`}>
       {ok ? on : off}
     </span>
-  )
-}
-
-/** Строка фида Threat Feed: имя, где живёт (Правила/DNS), вкл/выкл, число записей */
-function FeedRow({ name, on, ok, count, kind, onLabel, offLabel }: {
-  name: string
-  on: boolean
-  ok: boolean
-  count: number
-  kind: string
-  onLabel: string
-  offLabel: string
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className={`text-xs rounded-full border px-2 py-0.5 ${on ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-input text-muted-foreground'}`}>
-        {on ? onLabel : offLabel}
-      </span>
-      <span className="text-foreground max-w-72 truncate" title={name}>{name}</span>
-      <span className="text-xs text-muted-foreground">{kind}</span>
-      <span className={`ml-auto text-xs tabular-nums ${ok ? 'text-muted-foreground' : 'text-amber-700'}`}>
-        {count.toLocaleString('ru-RU')}
-      </span>
-    </div>
   )
 }
 

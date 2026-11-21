@@ -19,10 +19,6 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
   const [s, setS] = useState<Record<string, string>>({})
   const [showOink, setShowOink] = useState(false)
   const [showEtPro, setShowEtPro] = useState(false)
-  const [showRst, setShowRst] = useState(false)
-  const [rstChecking, setRstChecking] = useState(false)
-  const [rstResult, setRstResult] = useState<string | null>(null)
-  const [rstOk, setRstOk] = useState<boolean | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -46,33 +42,8 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
     }
   }
 
-  // проверка API-ключа RST Cloud (auth/check: валидность + права + квота)
-  const checkRstKey = async () => {
-    setRstChecking(true)
-    setRstResult(null)
-    setRstOk(null)
-    try {
-      const r = await api.rst.check(s.rstApiKey?.trim() || '')
-      if (r.ok && r.valid) {
-        const q = r.quota ?? {}
-        setRstOk(true)
-        setRstResult(tr(t.settings.rstCheckValid, {
-          quota: `${q.remaining ?? '?'} / ${q.limit ?? '?'}`,
-          period: q.period ?? '',
-          ent: (r.entitlements ?? []).join(', '),
-        }))
-        onChange()
-      } else {
-        setRstOk(false)
-        setRstResult(r.error || tr(t.settings.rstCheckInvalid))
-      }
-    } catch (e) {
-      setRstOk(false)
-      setRstResult((e as Error).message)
-    } finally {
-      setRstChecking(false)
-    }
-  }
+  // RST Cloud (ключ + проверка) переехал в «Интеграции → RST Cloud» (v1.39.0):
+  // разные сущности — threat-intelligence интеграция и настройки источников
 
   return (
     <div className="space-y-4">
@@ -180,36 +151,6 @@ export function SettingsTab({ data, onChange }: { data: Dashboard | null; onChan
                 placeholder={t.settings.openNrdPlaceholder}
               />
               <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">{t.settings.openNrdHelp}</p>
-            </div>
-          </div>
-
-          {/* RST Cloud: фиды Threat Feed + IoC Lookup + Whois (ключ X-Api-Key) */}
-          <div className="space-y-3 rounded-lg border border-border p-3">
-            <div>
-              <p className="text-sm font-medium text-foreground">{t.settings.rstTitle}</p>
-              <p className="text-xs text-muted-foreground">{t.settings.rstDesc}</p>
-            </div>
-            <div className="max-w-xl">
-              <Label className="text-foreground">{t.settings.rstKey}</Label>
-              <div className="flex gap-2">
-                <Input
-                  type={showRst ? 'text' : 'password'}
-                  value={s.rstApiKey ?? ''}
-                  onChange={(e) => set('rstApiKey', e.target.value.trim())}
-                  className="bg-card border-input font-mono"
-                  placeholder={t.settings.rstPlaceholder}
-                />
-                <Button variant="outline" className="border-input text-foreground shrink-0" onClick={() => setShowRst(!showRst)}>
-                  {showRst ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line">{t.settings.rstHelp}</p>
-              <Button variant="outline" className="border-input text-foreground mt-2" onClick={() => void checkRstKey()} disabled={rstChecking || !(s.rstApiKey ?? '').trim()}>
-                <ShieldCheck className={`h-4 w-4 mr-1.5 ${rstChecking ? 'animate-pulse' : ''}`} /> {rstChecking ? t.settings.rstChecking : t.settings.rstCheckBtn}
-              </Button>
-              {rstResult && (
-                <p className={`text-xs mt-2 ${rstOk ? 'text-emerald-700' : 'text-red-600'}`}>{rstResult}</p>
-              )}
             </div>
           </div>
         </CardContent>

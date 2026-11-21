@@ -107,6 +107,14 @@ export interface RstLookupResult {
   error?: string
 }
 
+/** Общий результат расширенных RST-эндпоинтов v1.39.0 (data — JSON-ответ RST Cloud) */
+export interface RstApiResult {
+  ok: boolean
+  status: number
+  data?: Record<string, unknown> | null
+  error?: string
+}
+
 export interface BuildStats {
   totalInputRules: number
   uniqueSids: number
@@ -159,6 +167,8 @@ export interface CategoryRuleRow {
 }
 
 export interface Dashboard {
+  /** v1.39.0: деградация дашборда — блоки, не ответившие в бюджете (таймаут/ошибка БД); undefined — всё ок */
+  degraded?: string[]
   sources: { total: number; enabled: number; ok: number; error: number; trash: number; list: SourceItem[] }
   rules: { inDb: number; inBuild: number }
   lastBuild: null | {
@@ -366,6 +376,35 @@ export const api = {
     lookup: (value: string, mode: 'ioc' | 'benign' | 'whois' = 'ioc') =>
       fetch('/api/rst/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, mode }) })
         .then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstLookupResult))),
+    // v1.39.0 — весь функционал RST Cloud API
+    iocSubmit: (value: string, description: string, falsePositive = false) =>
+      fetch('/api/rst/ioc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, description, falsePositive }) })
+        .then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult))),
+    benignBatch: (ioctype: string, values: string[]) =>
+      fetch('/api/rst/benign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'batch', ioctype, values }) })
+        .then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult))),
+    benignResult: (ioctype: string, token: string) =>
+      fetch('/api/rst/benign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'result', ioctype, token }) })
+        .then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult))),
+    models: () => fetch('/api/rst/assistant', { cache: 'no-store' }).then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult))),
+    chat: (model: string, messages: Array<{ role: string; content: string }>) =>
+      fetch('/api/rst/assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages }) })
+        .then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult))),
+    reports: (startdate?: string) =>
+      fetch(`/api/rst/reports${startdate ? `?startdate=${encodeURIComponent(startdate)}` : ''}`, { cache: 'no-store' }).then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult))),
+    reportFile: (report: string, format: 'json' | 'stix' | 'pdf') =>
+      fetch(`/api/rst/reports?report=${encodeURIComponent(report)}&format=${format}`, { cache: 'no-store' }).then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult & { base64?: string }))),
+    threatObjects: (type: string, params: { limit?: number; offset?: number; name?: string; filter?: string } = {}) => {
+      const q = new URLSearchParams({ type, limit: String(params.limit ?? 50) })
+      if (params.offset) q.set('offset', String(params.offset))
+      if (params.name) q.set('name', params.name)
+      if (params.filter) q.set('filter', params.filter)
+      return fetch(`/api/rst/threat-objects?${q.toString()}`, { cache: 'no-store' }).then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult)))
+    },
+    scan: (kind: 'cs-beacon' | 'ssl' | 'favicon' | 'html', target: string) =>
+      fetch(`/api/rst/scan?kind=${kind}&target=${encodeURIComponent(target)}`, { cache: 'no-store' }).then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult))),
+    whoisFull: (domain: string, variant: 'parsed' | 'full' | 'raw' = 'parsed') =>
+      fetch(`/api/rst/whois?domain=${encodeURIComponent(domain)}&variant=${variant}`, { cache: 'no-store' }).then((r) => r.json().then((d) => ({ status: r.status, ...(d as object) } as RstApiResult))),
   },
   vpn: () => fetch('/api/vpn', { cache: 'no-store' }).then((r) => j<VpnState>(r)),
   vpnAction: (body: Record<string, unknown>) =>

@@ -35,8 +35,14 @@ export async function GET() {
   // Каждый счётчик отдельно: одна упавшая (нет таблицы в схеме тома) не
   // мешает остальным; null — таблицы нет в схеме БД.
   try {
+    // v1.39.0: замер задержки простого запроса — «БД заблокирована/диск перегружен»
+    // видно числом: здоровая локальная БД — единицы мс; десятки секунд — блокировка
+    // (чужая транзакция, перегрузка тома, докатка схемы на медленном диске)
+    const t0 = Date.now()
     const probe = await db.source.findMany({ take: 1, select: { id: true, format: true } })
+    const probeMs = Date.now() - t0
     const tableCounts: Record<string, number | null> = {}
+    const t1 = Date.now()
     for (const [name, fn] of Object.entries({
       sources: () => db.source.count(),
       rules: () => db.rule.count(),
@@ -54,7 +60,16 @@ export async function GET() {
         tableCounts[name] = null
       }
     }
-    report.db = { ok: true, probeRows: probe.length, tables: tableCounts }
+    report.db = {
+      ok: true,
+      probeRows: probe.length,
+      probeLatencyMs: probeMs,
+      countsLatencyMs: Date.now() - t1,
+      tables: tableCounts,
+      ...(probeMs > 5000
+        ? { warning: `простой запрос выполняется ${probeMs} мс — БД замедлена (блокировка, перегрузка тома или докатка схемы на медленном диске)` }
+        : {}),
+    }
   } catch (e) {
     report.status = 'db-error'
     report.db = {

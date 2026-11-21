@@ -45,6 +45,13 @@ function initPragmas(p: PrismaClient): void {
   void p.$queryRawUnsafe('PRAGMA journal_mode=WAL').catch(() => undefined)
   void p.$queryRawUnsafe('PRAGMA busy_timeout=15000').catch(() => undefined)
   void p.$queryRawUnsafe('PRAGMA synchronous=NORMAL').catch(() => undefined)
+  // v1.39.0 (продакшен: БД 1.3 GB, счётчики дашборда упирались в диск):
+  //   • page cache 32 MB на коннекцию — горячие страницы (sqlite_master,
+  //     индексы, хвосты таблиц) держатся в памяти, COUNT/чтения меньше ходят
+  //     на диск;
+  //   • temp_store=MEMORY — временные B-tree сортировок не пишутся на том.
+  void p.$queryRawUnsafe('PRAGMA cache_size=-32000').catch(() => undefined)
+  void p.$queryRawUnsafe('PRAGMA temp_store=MEMORY').catch(() => undefined)
 }
 
 // Стартовая диагностика SQLite в stdout (инцидент v1.36.0: «в логах контейнера
