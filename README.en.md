@@ -234,6 +234,44 @@ The UI is localized into two languages via localization files:
 See also [architecture.md](architecture.md) (Russian) and [architecture.en.md](architecture.en.md)
 (English) for the system architecture.
 
+## If the image build hangs on `bun install`
+
+`bun install` has no built-in timeout: on a flaky network the step hangs for hours silently
+(bun prints no progress in non-TTY mode). Two incidents: v1.27.0 — 23196 s on
+`registry.npmjs.org` (host network: DNS/MTU/throttling); v1.36.1 — the `npm-mirror.gitverse.ru`
+mirror degraded (the ~31 MB `/next` manifest takes ~16 s vs 0.4 s on npmjs), an install of
+~1000 packages did not fit into 45 minutes and was killed silently by the fuse. A single
+registry no longer decides the build's fate: since v1.36.1 the deps stage behaves as follows
+(scripts/bun-install.sh):
+
+1. every candidate mirror is probed with a light `GET /ms` (~90 KB, 15 s timeout);
+   non-responding mirrors are excluded immediately — the per-attempt fuse time is not wasted;
+2. attempts are ordered by measured latency; degraded mirrors (slower than 3 s per request)
+   go last — a fast answer on a tiny manifest will not save an install of a thousand packages
+   on a choked mirror;
+3. each attempt runs `bun install --frozen-lockfile --registry <mirror> --verbose` under the
+   per-attempt fuse `BUN_INSTALL_TIMEOUT` (seconds **PER ATTEMPT**, default 900, kill-after
+   30 s): the build log shows the package it stalled on;
+4. the first successful mirror completes the step; FAIL with diagnostics (stderr) only if
+   none worked.
+
+Default candidates: `registry.npmjs.org` → `registry.npmmirror.com` → `npm-mirror.gitverse.ru`.
+`NPM_REGISTRY` (if set in .env) is probed first but queued by measured speed; a custom list —
+`BUN_REGISTRIES="url1 url2 …"`. `bun.lock` embeds no registry URLs — installs from any mirror
+are verified against the lockfile integrity hashes; the bun package cache survives between
+builds (a version bump no longer re-downloads packages).
+
+```bash
+# mirror latency from the build host (light ms manifest, ~90 KB):
+curl -o /dev/null -sS -w 'npmjs:     total %{time_total}s\n' https://registry.npmjs.org/ms
+curl -o /dev/null -sS -w 'npmmirror: total %{time_total}s\n' https://registry.npmmirror.com/ms
+curl -o /dev/null -sS -w 'gitverse:  total %{time_total}s\n' https://npm-mirror.gitverse.ru/ms
+# fast on the host but hanging inside the build → DNS/MTU of the bridge network:
+docker build --network=host -t ndr-rules-hub:local .
+# regression tests for the automation + a real fallback check:
+RUN_NET_TESTS=1 bunx vitest run tests/bun-install.test.ts
+```
+
 ## Diagnostics (if the UI shows an API error)
 
 The UI and the API are served by the same Next.js server: if the page opened, the backend is

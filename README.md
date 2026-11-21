@@ -113,32 +113,40 @@ docker compose up -d --build
 
 ## Если сборка образа висит на `bun install`
 
-У `bun install` нет собственного таймаута: при проблемной сети хоста до `registry.npmjs.org`
-(DNS/MTU/троттлинг) шаг зависает часами без вывода (инцидент v1.27.0: 23196 с). С v1.27.1
-шаг защищён: предохранитель `timeout` (45 минут, меняется `--build-arg BUN_INSTALL_TIMEOUT=…`)
-с внятной диагностикой, кэш пакетов bun сохраняется между сборками (bump версии больше не
-пере-скачивает пакеты), параллелизм сети снижен до 16.
+У `bun install` нет собственного таймаута: при проблемной сети шаг зависает часами без вывода
+(bun в non-TTY не печатает прогресс). Два инцидента: v1.27.0 — 23196 с на `registry.npmjs.org`
+(сеть хоста: DNS/MTU/троттлинг); v1.36.1 — зеркало `npm-mirror.gitverse.ru` деградировало
+(манифест `/next`, ~31 МБ, отдаётся ~16 с против 0.4 с у npmjs) — установка ~1000 пакетов не
+укладывалась в 45 минут и молча убивалась предохранителем. Один реестр больше не судьба
+сборки: с v1.36.1 этап deps ведёт себя так (scripts/bun-install.sh):
+
+1. каждое зеркало-кандидат предпроверяется лёгким `GET /ms` (~90 КБ, таймаут 15 с):
+   не ответившие исключаются сразу — время предохранителя на попытку не тратится;
+2. порядок попыток — по возрастанию времени ответа; деградировавшие (медленнее 3 с на
+   запрос) — в конец очереди: быстрый ответ на маленький манифест не спасёт установку
+   тысяч пакетов на задохнувшемся зеркале;
+3. каждая попытка — `bun install --frozen-lockfile --registry <зеркало> --verbose` под
+   предохранителем `BUN_INSTALL_TIMEOUT` (секунды **НА ПОПЫТКУ**, дефолт 900, kill-after
+   30 с): в логе сборки видно, на каком пакете остановились;
+4. первое успешное зеркало завершает шаг; FAIL с диагностикой (stderr) — только если
+   не сработало ни одно.
+
+Кандидаты по умолчанию: `registry.npmjs.org` → `registry.npmmirror.com` →
+`npm-mirror.gitverse.ru`. `NPM_REGISTRY` (если задан в .env) предпроверяется первым, но
+в очередь встаёт по фактической скорости; свой полный список — `BUN_REGISTRIES="url1 url2 …"`.
+bun.lock не содержит URL реестра — установка с любого зеркала проверяется integrity-хэшами
+lockfile; кэш пакетов bun сохраняется между сборками (bump версии не пере-скачивает пакеты).
 
 ```bash
-# 1) скорость до реестра с хоста сборки (реестр отдаёт ~31 МБ метаданных next,
-#    поэтому смотрите именно total на фоне size):
-curl -o /dev/null -sS -w 'total %{time_total}s  size %{size_download}B\n' https://registry.npmjs.org/next
-# 2) сравните зеркала — выберите тот, что быстрее с вашего хоста:
-#    российское (Gitverse) и китайское (Alibaba):
-curl -o /dev/null -sS -w 'gitverse: total %{time_total}s  size %{size_download}B\n' https://npm-mirror.gitverse.ru/next
-curl -o /dev/null -sS -w 'npmmirror: total %{time_total}s  size %{size_download}B\n' https://registry.npmmirror.com/next
-# 3) на хосте быстро, а в сборке висит → DNS/MTU bridge-сети:
+# скорость до зеркал с хоста сборки (лёгкий манифест ms, ~90 КБ):
+curl -o /dev/null -sS -w 'npmjs:     total %{time_total}s\n' https://registry.npmjs.org/ms
+curl -o /dev/null -sS -w 'npmmirror: total %{time_total}s\n' https://registry.npmmirror.com/ms
+curl -o /dev/null -sS -w 'gitverse:  total %{time_total}s\n' https://npm-mirror.gitverse.ru/ms
+# на хосте быстро, а в сборке висит → DNS/MTU bridge-сети:
 docker build --network=host -t ndr-rules-hub:local .
-# 4) зеркало npm можно закрепить в .env — все последующие сборки подхватят его автоматически:
-#    NPM_REGISTRY=https://npm-mirror.gitverse.ru    (российское, Gitverse)
-#    NPM_REGISTRY=https://registry.npmmirror.com    (Китай, Alibaba)
-docker compose up -d --build
+# регресс-тесты автоматики + реальная проверка фолбэка:
+RUN_NET_TESTS=1 bunx vitest run tests/bun-install.test.ts
 ```
-
-> Оба зеркала проверены холодным `bun install --frozen-lockfile` (893 пакета,
-> integrity-проверка по хэшам lockfile пройдена). У зеркала Gitverse медленная
-> отдача метаданных пакета (`/next`, ~31 МБ), но bun при `--frozen-lockfile`
-> метаданные не запрашивает — качает только tarballs, они отдаются быстро.
 
 ## Диагностика (если UI показывает ошибку API)
 

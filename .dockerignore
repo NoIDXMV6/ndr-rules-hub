@@ -17,6 +17,8 @@ scripts
 # генератор манифеста схемы (стадия builder) и лечение БД тома (runtime)
 !scripts/gen-schema-manifest.mjs
 !scripts/db-heal.cjs
+# устойчивая установка зависимостей (стадия deps — scripts/bun-install.sh)
+!scripts/bun-install.sh
 !scripts/clearndr-repair-stack.sh
 !scripts/clearndr-events-restore.sh
 !scripts/clearndr-osd-analytics-setup.sh

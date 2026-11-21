@@ -4,39 +4,46 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Этап 1: зависимости ───────────────────────────────────────────────────────
-# Защита от «молчаливого» зависания bun install (инцидент v1.27.0: 23196 с на
-# этом шаге, сборка прервана пользователем). Причины зависания — сеть хоста
-# сборки до registry.npmjs.org (DNS/IPv6/MTU/троттлинг) — у bun install нет
-# своего таймаута, при сбое сети он висит часами без вывода. Уровни защиты:
-#   1) BUN_INSTALL_TIMEOUT — предохранитель: сборка падает с внятной
-#      диагностикой вместо многочасового молчания (секунды, дефолт 2700 = 45 мин);
-#   2) NPM_REGISTRY — зеркало реестра:
-#        docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com .
-#      bun.lock НЕ содержит URL реестра (только integrity-хэши), поэтому
-#      --frozen-lockfile с зеркалом работает, целостность пакетов проверяется;
-#   3) cache-mount кэша bun: bump версии в package.json инвалидирует слой COPY
-#      даже при неизменном bun.lock (v1.26.1→v1.27.0 менялась ТОЛЬКО версия!)
-#      и раньше вынуждал полный ре-скач всех пакетов — теперь переустановка
-#      берётся из локального кэша за секунды;
-#   4) --network-concurrency 16 (дефолт 48) — меньше параллельных запросов,
-#      устойчивее на слабых сетях.
-# Быстрые проверки при зависании сборки на этом шаге (на хосте сборки):
-#   curl -o /dev/null -sS -w 'total %{time_total}s\n' https://registry.npmjs.org/next
+# Устойчивая установка bun install — scripts/bun-install.sh (COPY ниже,
+# подробности в шапке скрипта). История инцидентов:
+#   v1.27.0 — bun install на registry.npmjs.org висел 23196 с БЕЗ вывода
+#             (сеть хоста сборки: DNS/IPv6/MTU/троттлинг; у bun install нет
+#             своего таймаута) → добавлены предохранитель timeout и NPM_REGISTRY;
+#   v1.36.1 — зеркало npm-mirror.gitverse.ru деградировало: манифест /next
+#             (~31 МБ) отдаётся ~16 с (npmjs — 0.4 с), установка не укладывалась
+#             в 2700 с и молча убивалась timeout'ом (bun в non-TTY не печатает
+#             прогресс). Один реестр больше не судьба сборки:
+#   1) ПРЕДПРОВЕРКА зеркал лёгким GET /ms (15 с): не ответившие исключаются
+#      сразу, деградировавшие (медленнее BUN_SLOW_MS = 3000 мс) — в конец очереди;
+#   2) порядок попыток — по возрастанию времени ответа: npmjs.org →
+#      npmmirror.com → npm-mirror.gitverse.ru (NPM_REGISTRY, если задан,
+#      проверяется первым, но в очередь встаёт по скорости);
+#   3) предохранитель BUN_INSTALL_TIMEOUT — секунды НА ПОПЫТКУ (дефолт 900,
+#      kill-after 30 с; до v1.36.1 — общий на шаг 2700 с), --verbose виден
+#      в логе сборки: на каком пакете остановились;
+#   4) cache-mount кэша bun сохраняется между сборками (bump версии не
+#      пере-скачивает пакеты), --network-concurrency 16 — устойчивее на слабых
+#      сетях.
+# bun.lock НЕ содержит URL реестра (только integrity-хэши) — установка с
+# любого зеркала детерминирована. Быстрые проверки при проблемах (на хосте):
+#   curl -o /dev/null -sS -w 'total %{time_total}s\n' https://registry.npmjs.org/ms
 #   docker build --network=host .   # на хосте быстро, в сборке висит → DNS/MTU bridge
 FROM oven/bun:1.2 AS deps
-ARG NPM_REGISTRY=https://registry.npmjs.org
-ARG BUN_INSTALL_TIMEOUT=2700
+# Основное зеркало (проверяется первым); пусто = авто-выбор самого быстрого
+ARG NPM_REGISTRY=
+# Предохранитель НА ОДНУ ПОПЫТКУ bun install (секунды). Всего попыток — до
+# числа доступных зеркал (дефолт 3): худший случай ограничен, но сборка
+# получает несколько независимых шансов вместо одного.
+ARG BUN_INSTALL_TIMEOUT=900
+ARG BUN_REGISTRIES=
+ARG BUN_SLOW_MS=3000
 WORKDIR /app
 
+COPY scripts/bun-install.sh /usr/local/bin/bun-install.sh
 COPY package.json bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    timeout --kill-after=30 "${BUN_INSTALL_TIMEOUT}s" \
-      bun install --frozen-lockfile --registry "$NPM_REGISTRY" --network-concurrency 16 \
-    || { echo "FAIL: bun install не завершился за ${BUN_INSTALL_TIMEOUT}с — сеть хоста до $NPM_REGISTRY проблемна."; \
-        echo "  Проверить хост:  curl -o /dev/null -sS -w 'total %{time_total}s\n' https://registry.npmjs.org/next"; \
-        echo "  Host-сеть:       docker build --network=host ."; \
-        echo "  Зеркало npm:     docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com ."; \
-        exit 1; }
+    chmod +x /usr/local/bin/bun-install.sh && \
+    /usr/local/bin/bun-install.sh
 
 # ── Этап 2: сборка приложения + шаблон БД ────────────────────────────────────
 # Сборка идёт под Node.js, а НЕ под Bun. Причина: undici 8 (зависимость
