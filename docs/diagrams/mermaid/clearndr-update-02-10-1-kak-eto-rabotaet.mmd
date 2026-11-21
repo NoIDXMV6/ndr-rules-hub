@@ -1,0 +1,10 @@
+flowchart LR
+    U["Вкладка «Обновление Clear NDR»"] --> A["GET /api/clearndr-update"]
+    A --> P["probe на хосте:<br/>stamusctl config version,<br/>теги образов, контейнеры,<br/>vm.max_map_count, диск"]
+    A --> G["GitHub API:<br/>последний релиз<br/>stamusctl-templates"]
+    U -- "релиз новее" --> O["опции: версия,<br/>данные OpenSearch/PG,<br/>бэкапы, CLI"]
+    O --> S["POST start:<br/>синхронизация скрипта →<br/>раннер на хосте (nohup setsid)"]
+    S --> L["поллинг лога (3 с)<br/>GET ?log=runId"]
+    L --> R{"rc"}
+    R -- "0" --> OK["проверки: контейнеры Up,<br/>web UI HTTP 200, REST API"]
+    R -- "1/2" --> F["причина в логе:<br/>preflight / fail-logs<br/>+ автооткат"]

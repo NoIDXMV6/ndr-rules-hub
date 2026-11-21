@@ -1,0 +1,50 @@
+flowchart TD
+    subgraph G1["Gate 1 — Fetching · fetcher.ts"]
+        direction TB
+        A1{"HTTP 200?"}
+        A2{"body = gzip 1f 8b?"}
+        A3[("archive cache<br/>+ cacheNote to the log")]
+        A1 -- "no" --> A3
+        A2 -- "no: HTML page of a rate limit<br/>or personal cabinet" --> A3
+        A1 -- "yes" --> A2
+    end
+
+    subgraph G2["Gate 2 — Parsing and compatibility · parser.ts"]
+        direction TB
+        B1{"line = a rule<br/>(header + options)?"}
+        B2{"checkSuricataCompat():<br/>preproc · react · resp · rawbytes ·<br/>asn1 · dce_* · activate/dynamic ·<br/>Snort 3 sticky buffers?"}
+        BN["suricataOk = false<br/>compatNotes"]
+        B1 -- "yes" --> B2
+        B2 -- "incompatible" --> BN
+    end
+
+    subgraph G3["Gate 3 — Storage · service.ts"]
+        direction TB
+        C1["in-source SID dedup —<br/>the highest rev is kept"]
+        C2["contentHash: canonical SHA-1<br/>without sid/rev/msg/metadata/reference"]
+        C1 --> C2
+    end
+
+    subgraph G4["Gate 4 — Build · build.ts"]
+        direction TB
+        D1["policies: dropDisabledMsg ·<br/>dropIncompatible · content dedup"]
+        D2["SID conflict → winner:<br/>highest-rev / source-priority ·<br/>loser: drop/reassign"]
+        D3["remap to the free clearndr block<br/>1,000,000,000+ — sidmap.json map,<br/>md5 formula shared with the python pipeline"]
+        D4{"conflicting twins — rules matching<br/>after removing sid and reference:*?"}
+        D1 --> D2
+        D2 --> D3
+        D3 --> D4
+    end
+
+    G5{"Gate 5 — Engine validation<br/>suricata -T · offline dist/ package<br/>loop: log parsing →<br/>exclude/fix → repeat"}
+    FAIL["BUILD ABORTED — the file is not written,<br/>LogEntry: error"]
+    OK["final file: 0 duplicates,<br/>0 SID conflicts, 0 Suricata errors<br/>+ sha256 and stats in Build"]
+    EXPORT["export to Clear NDR allowed"]
+
+    G1 --> G2
+    G2 --> G3
+    G3 --> G4
+    D4 -- "yes" --> FAIL
+    D4 -- "no" --> G5
+    G5 -- "0 errors" --> OK
+    OK --> EXPORT

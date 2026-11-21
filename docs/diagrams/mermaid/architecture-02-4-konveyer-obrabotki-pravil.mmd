@@ -1,0 +1,54 @@
+flowchart LR
+    subgraph SRC["Источники — 25 преднастроенных + свои"]
+        direction TB
+        SRC1["ruleset / tarball<br/>snort.org · ET Open ·<br/>PT AD · abuse.ch"]
+        SRC2["локальные файлы<br/>и каталоги"]
+        SRC3["списки индикаторов<br/>ip · domain · url"]
+    end
+
+    subgraph FETCH["Загрузка — fetcher.ts"]
+        direction TB
+        AUTH["applyAuth():<br/>oinkcode → reg-rules/файл/code,<br/>authkey · basic"]
+        CHECK{"HTTP 200<br/>и gzip 1f 8b?"}
+        CACHE[("кэш архивов<br/>data/cache<br/>cacheTtlMinutes")]
+    end
+
+    PARSE["Парсинг — parser.ts<br/>заголовок + опции, многострочные,<br/>pcre со скобками"]
+    CONV["Конвертация — convert.ts · sidmap.ts<br/>IP-чанки · домены · URL,<br/>SID-блок 1 100 000+, предохранители"]
+
+    RULES[("Prisma · Rule — по источнику<br/>sid · rev · raw · contentHash<br/>suricataOk · compatNotes")]
+
+    subgraph BUILD["Сборка — build.ts · service.ts"]
+        direction TB
+        MERGE["mergeSources(): конфликт SID →<br/>highest-rev / source-priority ·<br/>проигравший: drop/reassign · dropIncompatible"]
+        CONTENT["content-дедуп: SHA-1<br/>без sid/rev/msg/metadata/reference"]
+        REMAP["remapToClearndrBlock():<br/>SID → свободный блок 1e9+,<br/>общая карта sidmap.json"]
+        GATE{"гейт Clear NDR:<br/>конфликтные близнецы?"}
+    end
+
+    FINAL["renderFinalFile():<br/>clearndr-import.rules,<br/>sha256 + запись Build"]
+    VALID["Валидация: статический фильтр<br/>совместимости (suricataOk);<br/>офлайн-пакет — цикл suricata -T"]
+    EXPORT["Экспорт — exporter.ts<br/>файл · Clear NDR REST (Token) ·<br/>HTTP POST · каталог volume"]
+    CRON["cron — node-cron<br/>обновление → сборка → экспорт<br/>(+ DNS-цикл: inline или отдельное расписание)"]
+    LOG["LogEntry: error —<br/>сборка прервана"]
+
+    SRC1 --> AUTH
+    SRC2 --> AUTH
+    SRC3 --> AUTH
+    AUTH --> CHECK
+    CHECK -- "да: текст правил" --> PARSE
+    CHECK -- "да: список ip/domain/url" --> CONV
+    CHECK -- "нет: HTML, лимит, ошибка" --> CACHE
+    CACHE -- "fallback: ранее скачанный архив" --> PARSE
+    PARSE --> RULES
+    CONV --> RULES
+    RULES --> MERGE
+    MERGE --> CONTENT
+    CONTENT --> REMAP
+    REMAP --> GATE
+    GATE -- "нет: 0 близнецов" --> FINAL
+    GATE -- "да" --> LOG
+    FINAL --> VALID
+    VALID --> EXPORT
+    CRON -.-> FETCH
+    CRON -.-> BUILD

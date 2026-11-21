@@ -1,0 +1,12 @@
+flowchart TD
+    DR[("DomainRecord<br/>все уникальные домены источников")]
+    SCAN["Скан dns-alive.ts<br/>батчи 25 000 · пропуск свежих по TTL"]
+    PROBE["Пул 50 DNS-запросов<br/>NS → A/AAAA/CNAME · таймаут 4 с"]
+    DA[("DomainAlive<br/>status: alive / dead / error")]
+    BL["buildDomainList (следующая сборка)<br/>dead-набор из БД: status='dead', TTL свежий"]
+    MG["mergeDomainSources<br/>… → живость: dead → droppedDead"]
+    OUT["blocked-domains.txt<br/>+ sha256"]
+
+    DR --> SCAN --> PROBE --> DA
+    DA -- "при следующей сборке, dnsAliveCheckEnabled=true" --> BL
+    BL --> MG --> OUT

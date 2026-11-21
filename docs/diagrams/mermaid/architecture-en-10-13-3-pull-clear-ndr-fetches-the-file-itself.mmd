@@ -1,0 +1,14 @@
+sequenceDiagram
+    autonumber
+    participant C as Clear NDR — celery scheduler<br/>Suricata → Update → Recurrence
+    participant S as Source “NDR&DNS Rules HUB”<br/>method http · uri /api/export
+    participant H as Hub — GET /api/export
+    participant X as Suricata
+
+    C->>S: schedule trigger (e.g. Daily)
+    S->>H: GET http://hub-host:3080/api/export
+    H-->>S: 200 — clearndr-import.rules
+    S->>S: import the rules into the source database
+    C->>C: generate ruleset — enabled category
+    C->>X: push the file → engine restart
+    Note over C,X: the Suricata → Update button does the same immediately, a cron with update_push_all does the same without the UI

@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+    participant U as Web UI — VPN tab
+    participant R as Route — POST /api/vpn
+    participant V as vpn.ts
+    participant X as Container — wg-quick, ip
+    participant D as Prisma — VpnProfile
+
+    U->>R: action up — profile id or config
+    R->>D: findUnique id — 404 if missing
+    R->>R: parseWgConfig — [Interface] and [Peer] sections, PrivateKey
+    R->>V: wgUp iface, config
+    opt full-tunnel — AllowedIPs contains 0.0.0.0/0
+        V->>X: ip route/addr show — container addresses before the tunnel is up
+    end
+    V->>X: write /etc/wireguard/iface.conf — chmod 0600
+    V->>X: wg-quick down iface — clean up a half-raised interface
+    V->>X: wg-quick up iface.conf
+    alt resolvconf unavailable and the config has DNS=
+        V->>V: stripDnsLines — remove DNS lines
+        V->>X: wg-quick up iface.conf — retry
+    end
+    opt interface is up and this is full-tunnel
+        V->>X: ip rule del + add — from container address lookup main prio 100
+        Note over U,X: web UI responses go via eth0 — the interface does not kill the UI on full-tunnel
+    end
+    V->>X: wg show interfaces — is iface listed?
+    V-->>R: ok, notes, output
+    R->>D: persistProfileStatus — active, lastStatusJson
+    R-->>U: 200 — ok true, detail, notes

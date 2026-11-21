@@ -1,0 +1,28 @@
+sequenceDiagram
+    autonumber
+    participant B as Браузер — hub/api.ts
+    participant H as Route handler — app/api
+    participant E as Движок — lib/engine
+    participant D as Prisma ORM
+    participant S as SQLite WAL
+
+    B->>H: fetch — метод и JSON-тело
+    H->>H: разбор тела и параметров — route handler, без middleware
+    alt невалидный запрос — нет id, config или action
+        H-->>B: 400 — JSON с причиной
+    else корректный запрос
+        H->>E: доменная операция — fetchSourceById, buildFinal, wgUp, setSetting
+        E->>D: чтение и запись моделей
+        D->>S: SQL — режим WAL против Socket timeout
+        S-->>D: строки
+        D-->>E: типизированные записи
+        E->>D: LogEntry — log level, scope, message
+        E-->>H: результат или доменная ошибка
+    end
+    alt успех
+        H-->>B: 200 — NextResponse.json
+    else необработанное исключение
+        H->>H: apiError — причина одной строкой
+        H-->>B: 500 — {"error": реальная причина} + строка в docker logs
+    end
+    B->>B: обновление карточек или баннер с ошибкой

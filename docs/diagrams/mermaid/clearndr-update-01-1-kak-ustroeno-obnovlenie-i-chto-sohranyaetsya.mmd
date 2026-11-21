@@ -1,0 +1,35 @@
+flowchart TB
+    subgraph B["1. Подготовка (стек работает)"]
+        P["preflight: docker, stamusctl,<br/>каталог инстанса, место на диске"]
+        S["снимок состояния → manifest"]
+        D["pg_dumpall → db-dump.sql.gz"]
+        C{"подтверждение<br/>(даунтайм!)"}
+        P --> S --> D --> C
+    end
+
+    subgraph U["2. Обновление"]
+        DOWN["stamusctl compose down"]
+        TC["tar config/ → config.tar.gz"]
+        TV["docker run … tar volume → volume.tar.gz"]
+        UPD["stamusctl compose update --version VER<br/>(сохраняет пользовательские значения)"]
+        PULL["stamusctl compose pull"]
+        UP["stamusctl compose up -d"]
+        DOWN --> TC --> TV --> UPD --> PULL --> UP
+    end
+
+    subgraph V["3. Проверки и итог"]
+        HC{"контейнеры Up +<br/>https://localhost/ + REST API"}
+        OK["отчёт: версия X → Y,<br/>путь бэкапов"]
+        RB["ОТКАТ: восстановить config/<br/>из архива, up -d"]
+        UP --> HC
+        HC -- "ok" --> OK
+        HC -- "fail" --> RB
+    end
+
+    C -- "да" --> DOWN
+    C -- "нет" --> X["выход без изменений"]
+
+    classDef engine fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ext fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    class P,S,D,TC,TV,UPD,PULL,UP engine
+    class C,HC,X ext

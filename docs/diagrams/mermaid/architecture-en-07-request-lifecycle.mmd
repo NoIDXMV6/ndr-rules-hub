@@ -1,0 +1,28 @@
+sequenceDiagram
+    autonumber
+    participant B as Browser — hub/api.ts
+    participant H as Route handler — app/api
+    participant E as Engine — lib/engine
+    participant D as Prisma ORM
+    participant S as SQLite WAL
+
+    B->>H: fetch — method and JSON body
+    H->>H: body and parameter parsing — route handler, no middleware
+    alt invalid request — no id, config or action
+        H-->>B: 400 — JSON with the cause
+    else valid request
+        H->>E: domain operation — fetchSourceById, buildFinal, wgUp, setSetting
+        E->>D: model reads and writes
+        D->>S: SQL — WAL mode against Socket timeout
+        S-->>D: rows
+        D-->>E: typed records
+        E->>D: LogEntry — log level, scope, message
+        E-->>H: result or domain error
+    end
+    alt success
+        H-->>B: 200 — NextResponse.json
+    else unhandled exception
+        H->>H: apiError — the cause on one line
+        H-->>B: 500 — {"error": real cause} + a line in docker logs
+    end
+    B->>B: card refresh or error banner

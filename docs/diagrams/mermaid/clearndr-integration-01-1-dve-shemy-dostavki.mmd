@@ -1,0 +1,30 @@
+flowchart TB
+    subgraph HUB["NDR&DNS Rules HUB — Next.js :3080"]
+        direction TB
+        BLD["Сборка<br/>clearndr-import.rules + sha256"]
+        CRON["cron Hub — Настройки → Расписание<br/>обновление → сборка → экспорт"]
+        REST["exporter.ts — режим «Clear NDR REST»<br/>кнопка «Экспортировать в Clear NDR»<br/>или шаг cron (cronExport)"]
+        PULLAPI["GET /api/export<br/>последняя сборка по HTTP"]
+        BLD --> REST
+        BLD --> PULLAPI
+        CRON -.-> BLD
+    end
+
+    subgraph CNDR["Clear NDR (Scirius)"]
+        direction TB
+        SRC["Source «NDR&DNS Rules HUB»<br/>PUSH: method local · PULL: method http"]
+        RS["Ruleset + включённая категория"]
+        UPALL["update_push_all<br/>update → generate → push"]
+        SUR["Suricata 7 — набор в работе"]
+        SRC --> RS
+        RS --> UPALL
+        UPALL --> SUR
+    end
+
+    REST -- "Схема B: PUSH — Hub отправляет сам<br/>find-or-create → upload → update_push_all<br/>Authorization: Token" --> SRC
+    PULLAPI -- "Схема A: PULL — Clear NDR забирает файл<br/>источник-URL + Recurrence / cron" --> SRC
+
+    classDef engine fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ext fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    class BLD,CRON,REST,PULLAPI engine
+    class SRC,RS,UPALL,SUR ext

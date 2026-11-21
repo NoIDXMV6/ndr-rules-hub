@@ -1,0 +1,21 @@
+sequenceDiagram
+    autonumber
+    participant U as Web UI — VPN tab
+    participant R as Route — POST /api/vpn
+    participant V as vpn.ts
+    participant X as Container — wg-quick, ip
+    participant D as Prisma — VpnProfile
+
+    U->>R: action down — name or id
+    R->>V: wgDown name
+    V->>X: wg-quick down iface.conf
+    V->>X: ip -4 and -6 rule show
+    V->>X: ip rule del — from address lookup main prio 100 — our exclusions
+    alt wg-quick failed and the interface is already gone
+        V-->>R: ok true — "the interface was already down"
+    else wg-quick failed but the interface is alive
+        V->>X: ip link del iface
+        V-->>R: ok true with a note
+    end
+    R->>D: persistProfileStatus — active false, lastStatusJson
+    R-->>U: 200 — ok true, notes

@@ -1,0 +1,10 @@
+flowchart LR
+    U["“Clear NDR Update” tab"] --> A["GET /api/clearndr-update"]
+    A --> P["host probe:<br/>stamusctl config version,<br/>image tags, containers,<br/>vm.max_map_count, disk"]
+    A --> G["GitHub API:<br/>latest stamusctl-templates<br/>release"]
+    U -- "newer release" --> O["options: version,<br/>OpenSearch/PG data,<br/>backups, CLI"]
+    O --> S["POST start:<br/>sync script →<br/>runner on host (nohup setsid)"]
+    S --> L["log polling (3 s)<br/>GET ?log=runId"]
+    L --> R{"rc"}
+    R -- "0" --> OK["checks: containers Up,<br/>web UI HTTP 200, REST API"]
+    R -- "1/2" --> F["reason in the log:<br/>preflight / fail-logs<br/>+ auto rollback"]

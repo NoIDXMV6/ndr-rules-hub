@@ -1,0 +1,54 @@
+flowchart LR
+    subgraph SRC["Sources — 25 preconfigured + your own"]
+        direction TB
+        SRC1["ruleset / tarball<br/>snort.org · ET Open ·<br/>PT AD · abuse.ch"]
+        SRC2["local files<br/>and directories"]
+        SRC3["indicator lists<br/>ip · domain · url"]
+    end
+
+    subgraph FETCH["Fetching — fetcher.ts"]
+        direction TB
+        AUTH["applyAuth():<br/>oinkcode → reg-rules/file/code,<br/>authkey · basic"]
+        CHECK{"HTTP 200<br/>and gzip 1f 8b?"}
+        CACHE[("archive cache<br/>data/cache<br/>cacheTtlMinutes")]
+    end
+
+    PARSE["Parsing — parser.ts<br/>header + options, multiline,<br/>pcre with braces"]
+    CONV["Conversion — convert.ts · sidmap.ts<br/>IP chunks · domains · URLs,<br/>SID block 1,100,000+, guards"]
+
+    RULES[("Prisma · Rule — per source<br/>sid · rev · raw · contentHash<br/>suricataOk · compatNotes")]
+
+    subgraph BUILD["Build — build.ts · service.ts"]
+        direction TB
+        MERGE["mergeSources(): SID conflict →<br/>highest-rev / source-priority ·<br/>loser: drop/reassign · dropIncompatible"]
+        CONTENT["content dedup: SHA-1<br/>without sid/rev/msg/metadata/reference"]
+        REMAP["remapToClearndrBlock():<br/>SID → free block 1e9+,<br/>shared sidmap.json map"]
+        GATE{"Clear NDR gate:<br/>conflicting twins?"}
+    end
+
+    FINAL["renderFinalFile():<br/>clearndr-import.rules,<br/>sha256 + Build record"]
+    VALID["Validation: static compatibility<br/>filter (suricataOk);<br/>offline package — suricata -T loop"]
+    EXPORT["Export — exporter.ts<br/>file · Clear NDR REST (Token) ·<br/>HTTP POST · volume directory"]
+    CRON["cron — node-cron<br/>fetch → build → export<br/>(+ DNS cycle: inline or separate schedule)"]
+    LOG["LogEntry: error —<br/>build aborted"]
+
+    SRC1 --> AUTH
+    SRC2 --> AUTH
+    SRC3 --> AUTH
+    AUTH --> CHECK
+    CHECK -- "yes: rule text" --> PARSE
+    CHECK -- "yes: ip/domain/url list" --> CONV
+    CHECK -- "no: HTML, rate limit, error" --> CACHE
+    CACHE -- "fallback: previously downloaded archive" --> PARSE
+    PARSE --> RULES
+    CONV --> RULES
+    RULES --> MERGE
+    MERGE --> CONTENT
+    CONTENT --> REMAP
+    REMAP --> GATE
+    GATE -- "no: 0 twins" --> FINAL
+    GATE -- "yes" --> LOG
+    FINAL --> VALID
+    VALID --> EXPORT
+    CRON -.-> FETCH
+    CRON -.-> BUILD

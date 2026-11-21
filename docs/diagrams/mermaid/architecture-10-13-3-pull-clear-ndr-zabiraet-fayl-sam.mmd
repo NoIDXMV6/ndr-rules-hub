@@ -1,0 +1,14 @@
+sequenceDiagram
+    autonumber
+    participant C as Clear NDR — планировщик celery<br/>Suricata → Update → Recurrence
+    participant S as Source «NDR&DNS Rules HUB»<br/>method http · uri /api/export
+    participant H as Hub — GET /api/export
+    participant X as Suricata
+
+    C->>S: триггер по расписанию (например, Daily)
+    S->>H: GET http://hub-host:3080/api/export
+    H-->>S: 200 — clearndr-import.rules
+    S->>S: импорт правил в базу источников
+    C->>C: generate ruleset — включённая категория
+    C->>X: push файла → перезапуск движка
+    Note over C,X: кнопка Suricata → Update делает то же немедленно, а cron с update_push_all — то же без UI

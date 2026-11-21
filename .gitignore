@@ -90,6 +90,8 @@ server.log
 # заметки релизов (тела GitHub Releases) — тоже версионировать
 !/scripts/release-notes
 !/scripts/gotify-deploy.sh
+!/scripts/extract-mermaid.py
+!/scripts/render-mermaid.py
 /mini-services
 dev.log
 server.log

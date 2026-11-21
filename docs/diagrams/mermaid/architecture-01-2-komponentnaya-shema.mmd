@@ -1,0 +1,53 @@
+flowchart TB
+    Browser["Браузер<br/>Web UI · 9 вкладок · RU/EN"]
+
+    subgraph DOCKER["Docker-контейнер (standalone)"]
+        subgraph NEXTJS["Next.js 16 — единый сервер: UI + REST API · порт 3080 → 3000"]
+            UI["Web UI<br/>app/page.tsx · components/hub"]
+            API["REST API<br/>app/api — route handlers"]
+            I18N["i18n<br/>lib/i18n — словари RU/EN,<br/>детект языка, переключатель в шапке"]
+            subgraph ENGINE["Доменный движок — lib/engine"]
+                direction LR
+                FETCHER["fetcher.ts<br/>загрузка источников<br/>http · tarball · local"]
+                PARSER["parser.ts<br/>разбор правил<br/>Snort 2/3 · Suricata"]
+                CONVERT["convert.ts · sidmap.ts<br/>списки → правила,<br/>приватные диапазоны SID"]
+                BUILDER["build.ts<br/>merge · дедуп · remap SID"]
+                EXPORTER["exporter.ts<br/>файл · Clear NDR REST ·<br/>HTTP POST · каталог"]
+                VPN["vpn.ts<br/>wg-quick up/down/status"]
+                SERVICE["service.ts<br/>оркестрация · cron · сид"]
+                SEED["seed.ts<br/>25 преднастроенных источников"]
+            end
+        end
+        PRISMA[("Prisma ORM")]
+        SYSLAYER["Системный слой<br/>wireguard-tools · iptables ·<br/>iproute2 · procps (sysctl)"]
+    end
+
+    subgraph EXT["Внешние системы"]
+        SOURCES["Источники правил<br/>snort.org · ET Open ·<br/>PT Attack Detection · abuse.ch …"]
+        CLEARNDR["Clear NDR<br/>NDR-платформа на Suricata"]
+    end
+
+    DB[("SQLite (WAL)<br/>data/hub.db")]
+    VOLUME[("Volume ./data → /app/data<br/>БД · кэш архивов · data/exports ·<br/>sidmap.json · wg-конфиги")]
+
+    Browser -- "HTTP :3080" --> UI
+    UI -- "fetch JSON" --> API
+    UI -.- I18N
+    API --> SERVICE
+    FETCHER -- "applyAuth + magic-байты gzip" --> SOURCES
+    EXPORTER -- "итоговый .rules<br/>REST API / файл / каталог" --> CLEARNDR
+    VPN --> SYSLAYER
+    SERVICE --> PRISMA
+    PRISMA --> DB
+    DB -.- VOLUME
+
+    classDef ui fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef engine fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef ext fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    classDef store fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef sys fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    class UI,API,I18N ui
+    class FETCHER,PARSER,CONVERT,BUILDER,EXPORTER,VPN,SERVICE,SEED engine
+    class SOURCES,CLEARNDR ext
+    class DB,VOLUME,PRISMA store
+    class SYSLAYER sys

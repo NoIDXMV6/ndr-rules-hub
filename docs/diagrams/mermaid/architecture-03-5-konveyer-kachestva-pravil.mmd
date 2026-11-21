@@ -1,0 +1,50 @@
+flowchart TD
+    subgraph G1["Гейт 1 — Загрузка · fetcher.ts"]
+        direction TB
+        A1{"HTTP 200?"}
+        A2{"тело = gzip 1f 8b?"}
+        A3[("кэш архива<br/>+ cacheNote в журнал")]
+        A1 -- "нет" --> A3
+        A2 -- "нет: HTML-страница лимита<br/>или личного кабинета" --> A3
+        A1 -- "да" --> A2
+    end
+
+    subgraph G2["Гейт 2 — Парсинг и совместимость · parser.ts"]
+        direction TB
+        B1{"строка = правило<br/>(заголовок + опции)?"}
+        B2{"checkSuricataCompat():<br/>preproc · react · resp · rawbytes ·<br/>asn1 · dce_* · activate/dynamic ·<br/>sticky-буферы Snort 3?"}
+        BN["suricataOk = false<br/>compatNotes"]
+        B1 -- "да" --> B2
+        B2 -- "несовместимо" --> BN
+    end
+
+    subgraph G3["Гейт 3 — Хранение · service.ts"]
+        direction TB
+        C1["дедуп по SID внутри источника —<br/>остаётся максимальный rev"]
+        C2["contentHash: канонический SHA-1<br/>без sid/rev/msg/metadata/reference"]
+        C1 --> C2
+    end
+
+    subgraph G4["Гейт 4 — Сборка · build.ts"]
+        direction TB
+        D1["политики: dropDisabledMsg ·<br/>dropIncompatible · content-дедуп"]
+        D2["конфликт SID → победитель:<br/>highest-rev / source-priority ·<br/>проигравший: drop/reassign"]
+        D3["remap в свободный clearndr-блок<br/>1 000 000 000+ — карта sidmap.json,<br/>формула md5 общая с python-конвейером"]
+        D4{"конфликтные близнецы —<br/>совпадают после снятия<br/>sid и reference:*?"}
+        D1 --> D2
+        D2 --> D3
+        D3 --> D4
+    end
+
+    G5{"Гейт 5 — Валидация движком<br/>suricata -T · офлайн-пакет dist/<br/>цикл: разбор лога →<br/>исключение/исправление → повтор"}
+    FAIL["СБОРКА ПРЕРВАНА — файл не пишется,<br/>LogEntry: error"]
+    OK["итоговый файл: 0 дубликатов,<br/>0 конфликтов SID, 0 ошибок Suricata<br/>+ sha256 и статистика в Build"]
+    EXPORT["экспорт в Clear NDR разрешён"]
+
+    G1 --> G2
+    G2 --> G3
+    G3 --> G4
+    D4 -- "да" --> FAIL
+    D4 -- "нет" --> G5
+    G5 -- "0 ошибок" --> OK
+    OK --> EXPORT

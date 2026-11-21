@@ -1,0 +1,9 @@
+flowchart LR
+    A["sources"] --> B["fetch"]
+    B --> C["merge<br/>SID / content dedup"]
+    C --> D["s2x_convert.py<br/>Snort 2/3 → Suricata 7"]
+    D --> E{"suricata -T"}
+    E -- "0 errors" --> F["dist/ package<br/>+ SHA256SUMS"]
+    E -- "load errors" --> G["log parsing:<br/>exclude / fix broken"]
+    G --> C
+    F --> H["export to Clear NDR"]

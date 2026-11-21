@@ -1,0 +1,226 @@
+[
+  {
+    "file": "architecture-01-2-komponentnaya-shema.mmd",
+    "source": "architecture.md",
+    "index": 1,
+    "heading": "2. Компонентная схема",
+    "lines": 53
+  },
+  {
+    "file": "architecture-02-4-konveyer-obrabotki-pravil.mmd",
+    "source": "architecture.md",
+    "index": 2,
+    "heading": "4. Конвейер обработки правил",
+    "lines": 54
+  },
+  {
+    "file": "architecture-03-5-konveyer-kachestva-pravil.mmd",
+    "source": "architecture.md",
+    "index": 3,
+    "heading": "5. Конвейер качества правил",
+    "lines": 50
+  },
+  {
+    "file": "architecture-04-8-1-proverka-zhivosti-domenov-v1-37-0.mmd",
+    "source": "architecture.md",
+    "index": 4,
+    "heading": "8.1 Проверка живости доменов (v1.37.0)",
+    "lines": 12
+  },
+  {
+    "file": "architecture-05-posledovatelnosti-up-i-down.mmd",
+    "source": "architecture.md",
+    "index": 5,
+    "heading": "Последовательности up и down",
+    "lines": 30
+  },
+  {
+    "file": "architecture-06-posledovatelnosti-up-i-down.mmd",
+    "source": "architecture.md",
+    "index": 6,
+    "heading": "Последовательности up и down",
+    "lines": 21
+  },
+  {
+    "file": "architecture-07-zhiznennyy-tsikl-zaprosa.mmd",
+    "source": "architecture.md",
+    "index": 7,
+    "heading": "Жизненный цикл запроса",
+    "lines": 28
+  },
+  {
+    "file": "architecture-08-13-1-dve-shemy-dostavki.mmd",
+    "source": "architecture.md",
+    "index": 8,
+    "heading": "13.1 Две схемы доставки",
+    "lines": 30
+  },
+  {
+    "file": "architecture-09-13-2-push-tsepochka-vyzovov-rest-api-scirius.mmd",
+    "source": "architecture.md",
+    "index": 9,
+    "heading": "13.2 PUSH: цепочка вызовов REST API Scirius",
+    "lines": 25
+  },
+  {
+    "file": "architecture-10-13-3-pull-clear-ndr-zabiraet-fayl-sam.mmd",
+    "source": "architecture.md",
+    "index": 10,
+    "heading": "13.3 PULL: Clear NDR забирает файл сам",
+    "lines": 14
+  },
+  {
+    "file": "architecture-en-01-2-component-diagram.mmd",
+    "source": "architecture.en.md",
+    "index": 1,
+    "heading": "2. Component diagram",
+    "lines": 53
+  },
+  {
+    "file": "architecture-en-02-4-rule-processing-pipeline.mmd",
+    "source": "architecture.en.md",
+    "index": 2,
+    "heading": "4. Rule processing pipeline",
+    "lines": 54
+  },
+  {
+    "file": "architecture-en-03-5-rules-quality-pipeline.mmd",
+    "source": "architecture.en.md",
+    "index": 3,
+    "heading": "5. Rules quality pipeline",
+    "lines": 50
+  },
+  {
+    "file": "architecture-en-04-8-1-domain-liveness-check-v1-37-0.mmd",
+    "source": "architecture.en.md",
+    "index": 4,
+    "heading": "8.1 Domain liveness check (v1.37.0)",
+    "lines": 12
+  },
+  {
+    "file": "architecture-en-05-up-and-down-sequences.mmd",
+    "source": "architecture.en.md",
+    "index": 5,
+    "heading": "Up and down sequences",
+    "lines": 30
+  },
+  {
+    "file": "architecture-en-06-up-and-down-sequences.mmd",
+    "source": "architecture.en.md",
+    "index": 6,
+    "heading": "Up and down sequences",
+    "lines": 21
+  },
+  {
+    "file": "architecture-en-07-request-lifecycle.mmd",
+    "source": "architecture.en.md",
+    "index": 7,
+    "heading": "Request lifecycle",
+    "lines": 28
+  },
+  {
+    "file": "architecture-en-08-13-1-two-delivery-schemes.mmd",
+    "source": "architecture.en.md",
+    "index": 8,
+    "heading": "13.1 Two delivery schemes",
+    "lines": 30
+  },
+  {
+    "file": "architecture-en-09-13-2-push-the-scirius-rest-api-call-chain.mmd",
+    "source": "architecture.en.md",
+    "index": 9,
+    "heading": "13.2 PUSH: the Scirius REST API call chain",
+    "lines": 25
+  },
+  {
+    "file": "architecture-en-10-13-3-pull-clear-ndr-fetches-the-file-itself.mmd",
+    "source": "architecture.en.md",
+    "index": 10,
+    "heading": "13.3 PULL: Clear NDR fetches the file itself",
+    "lines": 14
+  },
+  {
+    "file": "readme-01-konveyer-kachestva-pravil.mmd",
+    "source": "README.md",
+    "index": 1,
+    "heading": "Конвейер качества правил",
+    "lines": 9
+  },
+  {
+    "file": "readme-en-01-ruleset-quality-pipeline.mmd",
+    "source": "README.en.md",
+    "index": 1,
+    "heading": "Ruleset quality pipeline",
+    "lines": 9
+  },
+  {
+    "file": "clearndr-update-01-1-kak-ustroeno-obnovlenie-i-chto-sohranyaetsya.mmd",
+    "source": "docs/clearndr-update.md",
+    "index": 1,
+    "heading": "1. Как устроено обновление и что сохраняется",
+    "lines": 35
+  },
+  {
+    "file": "clearndr-update-02-10-1-kak-eto-rabotaet.mmd",
+    "source": "docs/clearndr-update.md",
+    "index": 2,
+    "heading": "10.1. Как это работает",
+    "lines": 10
+  },
+  {
+    "file": "clearndr-update-en-01-1-how-the-update-works-and-what-is-preserved.mmd",
+    "source": "docs/clearndr-update.en.md",
+    "index": 1,
+    "heading": "1. How the update works and what is preserved",
+    "lines": 35
+  },
+  {
+    "file": "clearndr-update-en-02-10-1-how-it-works.mmd",
+    "source": "docs/clearndr-update.en.md",
+    "index": 2,
+    "heading": "10.1. How it works",
+    "lines": 10
+  },
+  {
+    "file": "clearndr-integration-01-1-dve-shemy-dostavki.mmd",
+    "source": "docs/clearndr-integration.md",
+    "index": 1,
+    "heading": "1. Две схемы доставки",
+    "lines": 30
+  },
+  {
+    "file": "clearndr-integration-02-3-shema-a-pull-clear-ndr-sam-zabiraet-fayl-s-hub.mmd",
+    "source": "docs/clearndr-integration.md",
+    "index": 2,
+    "heading": "3. Схема A: PULL — Clear NDR сам забирает файл с Hub",
+    "lines": 14
+  },
+  {
+    "file": "clearndr-integration-03-nastroyka-v-hub.mmd",
+    "source": "docs/clearndr-integration.md",
+    "index": 3,
+    "heading": "Настройка в Hub",
+    "lines": 25
+  },
+  {
+    "file": "clearndr-integration-en-01-1-two-delivery-schemes.mmd",
+    "source": "docs/clearndr-integration.en.md",
+    "index": 1,
+    "heading": "1. Two delivery schemes",
+    "lines": 30
+  },
+  {
+    "file": "clearndr-integration-en-02-3-scheme-a-pull-clear-ndr-fetches-the-file-from.mmd",
+    "source": "docs/clearndr-integration.en.md",
+    "index": 2,
+    "heading": "3. Scheme A: PULL — Clear NDR fetches the file from the Hub",
+    "lines": 14
+  },
+  {
+    "file": "clearndr-integration-en-03-setup-in-the-hub.mmd",
+    "source": "docs/clearndr-integration.en.md",
+    "index": 3,
+    "heading": "Setup in the Hub",
+    "lines": 25
+  }
+]
